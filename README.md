@@ -41,3 +41,10 @@ into a local `.env`, message the bot once, then `bash go-live.sh`.
 - Allowlist by numeric `user_id`; all other senders ignored.
 - Bot token lives only in the local `.env` (gitignored, 0600) — never in the repo.
 - No inbound port (Telegram long-poll is outbound).
+- Secret-scanned: [gitleaks](https://github.com/gitleaks/gitleaks) runs as a
+  pre-commit hook (`.pre-commit-config.yaml`) and a CI check
+  (`.github/workflows/gitleaks.yml`) on every push/PR.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Tyler Zervas.

@@ -1,0 +1,52 @@
+title = "gitleaks config for claude-telegram-bridge"
+
+# Extend gitleaks' own default ruleset (Telegram bot tokens, generic
+# high-entropy secrets, common cloud/API-key shapes, etc.) rather than
+# replacing it.
+[extend]
+useDefault = true
+
+# gitleaks' built-in `telegram-bot-api-token` rule (as of v8.30.x) is
+# keyword-gated: it only fires when the literal substring "telegr"
+# appears *before* the token on the same line (e.g.
+# `TELEGRAM_BOT_TOKEN=...`). This repo's actual convention is
+# `BOT_TOKEN=<token>` in .env (see .env.example / SETUP.md) — no
+# "telegr" substring anywhere near it — so the default rule silently
+# misses our real secret shape. Add a context-independent rule (the
+# token's own shape: digits, ":A", 34 more chars) so the gate actually
+# catches it regardless of the surrounding variable name. Verified
+# empirically against this repo's own .env token format before adding.
+[[rules]]
+id = "telegram-bot-token-shape"
+description = "Telegram Bot API token shape, matched independent of nearby keywords (see comment above — this repo's BOT_TOKEN=... convention doesn't contain 'telegr' so the stock keyword-gated rule misses it)"
+regex = '''(?i)(?:^|[^0-9])([0-9]{5,16}:A[a-zA-Z0-9_\-]{34})(?:$|[^a-zA-Z0-9_\-])'''
+secretGroup = 1
+tags = ["telegram", "bot-token"]
+
+[allowlist]
+  description = "Repo-specific false-positive allowlist"
+
+  # .env holds the *real* bot token; it is gitignored and must never be
+  # committed. If it is ever accidentally staged, gitleaks should still
+  # flag it — so it is intentionally NOT allowlisted here.
+
+  # .env.example only ever contains an empty placeholder
+  # (`BOT_TOKEN=`, `ALLOWED_CHAT_ID=`) — never a real value.
+  paths = [
+    '''\.env\.example$''',
+    # Runtime-state files written by the scripts at run time (poll
+    # offsets, last-sent markers, in-flight message buffers). They hold
+    # no secrets by design, but keep scans fast/quiet if they're ever
+    # staged by mistake.
+    '''(^|/)\.offset$''',
+    '''(^|/)\.last-sent$''',
+    '''(^|/)\.tg-buffer(-ts)?$''',
+  ]
+
+  # The example bot-token *shape* shown in SETUP.md/README.md
+  # (`123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`) is illustrative,
+  # not a real credential — the repeated `x` placeholder and doc context
+  # make it unambiguous, but allowlist the exact literal defensively.
+  regexes = [
+    '''123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx''',
+  ]
