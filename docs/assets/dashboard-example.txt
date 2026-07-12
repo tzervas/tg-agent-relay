@@ -1,0 +1,23 @@
+📊 Relay Dashboard — last 24h
+════════════════════════════════
+
+messages in:        62
+messages out:       48  (48 pages)
+model-turns avoided: 37 *
+poll errors:        1
+
+Hook events by type:
+  SubagentStop  ██████████████████  13
+  Notification  ████████░░░░░░░░░░  6
+  PreToolUse    ██████░░░░░░░░░░░░  4
+  PostToolUse   ████░░░░░░░░░░░░░░  3
+  Stop          ████░░░░░░░░░░░░░░  3
+
+Commands used:
+  status     ██████████████████  6
+  dashboard  ███████████████░░░  5
+  stats      ██████░░░░░░░░░░░░  2
+  help       ███░░░░░░░░░░░░░░░  1
+
+* model-turns avoided is a Declared estimate (enabled-hook
+  pings + relay-handled commands), not a measured token count.

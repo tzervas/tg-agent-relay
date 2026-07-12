@@ -259,12 +259,12 @@ while true; do
 
     RESP=$(curl -s -m "$CURL_MAXTIME" \
         "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?timeout=${POLL_TIMEOUT}&offset=${OFFSET}" \
-        2>/dev/null) || { sleep 2; continue; }
+        2>/dev/null) || { emit_metric "tg-poll" "poll_error" "curl_fail"; sleep 2; continue; }
 
     [[ -z "$RESP" ]] && continue
 
     OK=$(printf '%s' "$RESP" | jq -r '.ok // false' 2>/dev/null)
-    [[ "$OK" == "true" ]] || { sleep 2; continue; }
+    [[ "$OK" == "true" ]] || { emit_metric "tg-poll" "poll_error" "api_not_ok"; sleep 2; continue; }
 
     printf '%s' "$RESP" | jq -c '.result[]?' 2>/dev/null | while IFS= read -r UPDATE; do
         UPDATE_ID=$(printf '%s' "$UPDATE" | jq -r '.update_id // empty' 2>/dev/null)
