@@ -130,6 +130,10 @@ it to `relay-notify.sh --raw`:
 }
 ```
 
+`adapters/claude-code.sh` understands **all 30 documented Claude Code hook
+events**, not just these two — see [Installing hooks](#installing-hooks-for-more-events)
+below to wire any of the rest.
+
 ### (b) Wiring to ANY other agent/harness
 
 No adapter needed for plain text — call the generic entry point directly:
@@ -190,18 +194,62 @@ You:  can you check the CI run on PR 42?
 for your agent's `Monitor`-style event loop to pick up as its next input —
 this is the only inbound path that costs a model turn.
 
+### Installing hooks for more events
+
+`adapters/claude-code.sh` handles all 30 documented Claude Code hook
+events, but only the two live in `~/.claude/settings.json` today
+(`SubagentStop`, `Notification`) actually fire — Claude Code only invokes a
+hook if `settings.json` says to. To wire up more (or fewer), don't hand-edit
+`settings.json`: enable/disable events in `relay.toml`, then run
+
+```bash
+~/.claude/telegram-bridge/install-hooks.sh          # sync settings.json to relay.toml
+~/.claude/telegram-bridge/install-hooks.sh --dry-run  # preview the plan, change nothing
+~/.claude/telegram-bridge/install-hooks.sh --uninstall # remove every relay-added hook entry
+```
+
+It reads each event's `[claude_code.<Event>].enabled` from `relay.toml`
+(falling back to that event's own install-time default — five events
+default on, the rest are opt-in; see `relay.toml.example`), and
+reconciles `hooks.<Event>` in `~/.claude/settings.json` accordingly.
+**Idempotent and merge-not-clobber**: it only ever touches the ONE hook
+entry it owns per event (identified by its own `hook-notify.sh` command
+path) — every other key in `settings.json`, and every other tool's hook
+entry for the same event, is left exactly as it was. Re-running it after
+editing `relay.toml` is the normal workflow; running it with no change is
+a reported no-op. It never writes an invalid `settings.json` — the result
+is JSON-validated before AND after the write, and a `settings.json` that
+already fails to parse is left untouched with a nonzero exit rather than
+guessed at.
+
 ## Configurable via `relay.toml` (optional)
 
 Copy [`relay.toml.example`](relay.toml.example) to `relay.toml` to
 configure page size/delay, the reassemble window, which Claude Code hook
-events are enabled + their prefix, the `[generic]` prefix, in-chat
-commands, and the dashboard window. **Every script falls back to its
-pre-existing env-var/hardcoded default with no `relay.toml` present** —
-this is the backward-compat guarantee: an existing bridge with no
-`relay.toml` behaves byte-for-byte as it always has. See the example
-file's comments for the full schema, and
+events are enabled + their prefix + their message format, the `[generic]`
+prefix/format, in-chat commands, and the dashboard window. **Every script
+falls back to its pre-existing env-var/hardcoded default with no
+`relay.toml` present** — this is the backward-compat guarantee: an
+existing bridge with no `relay.toml` behaves byte-for-byte as it always
+has. See the example file's comments for the full schema, and
 [`docs/USAGE.md`](docs/USAGE.md) / [`docs/COMMANDS.md`](docs/COMMANDS.md)
 for how to use it.
+
+### Per-event message templates
+
+Beyond `enabled`/`prefix`, every `[claude_code.<Event>]` table (and
+`[generic]`, for the harness-agnostic path) accepts a `format` string with
+`{placeholder}` interpolation, e.g.:
+
+```toml
+[claude_code.SubagentStop]
+format = "{prefix} {agent} done: {message}"
+```
+
+With no `format` set, an event renders its original built-in default text
+— unchanged. See `relay.toml.example`'s per-event comments for each
+event's available placeholders, and `adapters/claude-code.sh`'s header for
+the full per-event field reference.
 
 ## In-chat commands (user → agent)
 
@@ -240,8 +288,10 @@ and how to define your own.
 | `adapters/generic-example.sh` | Copy-paste stub for writing a new harness adapter. |
 | `adapters/README.md` | How to write an adapter for any harness. |
 | `hook-notify.sh` | **Backward-compatible shim** — wired into `~/.claude/settings.json`; just `exec`s `adapters/claude-code.sh`. |
+| `install-hooks.sh` | One-command, idempotent, merge-not-clobber installer/uninstaller — syncs `~/.claude/settings.json`'s Claude Code hook entries to whatever's `enabled` in `relay.toml`. |
 | `lib/relay-config.sh` | Optional `relay.toml` loader (`cfg_get`/`cfg_has_section`), shared by every script. |
-| `lib/relay-common.sh` | Shared helpers (`oneline`, `cap_if_huge`, `emit_metric`). |
+| `lib/relay-common.sh` | Shared helpers (`oneline`, `cap_if_huge`, `emit_metric`, `render_template`). |
+| `lib/claude-code-events.sh` | Single source of truth for the documented Claude Code hook event list + each event's install-time default enabled/disabled + default prefix — shared by `adapters/claude-code.sh` and `install-hooks.sh`. |
 | `lib/toml_to_json.py` | `relay.toml` → JSON (Python stdlib `tomllib`; the only TOML-parsing code in the repo). |
 | `lib/metrics_agg.py` | Pure/stdlib metrics aggregation over `.metrics.log` (used by the dashboard/stats/uptime handlers, unit-tested independently of matplotlib). |
 | `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. |

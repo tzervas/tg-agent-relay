@@ -41,24 +41,48 @@ Claude Code events.
      - let the generic `[generic]` config (an optional prefix) format it
        for you, if you'd rather not carry your own emoji-per-event table.
 4. **Make it config-driven if it has more than one or two event types**
-   (optional but recommended - see `claude-code.sh` for the pattern):
+   (optional but recommended - see `claude-code.sh` for the pattern, which
+   wires ALL of Claude Code's documented hook "abilities" this way):
    source `lib/relay-config.sh`, call `load_relay_config
    "$BRIDGE_DIR/relay.toml"`, then read `[<your-namespace>.<EventName>]`
-   tables via `cfg_get` for `enabled`/`prefix` overrides. Document your
-   namespace + event names in `relay.toml.example` (a new commented-out
-   section, same pattern as `[claude_code.*]`) so users can discover and
-   toggle them.
-5. **Always exit 0** unless your harness genuinely needs the adapter's
+   tables via `cfg_get` for three overrides per event:
+   - `enabled` (`true`/`false`) - whether this event fires at all.
+   - `prefix` - the leading emoji/marker for this event's default message.
+   - `format` - a full `{placeholder}` message template for this event,
+     rendered by `lib/relay-common.sh`'s `render_template` (the SAME
+     function `claude-code.sh` and `relay-notify.sh`'s own `[generic]`
+     section use - one substitution engine, three config surfaces). Build
+     your default message text as a template string too (e.g. `'{prefix}
+     ${VERB} {tool}'`) and pass it as `render_template`'s fallback when
+     `format` is unset - that IS your backward-compat guarantee: the
+     default template renders byte-identically to whatever your adapter's
+     hardcoded text was before you added `format` support, and a user's
+     custom `format` only ever kicks in when they set one.
+
+   Document your namespace + event names + each event's available
+   placeholders in `relay.toml.example` (a new commented-out section, same
+   pattern as `[claude_code.*]`) so users can discover and toggle them.
+   That is the full recipe for "wiring an ability through an adapter":
+   one `[<namespace>.<ability-name>]` table per thing your harness can do,
+   each with its own `enabled`/`prefix`/`format`, all going through the
+   same `render_template` call shape.
+5. **If your harness has an install-time hook-wiring step of its own**
+   (the way Claude Code's hooks live in `~/.claude/settings.json`), look at
+   `install-hooks.sh` (repo root) for the pattern: a small script that
+   reads which of your adapter's events are `enabled` in `relay.toml` and
+   idempotently, merge-not-clobber writes/removes the matching entries in
+   your harness's own config file via `jq` - never a raw overwrite.
+6. **Always exit 0** unless your harness genuinely needs the adapter's
    exit code to signal something back to it (Claude Code's `SubagentStop`
    hook is advisory - a nonzero exit there would *block* the subagent from
    stopping, which is why `claude-code.sh` never does that). Never let a
    notification failure disrupt the harness it's observing.
-6. **Wire it into your harness's own hook/event config** pointing at your
+7. **Wire it into your harness's own hook/event config** pointing at your
    new adapter script (or, if your harness supports it, a shim script the
    way `hook-notify.sh` shims `claude-code.sh` - handy if the harness's
    config format is finicky about the exact command path and you want a
    stable indirection point).
-7. **Test offline.** See `tests/` at the repo root - feed a sample event
+8. **Test offline.** See `tests/` at the repo root - feed a sample event
    payload to your adapter with `tg-send.sh` swapped for a mock that
    records its argument instead of hitting the network (the pattern every
    existing test in `tests/` uses).
