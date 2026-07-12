@@ -39,6 +39,22 @@
 # Telegram redelivers and it is re-buffered once, harmlessly). A transient
 # getUpdates failure never touches or drops the buffer - it's only
 # read/written on a successful poll.
+#
+# In-chat commands (user -> agent): if relay.toml defines a [commands.<name>]
+# table, a flushed message starting with its `slash` ("/status") or
+# `keyword` ("status") form is tagged "[telegram:cmd:<tag>] <text>" instead
+# of the plain "[telegram] <text>" - so the consuming agent/hook can
+# recognize and act on it. BACKWARD-COMPAT: with no relay.toml (or no
+# [commands.*] section), NO message is ever tagged - every flush is
+# byte-for-byte the plain "[telegram] <text>" this script has always
+# emitted. See classify_command() below.
+#
+# This file is SOURCEABLE for tests: the poll loop itself only runs when the
+# script is executed directly (see the `[[ "${BASH_SOURCE[0]}" == "$0" ]]`
+# guard at the bottom), so `source tg-poll.sh` (as tests/ does) loads
+# flush_buffer/classify_command/etc. without blocking on the infinite loop.
+# Running it normally (`bash tg-poll.sh` / the Monitor invocation) is
+# unaffected - main() runs the exact same loop that used to be inlined here.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,16 +63,116 @@ OFFSET_FILE="$BRIDGE_DIR/.offset"
 BUFFER_FILE="$BRIDGE_DIR/.tg-buffer"
 BUFFER_TS_FILE="$BRIDGE_DIR/.tg-buffer-ts"
 
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/relay-config.sh" ]] && source "$BRIDGE_DIR/lib/relay-config.sh"
+if declare -f load_relay_config >/dev/null 2>&1; then
+    load_relay_config "$BRIDGE_DIR/relay.toml"
+else
+    cfg_get() { printf '%s' "$2"; }        # lib missing (shouldn't happen) -> default-only shim
+    cfg_has_section() { return 1; }
+fi
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
+declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+
 # Quiet window (seconds) with no new message before a buffered burst flushes
 # as one combined event.
-REASSEMBLE_WINDOW="${TG_REASSEMBLE_WINDOW:-4}"
+REASSEMBLE_WINDOW="${TG_REASSEMBLE_WINDOW:-$(cfg_get '.general.reassemble_window' 4)}"
 [[ "$REASSEMBLE_WINDOW" =~ ^[0-9]+$ ]] || REASSEMBLE_WINDOW=4
 
-# Emit the buffered burst (if any) as one combined "[telegram] ..." line and
-# clear it. A no-op when the buffer is empty. Always emits exactly one
+# classify_command <flattened-text>
+#
+# Prints the matched command's TABLE NAME (e.g. "status", the relay.toml
+# [commands.<name>] key - NOT necessarily its display tag, see
+# command_field below) if $1 starts with that command's `slash` or
+# `keyword` form, else prints nothing (and always returns 0 - "no command
+# matched" is not an error). Reads the relay.toml [commands.*] tables
+# loaded into $RELAY_CONFIG_JSON. Never matches anything when no
+# [commands.*] section is configured - the backward-compat guarantee
+# described in the header note above.
+classify_command() {
+    local text="$1"
+    cfg_has_section "commands" || return 0
+
+    local entries entry name slash keyword
+    entries="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -c '.commands // {} | to_entries[]?' 2>/dev/null)"
+    [[ -z "$entries" ]] && return 0
+
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        name="$(printf '%s' "$entry" | jq -r '.key')"
+        slash="$(printf '%s' "$entry" | jq -r '.value.slash // empty')"
+        keyword="$(printf '%s' "$entry" | jq -r '.value.keyword // empty')"
+
+        if [[ -n "$slash" ]] && { [[ "$text" == "$slash" ]] || [[ "$text" == "${slash} "* ]]; }; then
+            printf '%s' "$name"
+            return 0
+        fi
+        if [[ -n "$keyword" ]] && { [[ "$text" == "$keyword" ]] || [[ "$text" == "${keyword} "* ]] || [[ "$text" == "${keyword}:"* ]]; }; then
+            printf '%s' "$name"
+            return 0
+        fi
+    done <<< "$entries"
+
+    return 0
+}
+
+# command_field <name> <field> <default>
+#
+# One relay.toml [commands.<name>].<field> value, or <default> if absent.
+command_field() {
+    local name="$1" field="$2" default="$3"
+    cfg_get ".commands.\"$name\".\"$field\"" "$default"
+}
+
+# dispatch_command <name> <flattened-text>
+#
+# Routing SEAM for relay-handled commands (a follow-up feature - not built
+# here; this is the extension point for it, see ROADMAP.md "Next"). A
+# command's relay.toml `mode` is:
+#   "forward" (default, the ONLY behavior actually shipped today) - print
+#     "[telegram:cmd:<tag>] <text>" for the consuming agent, same as
+#     before this seam existed.
+#   "relay" - the relay handles it ITSELF via `handler` (a script path,
+#     relative to $BRIDGE_DIR or absolute) and prints NOTHING to stdout -
+#     zero model tokens, since the agent/Monitor never even sees the
+#     event. The handler receives the flattened text as $1 and is
+#     responsible for its own reply (e.g. calling relay-notify.sh/
+#     tg-send.sh itself). Launched detached (backgrounded, output
+#     discarded) so a slow/hanging handler can never block the poll loop.
+# A "relay" mode with no configured (or non-executable) `handler` is a
+# no-op, never a crash - see the handlers/ directory for the handler
+# contract once one is actually built.
+dispatch_command() {
+    local name="$1" text="$2"
+    local mode tag handler
+
+    mode="$(command_field "$name" mode forward)"
+
+    if [[ "$mode" == "relay" ]]; then
+        emit_metric "tg-poll" "command_relay_handled" "$name"
+        handler="$(command_field "$name" handler '')"
+        if [[ -n "$handler" ]]; then
+            if [[ "$handler" == /* && -x "$handler" ]]; then
+                "$handler" "$text" >/dev/null 2>&1 &
+            elif [[ -x "$BRIDGE_DIR/$handler" ]]; then
+                "$BRIDGE_DIR/$handler" "$text" >/dev/null 2>&1 &
+            fi
+        fi
+        return 0  # relay-handled: nothing emitted to the agent/Monitor stream.
+    fi
+
+    tag="$(command_field "$name" tag "$name")"
+    emit_metric "tg-poll" "command_forwarded" "$name"
+    printf '[telegram:cmd:%s] %s\n' "$tag" "$text"
+}
+
+# Emit the buffered burst (if any) as one combined "[telegram] ..." (or, if
+# a command matches, whatever dispatch_command emits - see above) line and
+# clear it. A no-op when the buffer is empty. Always emits AT MOST one
 # physical stdout line (see header note): messages are RS-delimited in the
-# buffer file, split back apart here, internal newlines flattened to spaces,
-# then joined with " ⏎ " in arrival order.
+# buffer file, split back apart here, internal newlines flattened to
+# spaces, then joined with " ⏎ " in arrival order.
 flush_buffer() {
     [[ -s "$BUFFER_FILE" ]] || return 0
     local raw part parts out
@@ -79,11 +195,21 @@ flush_buffer() {
         fi
     done
 
-    printf '[telegram] %s\n' "$out"
+    local name
+    name="$(classify_command "$out")"
+    if [[ -n "$name" ]]; then
+        dispatch_command "$name" "$out"
+    else
+        emit_metric "tg-poll" "message_flushed" ""
+        printf '[telegram] %s\n' "$out"
+    fi
     : > "$BUFFER_FILE"
     rm -f "$BUFFER_TS_FILE"
 }
 
+# main - the poll loop itself (unchanged behavior from before this file was
+# made sourceable; see the header note on why it's now wrapped in a function).
+main() {
 while true; do
     if [[ ! -f "$CONFIG_FILE" ]]; then
         sleep 15
@@ -174,3 +300,10 @@ while true; do
         printf '%s\n' "$((UPDATE_ID + 1))" > "$OFFSET_FILE"
     done
 done
+}
+
+# Only run the poll loop when executed directly - `source tg-poll.sh` (used
+# by tests/) loads the functions above without starting it.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi
