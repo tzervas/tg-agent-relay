@@ -65,7 +65,13 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
+    ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
     ln -s "$REPO_ROOT/handlers/example-echo.sh" "$dir/handlers/example-echo.sh"
+    ln -s "$REPO_ROOT/handlers/dashboard.sh" "$dir/handlers/dashboard.sh"
+    ln -s "$REPO_ROOT/handlers/stats.sh" "$dir/handlers/stats.sh"
+    ln -s "$REPO_ROOT/handlers/uptime.sh" "$dir/handlers/uptime.sh"
+    ln -s "$REPO_ROOT/handlers/help.sh" "$dir/handlers/help.sh"
 
     cat > "$dir/tg-send.sh" <<'MOCK'
 #!/bin/bash
@@ -92,7 +98,8 @@ clear_recorded() {
 echo "== bash -n (syntax) =="
 for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh adapters/claude-code.sh adapters/generic-example.sh \
-         lib/relay-common.sh lib/relay-config.sh; do
+         lib/relay-common.sh lib/relay-config.sh \
+         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
     else
@@ -104,7 +111,8 @@ echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
-             lib/relay-common.sh lib/relay-config.sh; do
+             lib/relay-common.sh lib/relay-config.sh \
+             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
         else
@@ -321,6 +329,89 @@ else
     fail "tg-send.sh with no .env -> silent no-op (unchanged)" "a .last-sent file was written"
 fi
 rm -rf "$BRIDGE5"
+
+# ============================================================================
+echo "== tg-poll.sh: dispatch_command() routes the four dashboard commands (relay.toml.example shape) =="
+RELAY_CONFIG_JSON='{"commands":{"dashboard":{"keyword":"dashboard","slash":"/dashboard","mode":"relay","handler":"handlers/dashboard.sh"},"stats":{"keyword":"stats","slash":"/stats","mode":"relay","handler":"handlers/stats.sh"},"uptime":{"keyword":"uptime","slash":"/uptime","mode":"relay","handler":"handlers/uptime.sh"},"help":{"keyword":"help","slash":"/help","mode":"relay","handler":"handlers/help.sh"}}}'
+assert_eq "classify_command matches /dashboard" "dashboard" "$(classify_command "/dashboard")"
+assert_eq "classify_command matches /stats" "stats" "$(classify_command "/stats")"
+assert_eq "classify_command matches /uptime" "uptime" "$(classify_command "/uptime")"
+assert_eq "classify_command matches /help" "help" "$(classify_command "/help")"
+assert_eq "command_field: dashboard mode is relay" "relay" "$(command_field dashboard mode forward)"
+assert_eq "command_field: dashboard handler path" "handlers/dashboard.sh" "$(command_field dashboard handler '')"
+
+# ============================================================================
+echo "== handlers/stats.sh: relay-handled command runs end-to-end, zero model tokens =="
+BRIDGE7="$(setup_temp_bridge)"
+cp "$REPO_ROOT/tests/fixtures/metrics-synthetic.log" "$BRIDGE7/.metrics.log"
+"$BRIDGE7/handlers/stats.sh" "/stats" >/dev/null 2>&1
+STATS_OUT="$(recorded "$BRIDGE7")"
+if [[ "$STATS_OUT" == *"Relay stats"* && "$STATS_OUT" == *"model-turns avoided"* ]]; then
+    ok "handlers/stats.sh sends a real stats reply via relay-notify.sh -> tg-send.sh"
+else
+    fail "handlers/stats.sh sends a real stats reply via relay-notify.sh -> tg-send.sh" "$STATS_OUT"
+fi
+rm -rf "$BRIDGE7"
+
+echo "== handlers/dashboard.sh: never fails to send something (image OR text) =="
+BRIDGE8="$(setup_temp_bridge)"
+cp "$REPO_ROOT/tests/fixtures/metrics-synthetic.log" "$BRIDGE8/.metrics.log"
+"$BRIDGE8/handlers/dashboard.sh" "/dashboard" >/dev/null 2>&1
+DASH_OUT="$(recorded "$BRIDGE8")"
+# No BOT_TOKEN in this offline bridge -> the IMAGE path's sendPhoto is a
+# silent no-op (matches the rest of the repo's harmless-before-setup
+# contract - see tg-send.sh); with no matplotlib in the default test
+# interpreter it takes the TEXT path anyway, which the mock DOES record.
+if [[ -n "$DASH_OUT" ]]; then
+    ok "handlers/dashboard.sh sends a text dashboard when matplotlib is unavailable"
+else
+    # Only acceptable if matplotlib WAS available (image path -> no .env ->
+    # silent no-op is then the correct, harmless-before-setup behavior).
+    if python3 -c "import matplotlib" >/dev/null 2>&1; then
+        ok "handlers/dashboard.sh took the image path (silent no-op with no BOT_TOKEN, as designed)"
+    else
+        fail "handlers/dashboard.sh sends a text dashboard when matplotlib is unavailable" "no output recorded"
+    fi
+fi
+rm -rf "$BRIDGE8"
+
+echo "== handlers/uptime.sh: proxy uptime from .metrics.log when no tg-poll.sh process is found =="
+BRIDGE9="$(setup_temp_bridge)"
+cp "$REPO_ROOT/tests/fixtures/metrics-synthetic.log" "$BRIDGE9/.metrics.log"
+"$BRIDGE9/handlers/uptime.sh" "/uptime" >/dev/null 2>&1
+UPTIME_OUT="$(recorded "$BRIDGE9")"
+if [[ -n "$UPTIME_OUT" ]]; then
+    ok "handlers/uptime.sh sends a reply (real process uptime or the honest proxy)"
+else
+    fail "handlers/uptime.sh sends a reply" "no output recorded"
+fi
+rm -rf "$BRIDGE9"
+
+echo "== handlers/help.sh: lists commands live from relay.toml, never hardcoded/stale =="
+BRIDGE10="$(setup_temp_bridge)"
+cp "$REPO_ROOT/tests/fixtures/relay.toml" "$BRIDGE10/relay.toml"
+"$BRIDGE10/handlers/help.sh" "/help" >/dev/null 2>&1
+HELP_OUT="$(recorded "$BRIDGE10")"
+if [[ "$HELP_OUT" == *"/status"* && "$HELP_OUT" == *"/example"* && "$HELP_OUT" == *"zero model tokens"* ]]; then
+    ok "handlers/help.sh lists both forwarded (/status) and relay-handled (/example) commands"
+else
+    fail "handlers/help.sh lists both forwarded and relay-handled commands" "$HELP_OUT"
+fi
+rm -rf "$BRIDGE10"
+
+# ============================================================================
+echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(python3 "$REPO_ROOT/tests/test_metrics_agg.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "python3 tests/test_metrics_agg.py"
+    else
+        fail "python3 tests/test_metrics_agg.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping aggregation unit tests (never-silent: this line IS the record)\n'
+fi
 
 # ============================================================================
 echo

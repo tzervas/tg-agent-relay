@@ -14,6 +14,15 @@
 .tg-buffer-ts
 .metrics.log
 *.log
+# ...except a COMMITTED test fixture that happens to share the extension
+# (same reasoning/pattern as /relay.toml above, scoped by directory instead
+# of anchoring - tests/fixtures/*.log are deliberate, checked-in inputs for
+# tests/test_metrics_agg.py, never runtime state).
+!tests/fixtures/*.log
 
 # Test-only marker file written by handlers/example-echo.sh.
 .example-echo-received
+
+# Python bytecode cache (lib/metrics_agg.py, lib/dashboard_render.py).
+__pycache__/
+*.pyc

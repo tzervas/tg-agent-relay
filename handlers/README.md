@@ -1,14 +1,28 @@
 # Handlers (relay-handled commands)
 
-**Status: extension SEAM, not a shipped feature.** `tg-poll.sh`'s
-`dispatch_command()` already knows how to route a matched
+**Status: shipped.** `tg-poll.sh`'s `dispatch_command()` routes a matched
 `[commands.<name>]` to a local handler instead of forwarding it to the
-agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`), but
-no real handler ships in this repo yet. A follow-up will add the actual
-zero-token, relay-side commands (`/dashboard`, `/stats`, `/metrics`,
-`/uptime`, `/help`, ...) as handlers in this directory. This file
-documents the contract so that work drops in without touching
-`tg-poll.sh` again.
+agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`). Four
+real handlers ship in this directory:
+
+- **`dashboard.sh`** — a multi-panel metrics dashboard: header stat row,
+  volume-over-time, hook-event breakdown, command usage. Renders a
+  matplotlib PNG (dark-friendly, mobile-legible) via `sendPhoto` when
+  matplotlib is available, or a unicode/text dashboard via `sendMessage`
+  otherwise — never fails to send something. Optional trailing window
+  override, e.g. `/dashboard 48` for the last 48 hours.
+- **`stats.sh`** — the key numbers only, as plain text (lighter than
+  `/dashboard`). Same window override.
+- **`uptime.sh`** — how long the poll daemon (`tg-poll.sh`) has been
+  running (real process elapsed time, or an honestly-labeled proxy from
+  `.metrics.log` if no process is found).
+- **`help.sh`** — lists every configured command (relay-handled +
+  forwarded), read live from `relay.toml` so it never drifts from what's
+  actually enabled.
+
+All four read `.metrics.log` (via `lib/metrics_agg.py`, the pure/testable
+aggregation module) and are registered in `relay.toml.example`. This file
+documents the contract a new handler follows.
 
 ## Why this exists
 
@@ -65,9 +79,13 @@ already makes outbound hook pings free.
    metrics log — see `lib/relay-common.sh`'s `emit_metric`), read it the
    same way any other script here does (paths relative to `$BRIDGE_DIR`).
 
-## Writing one (once this becomes real work)
+## Writing a new one
 
-Copy the shape of `example-echo.sh` (used only by `tests/run-tests.sh` to
-prove the dispatch seam works end-to-end — not a real command, not wired
-into `relay.toml.example`) and follow `adapters/README.md`'s general
-"small, disposable script" guidance.
+Copy the shape of `dashboard.sh`/`stats.sh` (real handlers) rather than
+`example-echo.sh` (used only by `tests/run-tests.sh` to prove the dispatch
+seam works end-to-end — not a real command, not wired into
+`relay.toml.example`), and follow `adapters/README.md`'s general "small,
+disposable script" guidance. If it needs metrics, read `.metrics.log`
+through `lib/metrics_agg.py` (`parse_log`/`filter_window`/`aggregate`)
+rather than re-parsing the TSV by hand — one source of truth for what the
+log's columns mean.
