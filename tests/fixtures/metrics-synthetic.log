@@ -1,0 +1,15 @@
+1000000000	tg-poll	message_flushed
+1000000100	tg-send	send	pages=1
+1000000200	tg-poll	command_forwarded	helpme
+1000000300	tg-poll	command_relay_handled	dashboard
+1000000300	tg-send	send	pages=2
+1000000400	hook	Notification
+1000000500	hook	SubagentStop
+1000000600	hook	SubagentStop
+1000000700	hook	PreToolUse_disabled
+1000000800	relay-notify	generic_send	raw
+1000000900	tg-poll	poll_error	curl_fail
+this line is malformed and must be skipped
+1000001000	tg-poll	message_flushed
+1000001000	tg-send	send	pages=1
+9999999999	tg-poll	message_flushed

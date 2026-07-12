@@ -38,29 +38,39 @@ with ANY agent using ANY harness, maximum portability + usability.
   `relay.toml`'s `[commands.*]` tables and tags the emitted event
   (`[telegram:cmd:<tag>] ...`); an unmatched message (or no `relay.toml`
   at all) still emits the plain `[telegram] <text>` it always has.
-- **Relay-handled-command SEAM (not the handlers themselves).**
-  `dispatch_command()` in `tg-poll.sh` already routes a command by its
-  `relay.toml` `mode`: `"forward"` (default, the only real behavior today)
-  tags + emits to the agent as above; `"relay"` runs a local `handler`
-  script instead and emits nothing to the agent — zero model tokens. No
-  built-in handler ships yet; see `handlers/README.md` for the contract
-  and `handlers/example-echo.sh` (test-only) for the shape one takes.
-- **Metrics event hook point (not the dashboard itself).**
-  `lib/relay-common.sh`'s `emit_metric <source> <event> [detail]` appends
-  a TSV line (epoch/source/event/detail) to `.metrics.log` on every
-  send/poll-flush/hook/command — non-blocking, best-effort, gitignored.
-  Wired into `tg-send.sh`, `tg-poll.sh` (flush + both command-dispatch
-  paths), `relay-notify.sh`, and `adapters/claude-code.sh`. No dashboard
-  reads this log yet.
+- **Relay-handled-command SEAM.** `dispatch_command()` in `tg-poll.sh`
+  routes a command by its `relay.toml` `mode`: `"forward"` (default) tags
+  + emits to the agent as above; `"relay"` runs a local `handler` script
+  instead and emits nothing to the agent — zero model tokens. Four real
+  handlers now use this seam (see the metrics-dashboard entry below); see
+  `handlers/README.md` for the contract and `handlers/example-echo.sh`
+  (test-only) for the minimal shape one takes.
+- **Metrics event hook point.** `lib/relay-common.sh`'s
+  `emit_metric <source> <event> [detail]` appends a TSV line
+  (epoch/source/event/detail) to `.metrics.log` on every
+  send/poll-flush/hook/command/poll-error — non-blocking, best-effort,
+  gitignored. Wired into `tg-send.sh`, `tg-poll.sh` (flush, both
+  command-dispatch paths, and the two `getUpdates` failure paths —
+  `poll_error`), `relay-notify.sh`, and `adapters/claude-code.sh`.
+- **The relay-side metrics dashboard (zero model tokens).** Four real
+  `handlers/*.sh` commands, all registered in `relay.toml.example`:
+  `/dashboard` (a multi-panel dashboard — header stats, volume-over-time,
+  hook-event breakdown, command usage — rendered as a dark-friendly
+  matplotlib PNG via `sendPhoto`, with a graceful unicode/text fallback
+  via `sendMessage` when matplotlib is unavailable; never fails to send
+  something), `/stats` (the key numbers only, lighter/text-only),
+  `/uptime` (poll-daemon uptime — real process elapsed time, or an
+  honestly-labeled `.metrics.log` proxy if no process is found), and
+  `/help` (lists every configured command live from `relay.toml`, never
+  stale). The aggregation (`lib/metrics_agg.py`) is pure/stdlib-only and
+  unit-tested independently of matplotlib (`tests/test_metrics_agg.py`);
+  the image renderer (`lib/dashboard_render.py`) imports it and degrades
+  to the same text renderer on any render failure. "Model-turns avoided"
+  is tracked as a `Declared` heuristic (enabled-hook pings +
+  relay-handled commands), never presented as a measured token count.
 
 ## Next
 
-- **The actual relay-handled commands** (`/dashboard`, `/stats`,
-  `/metrics`, `/uptime`, `/help`, ...) as `handlers/*.sh` scripts, using
-  the seam above — including a first consumer of `.metrics.log`.
-- **A metrics dashboard/summary** that reads `.metrics.log` (a `/stats`
-  or `/dashboard` relay-handled command is the natural first consumer —
-  see the two items above).
 - **Deeper per-event message templating.** Today `[claude_code.<Event>]`
   only overrides `enabled`/`prefix`; the rest of each event's message
   shape is still code-defined in `adapters/claude-code.sh`. A `format`

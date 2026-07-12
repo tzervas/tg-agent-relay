@@ -124,18 +124,63 @@
 # slash = "/pause"
 # tag = "pause"
 
-# --- Relay-handled commands (SEAM, not a shipped feature - see
-# --- handlers/README.md) --------------------------------------------------
-# `mode = "relay"` routes a matched command to a LOCAL handler script
-# instead of forwarding it to the agent - zero model tokens, since the
-# agent/Monitor never sees the event. tg-poll.sh's dispatch_command()
-# already implements this routing; no built-in handler ships yet (a
-# follow-up adds real ones - /dashboard, /stats, /metrics, /uptime,
-# /help, ...). Uncomment + point `handler` at a real script to use it
-# today:
+# --- Relay-handled commands (mode = "relay" routes a matched command to a
+# --- LOCAL handler script instead of forwarding it to the agent - zero
+# --- model tokens, since the agent/Monitor never sees the event. See
+# --- handlers/README.md for the dispatch contract.) ------------------------
 #
 # [commands.example]
 # keyword = "example"
 # slash = "/example"
 # mode = "relay"
 # handler = "handlers/example-echo.sh"   # relative to this dir, or absolute
+# (example-echo.sh is test-only - not a real command; see handlers/README.md)
+
+# --------------------------------------------------------------------------
+# [dashboard] - shared config for the dashboard/stats relay-handled
+# commands below (handlers/dashboard.sh, handlers/stats.sh). Optional; both
+# scripts default to 24h with no [dashboard] section, same
+# env-var-then-hardcoded-default fallback order as everywhere else.
+# [dashboard]
+# Default lookback window, in hours, when the command has no trailing
+# "<N>h" override (e.g. "/dashboard 48"). Same as env var
+# TG_DASHBOARD_WINDOW_HOURS.
+# window_hours = 24
+
+# --------------------------------------------------------------------------
+# The four built-in relay-handled commands (handlers/README.md's real
+# consumers - a metrics dashboard, zero model tokens). Uncomment all four to
+# enable; each is independent.
+#
+# [commands.dashboard]
+# keyword = "dashboard"
+# slash = "/dashboard"
+# mode = "relay"
+# handler = "handlers/dashboard.sh"
+# # Renders a multi-panel PNG (matplotlib, dark-friendly) via sendPhoto, or
+# # a unicode/text dashboard via sendMessage if matplotlib is unavailable -
+# # never fails to send SOMETHING. Accepts an optional trailing window
+# # override, e.g. "/dashboard 48" for the last 48 hours.
+#
+# [commands.stats]
+# keyword = "stats"
+# slash = "/stats"
+# mode = "relay"
+# handler = "handlers/stats.sh"
+# # The key numbers only, as plain text - lighter than /dashboard (no
+# # image, no bars). Same optional trailing window override.
+#
+# [commands.uptime]
+# keyword = "uptime"
+# slash = "/uptime"
+# mode = "relay"
+# handler = "handlers/uptime.sh"
+# # How long the poll daemon (tg-poll.sh) has been running.
+#
+# [commands.help]
+# keyword = "help"
+# slash = "/help"
+# mode = "relay"
+# handler = "handlers/help.sh"
+# # Lists every configured command (relay-handled + forwarded), read live
+# # from this file so it never drifts from what's actually enabled.
