@@ -14,14 +14,31 @@ model — it's a plain shell script calling `curl`):
 
 Nothing to do — already wired. `SubagentStop` and `Notification` hook
 events fire `hook-notify.sh` → `adapters/claude-code.sh`, which builds a
-one-line summary per event type and sends it. Other hook events
-(`Stop`, `SubagentStart`, `PreToolUse`/`PostToolUse[Failure]`,
-`SessionStart`/`SessionEnd`, `PreCompact`, `StopFailure`) are understood
-by the adapter too but only fire if you add their own entry to
-`~/.claude/settings.json` pointing at the same `hook-notify.sh` — see
-`adapters/claude-code.sh`'s header for the full field reference per
-event, and `relay.toml.example`'s `[claude_code.<Event>]` tables to
-enable/disable or re-prefix one.
+one-line summary per event type and sends it. All **30 documented Claude
+Code hook events** are understood by the adapter (see
+`adapters/claude-code.sh`'s header for the full per-event field
+reference), but only fire if `~/.claude/settings.json` has a matching
+`hooks.<Event>` entry pointing at `hook-notify.sh`.
+
+To wire up more events (or fewer), don't hand-edit `settings.json`:
+
+1. Enable/disable events in `relay.toml`'s `[claude_code.<Event>]` tables
+   (`enabled = true`/`false`; see `relay.toml.example` for each event's
+   install-time default — five low-volume lifecycle events default on,
+   the rest are opt-in).
+2. Run `~/.claude/telegram-bridge/install-hooks.sh` to sync
+   `~/.claude/settings.json` to match. It is **idempotent and
+   merge-not-clobber** — it only ever adds/updates/removes the ONE hook
+   entry per event that belongs to this bridge (matched by its exact
+   `hook-notify.sh` command path); every other key in `settings.json`,
+   and any other tool's hook entry for the same event, is left alone.
+   `install-hooks.sh --dry-run` previews the plan without writing
+   anything; `install-hooks.sh --uninstall` removes every hook entry this
+   script ever added.
+
+Each event's DEFAULT message text can also be fully replaced with a
+`format = "{placeholder}..."` template in its `[claude_code.<Event>]`
+table — see [Message templates](#message-templates) below.
 
 ### 2. Directly, from any script/agent
 
@@ -56,6 +73,38 @@ shape, ...) worth parsing into readable per-event messages the way
 [`adapters/README.md`](../adapters/README.md) and copy
 [`adapters/generic-example.sh`](../adapters/generic-example.sh) as a
 starting point.
+
+### Message templates
+
+Beyond enabling/disabling an event and picking its leading emoji
+(`prefix`), you can replace an event's ENTIRE message text with a
+`format` string using `{placeholder}` interpolation:
+
+```toml
+[claude_code.SubagentStop]
+format = "{prefix} {agent} done: {message}"
+
+[generic]
+format = "[{label}] {text}"
+```
+
+- `[claude_code.<Event>].format` — Claude Code hook events, read by
+  `adapters/claude-code.sh`. Every event supports `{prefix}` and
+  `{event}` at minimum; see `relay.toml.example`'s per-event comments for
+  the rest (`{agent}`, `{tool}`, `{message}`, ...).
+- `[generic].format` — the harness-agnostic path (`relay-notify.sh`'s
+  structured mode, and any adapter that calls it with `--label` instead
+  of building its own text). Placeholders: `{prefix}` `{label}` `{text}`.
+  Has no effect under `--raw` (that path always sends its already-built
+  text unmodified).
+
+**With no `format` configured (the default), every event renders its
+original built-in message text, unchanged** — this is purely additive; an
+existing `relay.toml` with no `format` keys behaves exactly as it did
+before this existed. A placeholder your template references that the
+event doesn't provide is left **literal** in the sent message (e.g. a
+typo'd `{mesage}` shows up as-is) rather than silently rendering as a
+blank — the same never-silent posture as the rest of this bridge.
 
 ## Receiving messages (inbound, phone -> agent)
 

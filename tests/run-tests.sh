@@ -60,10 +60,12 @@ setup_temp_bridge() {
     dir="$(mktemp -d)"
     ln -s "$REPO_ROOT/hook-notify.sh" "$dir/hook-notify.sh"
     ln -s "$REPO_ROOT/relay-notify.sh" "$dir/relay-notify.sh"
+    ln -s "$REPO_ROOT/install-hooks.sh" "$dir/install-hooks.sh"
     mkdir -p "$dir/adapters" "$dir/lib" "$dir/handlers"
     ln -s "$REPO_ROOT/adapters/claude-code.sh" "$dir/adapters/claude-code.sh"
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
+    ln -s "$REPO_ROOT/lib/claude-code-events.sh" "$dir/lib/claude-code-events.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
@@ -97,8 +99,9 @@ clear_recorded() {
 # ============================================================================
 echo "== bash -n (syntax) =="
 for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
-         watch-go-live.sh adapters/claude-code.sh adapters/generic-example.sh \
-         lib/relay-common.sh lib/relay-config.sh \
+         watch-go-live.sh install-hooks.sh \
+         adapters/claude-code.sh adapters/generic-example.sh \
+         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh \
          handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
@@ -109,9 +112,9 @@ done
 
 echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
-    for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh \
+    for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
-             lib/relay-common.sh lib/relay-config.sh \
+             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh \
              handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
@@ -173,6 +176,188 @@ assert_eq "Notification prefix overridden via relay.toml" \
 clear_recorded "$BRIDGE2"
 
 rm -rf "$BRIDGE2"
+
+# ============================================================================
+echo "== lib/relay-common.sh: render_template() (shared {placeholder} engine) =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/relay-common.sh"
+
+assert_eq "render_template: no template text, no placeholders" \
+    "hello world" "$(render_template "hello world")"
+assert_eq "render_template: single placeholder" \
+    "hello, Bob" "$(render_template "hello, {name}" name "Bob")"
+assert_eq "render_template: repeated placeholder substituted everywhere" \
+    "Bob said hi to Bob" "$(render_template "{name} said hi to {name}" name "Bob")"
+assert_eq "render_template: multiple distinct placeholders" \
+    "[1/3] page one" "$(render_template "[{k}/{n}] {label}" k 1 n 3 label "page one")"
+assert_eq "render_template: unknown placeholder left LITERAL (never silently blanked)" \
+    "prefix: {typo}" "$(render_template "prefix: {typo}" prefix "X")"
+assert_eq "render_template: empty value substitutes to nothing (not the literal braces)" \
+    "got: " "$(render_template "got: {x}" x "")"
+
+# ============================================================================
+echo "== adapters/claude-code.sh: [claude_code.<Event>].format templates =="
+BRIDGE_FMT="$(setup_temp_bridge)"
+cat > "$BRIDGE_FMT/relay.toml" <<'TOML'
+[claude_code.SubagentStop]
+format = "AGENT={agent} MSG={message}"
+
+[claude_code.SessionStart]
+enabled = true
+format = "session up, source={source}"
+
+[claude_code.PreToolUse]
+enabled = true
+TOML
+
+printf '%s' "$PAYLOAD_SUBAGENT" | "$BRIDGE_FMT/hook-notify.sh" >/dev/null 2>&1
+assert_eq "SubagentStop: custom format overrides the built-in default text" \
+    "AGENT=general-purpose MSG=Task done. All green." \
+    "$(recorded "$BRIDGE_FMT")"
+clear_recorded "$BRIDGE_FMT"
+
+PAYLOAD_SESSION_START='{"hook_event_name":"SessionStart","source":"resume"}'
+printf '%s' "$PAYLOAD_SESSION_START" | "$BRIDGE_FMT/hook-notify.sh" >/dev/null 2>&1
+assert_eq "SessionStart: enabled=true (new default is false) + custom format both honored" \
+    "session up, source=resume" \
+    "$(recorded "$BRIDGE_FMT")"
+clear_recorded "$BRIDGE_FMT"
+
+PAYLOAD_PRETOOL='{"hook_event_name":"PreToolUse","tool_name":"Bash"}'
+printf '%s' "$PAYLOAD_PRETOOL" | "$BRIDGE_FMT/hook-notify.sh" >/dev/null 2>&1
+assert_eq "PreToolUse: enabled=true (new default false), no format -> built-in default text" \
+    "🔧 using Bash" \
+    "$(recorded "$BRIDGE_FMT")"
+clear_recorded "$BRIDGE_FMT"
+
+rm -rf "$BRIDGE_FMT"
+
+echo "== adapters/claude-code.sh: new per-event default-enabled table =="
+BRIDGE_DEF="$(setup_temp_bridge)"
+# No relay.toml at all: PreToolUse (one of the 25 newly-explicit, opt-in
+# events) must NOT fire, but a genuinely unrecognized event must still fire
+# (the preserved universal default - see lib/claude-code-events.sh).
+PAYLOAD_PRETOOL='{"hook_event_name":"PreToolUse","tool_name":"Bash"}'
+printf '%s' "$PAYLOAD_PRETOOL" | "$BRIDGE_DEF/hook-notify.sh" >/dev/null 2>&1
+assert_empty "PreToolUse with no relay.toml -> opt-in default, no send" "$(recorded "$BRIDGE_DEF")"
+clear_recorded "$BRIDGE_DEF"
+
+PAYLOAD_FUTURE='{"hook_event_name":"SomeBrandNewEvent"}'
+printf '%s' "$PAYLOAD_FUTURE" | "$BRIDGE_DEF/hook-notify.sh" >/dev/null 2>&1
+assert_eq "an unrecognized/future event with no relay.toml -> still fires (preserved universal default)" \
+    "ℹ️ Claude Code event: SomeBrandNewEvent" \
+    "$(recorded "$BRIDGE_DEF")"
+clear_recorded "$BRIDGE_DEF"
+
+rm -rf "$BRIDGE_DEF"
+
+# ============================================================================
+echo "== relay-notify.sh: [generic].format template =="
+BRIDGE_GFMT="$(setup_temp_bridge)"
+cat > "$BRIDGE_GFMT/relay.toml" <<'TOML'
+[generic]
+prefix = "📣"
+format = "<<{prefix}>> {label} :: {text}"
+TOML
+
+"$BRIDGE_GFMT/relay-notify.sh" --label deploy "finished OK" >/dev/null 2>&1
+assert_eq "[generic].format overrides the built-in structured shape" \
+    "<<📣>> deploy :: finished OK" \
+    "$(recorded "$BRIDGE_GFMT")"
+clear_recorded "$BRIDGE_GFMT"
+
+"$BRIDGE_GFMT/relay-notify.sh" --raw "untouched" >/dev/null 2>&1
+assert_eq "[generic].format has no effect under --raw" \
+    "untouched" \
+    "$(recorded "$BRIDGE_GFMT")"
+clear_recorded "$BRIDGE_GFMT"
+
+rm -rf "$BRIDGE_GFMT"
+
+# ============================================================================
+echo "== install-hooks.sh: idempotent, merge-not-clobber settings.json sync =="
+BRIDGE_IH="$(setup_temp_bridge)"
+cp "$REPO_ROOT/tests/fixtures/relay.toml" "$BRIDGE_IH/relay.toml"
+SETTINGS_FIXTURE="$(mktemp -u)"
+cp "$REPO_ROOT/tests/fixtures/settings-with-other-hooks.json" "$SETTINGS_FIXTURE"
+
+"$BRIDGE_IH/install-hooks.sh" --settings "$SETTINGS_FIXTURE" >/tmp/install_hooks_out 2>&1
+INSTALL_RC=$?
+if [[ $INSTALL_RC -eq 0 ]] && jq -e . "$SETTINGS_FIXTURE" >/dev/null 2>&1; then
+    ok "install-hooks.sh: exits 0 and leaves valid JSON behind"
+else
+    fail "install-hooks.sh: exits 0 and leaves valid JSON behind" "$(cat /tmp/install_hooks_out)"
+fi
+
+assert_eq "install-hooks.sh: preserves a pre-existing unrelated key" \
+    "auto" "$(jq -r '.permissions.defaultMode' "$SETTINGS_FIXTURE")"
+assert_eq "install-hooks.sh: preserves another tool's hook on the same event" \
+    "/opt/other-tool/notify.sh" \
+    "$(jq -r '.hooks.SubagentStop[] | select(.hooks[0].command == "/opt/other-tool/notify.sh") | .hooks[0].command' "$SETTINGS_FIXTURE")"
+assert_eq "install-hooks.sh: wires Notification (default-enabled, only its prefix overridden) alongside the other tool" \
+    "$BRIDGE_IH/hook-notify.sh" \
+    "$(jq -r --arg cmd "$BRIDGE_IH/hook-notify.sh" '.hooks.Notification[] | select(.hooks[0].command == $cmd) | .hooks[0].command' "$SETTINGS_FIXTURE")"
+assert_empty "install-hooks.sh: does NOT wire SubagentStop (enabled=false via the fixture relay.toml)" \
+    "$(jq -r '.hooks.SubagentStop // [] | map(select(.hooks[0].command | test("hook-notify"))) | .[]' "$SETTINGS_FIXTURE" 2>/dev/null)"
+
+# Re-run with no relay.toml change -> byte-identical, reported as a no-op.
+BEFORE_HASH="$(jq -S . "$SETTINGS_FIXTURE")"
+"$BRIDGE_IH/install-hooks.sh" --settings "$SETTINGS_FIXTURE" >/tmp/install_hooks_out2 2>&1
+AFTER_HASH="$(jq -S . "$SETTINGS_FIXTURE")"
+assert_eq "install-hooks.sh: re-run with unchanged relay.toml is idempotent (no diff)" \
+    "$BEFORE_HASH" "$AFTER_HASH"
+if grep -q "no changes" /tmp/install_hooks_out2; then
+    ok "install-hooks.sh: idempotent re-run reports itself as a no-op (never-silent)"
+else
+    fail "install-hooks.sh: idempotent re-run reports itself as a no-op (never-silent)" "$(cat /tmp/install_hooks_out2)"
+fi
+
+# --uninstall removes only our entries, leaves the other tool's alone.
+"$BRIDGE_IH/install-hooks.sh" --settings "$SETTINGS_FIXTURE" --uninstall >/dev/null 2>&1
+assert_empty "install-hooks.sh --uninstall: removes our Notification entry" \
+    "$(jq -r --arg cmd "$BRIDGE_IH/hook-notify.sh" '.hooks.Notification // [] | map(select(.hooks[0].command == $cmd)) | .[]' "$SETTINGS_FIXTURE" 2>/dev/null)"
+assert_eq "install-hooks.sh --uninstall: the OTHER tool's SubagentStop hook survives (untouched the whole time)" \
+    "/opt/other-tool/notify.sh" \
+    "$(jq -r '.hooks.SubagentStop[0].hooks[0].command' "$SETTINGS_FIXTURE")"
+assert_eq "install-hooks.sh --uninstall: unrelated top-level keys still intact" \
+    "dark" "$(jq -r '.theme' "$SETTINGS_FIXTURE")"
+
+# --dry-run never writes.
+cp "$REPO_ROOT/tests/fixtures/settings-with-other-hooks.json" "$SETTINGS_FIXTURE"
+BEFORE_DRY="$(jq -S . "$SETTINGS_FIXTURE")"
+"$BRIDGE_IH/install-hooks.sh" --settings "$SETTINGS_FIXTURE" --dry-run >/dev/null 2>&1
+AFTER_DRY="$(jq -S . "$SETTINGS_FIXTURE")"
+assert_eq "install-hooks.sh --dry-run: never writes to settings.json" \
+    "$BEFORE_DRY" "$AFTER_DRY"
+
+# A missing settings.json is created fresh (mkdir -p + write), not an
+# error. Checks .hooks.StopFailure (default-enabled, untouched by the
+# BRIDGE_IH fixture relay.toml which only overrides SubagentStop/Notification).
+NO_SETTINGS_DIR="$(mktemp -d)"
+"$BRIDGE_IH/install-hooks.sh" --settings "$NO_SETTINGS_DIR/nested/settings.json" >/dev/null 2>&1
+if jq -e '.hooks.StopFailure' "$NO_SETTINGS_DIR/nested/settings.json" >/dev/null 2>&1; then
+    ok "install-hooks.sh: creates a missing settings.json (with parent dirs) from scratch"
+else
+    fail "install-hooks.sh: creates a missing settings.json (with parent dirs) from scratch" "no file / no hooks written"
+fi
+rm -rf "$NO_SETTINGS_DIR"
+
+# A malformed settings.json is refused, never guessed at / overwritten.
+BAD_SETTINGS="$(mktemp)"
+printf '{not valid json' > "$BAD_SETTINGS"
+BAD_BEFORE="$(cat "$BAD_SETTINGS")"
+"$BRIDGE_IH/install-hooks.sh" --settings "$BAD_SETTINGS" >/tmp/install_hooks_bad 2>&1
+BAD_RC=$?
+BAD_AFTER="$(cat "$BAD_SETTINGS")"
+if [[ $BAD_RC -ne 0 && "$BAD_BEFORE" == "$BAD_AFTER" ]]; then
+    ok "install-hooks.sh: refuses to touch a malformed settings.json (exits nonzero, file untouched)"
+else
+    fail "install-hooks.sh: refuses to touch a malformed settings.json" "rc=$BAD_RC before=[$BAD_BEFORE] after=[$BAD_AFTER]"
+fi
+rm -f "$BAD_SETTINGS"
+
+rm -f "$SETTINGS_FIXTURE" /tmp/install_hooks_out /tmp/install_hooks_out2 /tmp/install_hooks_bad
+rm -rf "$BRIDGE_IH"
 
 # ============================================================================
 echo "== relay-notify.sh: generic harness-agnostic entry point =="

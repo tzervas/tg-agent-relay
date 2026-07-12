@@ -75,7 +75,12 @@ boundary).
 **Claude Code users: skip this step.** The Claude Code adapter
 (`adapters/claude-code.sh`, invoked via the `hook-notify.sh` shim) is
 already wired into `~/.claude/settings.json`'s `hooks.SubagentStop` /
-`hooks.Notification` — nothing to do.
+`hooks.Notification` — nothing to do. If you want more than these two
+events (the adapter understands all 30 documented Claude Code hook
+events), enable them in `relay.toml`'s `[claude_code.<Event>]` tables and
+run `~/.claude/telegram-bridge/install-hooks.sh` to sync
+`~/.claude/settings.json` to match — see the
+[README's "Installing hooks" section](README.md#installing-hooks-for-more-events).
 
 **Any other agent/harness:** either call
 [`relay-notify.sh`](relay-notify.sh) directly wherever you want a status
@@ -173,6 +178,7 @@ that matter for day-one setup:
 | `tg-send.sh` | Outbound: sends one Telegram message; silent no-op with no token |
 | `tg-poll.sh` | Inbound: long-polls Telegram, prints `[telegram] <text>` per allowed message (run as a `Monitor` source) |
 | `hook-notify.sh` | Hook shim: turns a `SubagentStop`/`Notification` hook payload into a short summary via `adapters/claude-code.sh` |
+| `install-hooks.sh` | Sync `~/.claude/settings.json`'s Claude Code hooks to whatever's `enabled` in `relay.toml` — idempotent, merge-not-clobber; `--uninstall` reverses it |
 | `go-live.sh` | One-shot activation: validate token, resolve your id, send the "live" DM |
 | `.offset` | Persisted `getUpdates` offset (auto-created) |
 | `.last-sent` | Last-sent message + timestamp, for outbound dedup (auto-created) |
