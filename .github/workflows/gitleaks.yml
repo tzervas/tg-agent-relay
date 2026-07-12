@@ -1,8 +1,8 @@
 name: gitleaks
 
 on:
-  push:
-  pull_request:
+  # Manual-run-only (maintainer, 2026-07-12): repo work delivered; run on demand.
+  workflow_dispatch:
 
 permissions:
   contents: read
