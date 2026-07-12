@@ -1,9 +1,16 @@
 # TG Agent Relay
 
-An **agent/harness-agnostic** Telegram relay: a small, secure,
-**token-frugal** bridge between a Telegram bot and any coding agent or
-automation harness, built with pure `curl` + `jq` + `python3` stdlib (no
-framework, no external services).
+**An agent/harness-agnostic Telegram relay:** full-output, paginated status
+pings go out to your phone for free; reassembled messages and commands come
+back in; and a set of built-in dashboard/stats commands answer straight from
+the relay — zero model tokens either direction unless *you* start a
+conversation.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![gitleaks](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
+
+Built with pure `curl` + `jq` + `python3` stdlib — no framework, no external
+services, no listening port.
 
 > **Repo/directory note:** this repo is named `tg-agent-relay` on GitHub
 > (renamed from `claude-telegram-bridge` — GitHub auto-redirects the old
@@ -13,76 +20,188 @@ framework, no external services).
 > mismatch (repo `tg-agent-relay`, directory `telegram-bridge`) is
 > cosmetic only.
 
-## Design
+## Why
 
 Two channels, deliberately split so **status pings cost zero model
 tokens** and you are only billed when *you* message the bot:
 
 - **Outbound status → phone (0 model tokens):** any agent/harness calls
   [`relay-notify.sh`](relay-notify.sh) (generic) or a harness-specific
-  [adapter](adapters/) (e.g. Claude Code hooks → `hook-notify.sh` →
-  [`adapters/claude-code.sh`](adapters/claude-code.sh)) → `tg-send.sh` →
-  Telegram. Hook-driven pings run outside the model, so automated status
-  never spends tokens.
+  [adapter](adapters/) → `tg-send.sh` (auto-paginating `[k/n]` over
+  Telegram's 4096-char cap) → Telegram. Hook-driven pings run outside the
+  model, so automated status never spends tokens.
 - **Inbound phone → agent (billed only here):** `tg-poll.sh` long-polls
   `getUpdates`, **allowlisted strictly to your numeric `ALLOWED_USER_ID`**
-  (every other sender is silently ignored — the security boundary), and
-  emits one line per allowed message for a `Monitor`-style event source.
-  A message can optionally be recognized as an **in-chat command**
-  (`/status`, `status ...`) and tagged for the consuming agent — see
-  [In-chat commands](#in-chat-commands-user--agent) below.
+  (every other sender is silently ignored — the security boundary),
+  reassembles a rapid burst of messages into one event, and either
+  forwards it to the agent or — for a small set of built-in commands —
+  answers it itself, at zero model tokens.
 
-Telegram bots are **outbound-only** — no inbound port is exposed.
+## Architecture
 
-## Harness-agnostic core
+```mermaid
+flowchart LR
+    subgraph agent["Agent / harness (any)"]
+        CC["Claude Code hook\n(SubagentStop, Notification, ...)"]
+        ANY["Any script or agent"]
+    end
 
-The relay has one **generic entry point** any agent/harness can call
-directly, plus optional **adapters** for harnesses whose native events are
-worth parsing into structured, per-event messages.
+    subgraph relay["TG Agent Relay (~/.claude/telegram-bridge/)"]
+        HN["hook-notify.sh\n(shim)"]
+        AD["adapters/claude-code.sh"]
+        RN["relay-notify.sh\n(generic core)"]
+        TS["tg-send.sh\n(paginate k-of-n, dedup)"]
+        TP["tg-poll.sh\n(reassembly + command parser)"]
+        DISP{"command matched?"}
+        HD["handlers/*.sh\n(dashboard, stats, uptime, help)"]
+    end
+
+    PHONE(["Your phone (Telegram)"])
+
+    CC -->|hook JSON on stdin| HN --> AD -->|raw formatted text| RN
+    ANY -->|"free text, or label:text"| RN
+    RN --> TS -->|sendMessage, paginated| PHONE
+
+    PHONE -->|message| TP
+    TP --> DISP
+    DISP -->|"relay-handled\nmode is relay"| HD
+    HD -->|"sendPhoto / sendMessage\nzero model tokens"| PHONE
+    DISP -->|"no match, or\nmode is forward"| OUT["tagged telegram event\non stdout"]
+    OUT -->|stdout event| AGENT_IN["Agent / Monitor\n(billed only here)"]
+```
+
+- **Outbound (top path):** agent/hook → adapter or `relay-notify.sh` →
+  `tg-send.sh` → Telegram → your phone. Never costs a model turn.
+- **Inbound (bottom path):** phone → Telegram → `tg-poll.sh`. A flushed
+  message is either **relay-handled** (a built-in command like
+  `/dashboard` runs a local script and replies via `sendPhoto`/
+  `sendMessage` — zero model tokens) or **forwarded** as a
+  `[telegram] ...` / `[telegram:cmd:<tag>] ...` line on stdout for your
+  agent's event source (a `Monitor`-style loop) to read — costing a model
+  turn only when you actually send something.
+
+## The dashboard, at a glance
+
+`/dashboard` renders a dark-friendly, mobile-legible multi-panel PNG
+(header stats, volume-over-time, hook-event breakdown, command usage) via
+`sendPhoto` — no model involved. Illustrative example (synthetic data —
+see [`docs/assets/README.md`](docs/assets/README.md)):
+
+![dashboard example](docs/assets/dashboard-example.png)
+
+If `matplotlib`/`python3` aren't available, the same data renders as a
+unicode/text dashboard instead — see
+[`docs/assets/dashboard-example.txt`](docs/assets/dashboard-example.txt).
+Either way, `/dashboard` never fails to send *something*.
+
+## Quickstart
+
+```bash
+# 1. Create a bot via @BotFather in Telegram, copy the token
+# 2. Put it in a local, gitignored .env
+cp .env.example .env
+echo 'BOT_TOKEN=<paste-your-token-here>' >> .env   # or edit .env directly
+chmod 600 .env
+
+# 3. Message your new bot once (any text), so the relay can learn your id
+# 4. Go live — validates the token, resolves your id, sends a confirmation DM
+bash go-live.sh
+```
+
+Full walkthrough (including optional `relay.toml` config and wiring an
+adapter): see [`SETUP.md`](SETUP.md).
+
+## In use
+
+### (a) Wiring to Claude Code
+
+Already wired for you: `~/.claude/settings.json`'s `hooks.SubagentStop` /
+`hooks.Notification` call `hook-notify.sh`, a thin shim that `exec`s
+[`adapters/claude-code.sh`](adapters/claude-code.sh) — which parses the
+hook's JSON payload, builds a one-line summary per event type, and hands
+it to `relay-notify.sh --raw`:
+
+```json
+{
+  "hooks": {
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "~/.claude/telegram-bridge/hook-notify.sh" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "~/.claude/telegram-bridge/hook-notify.sh" }] }]
+  }
+}
+```
+
+### (b) Wiring to ANY other agent/harness
+
+No adapter needed for plain text — call the generic entry point directly:
+
+```bash
+# raw text
+~/.claude/telegram-bridge/relay-notify.sh "Deploy finished OK"
+
+# structured (adds an optional [generic].prefix from relay.toml)
+echo '{"label":"deploy","text":"finished OK"}' \
+  | ~/.claude/telegram-bridge/relay-notify.sh
+```
+
+If your harness has its own structured event shape worth parsing (like
+Claude Code's hook JSON), copy
+[`adapters/generic-example.sh`](adapters/generic-example.sh) and write a
+dedicated adapter — see [`adapters/README.md`](adapters/README.md).
+
+### (c) A status ping arriving on the phone
+
+A `SubagentStop` hook firing produces a DM like:
 
 ```
-                    ┌─────────────────────┐
- any agent/script → │  relay-notify.sh    │ → tg-send.sh → Telegram
- (free text / JSON) │ (generic core)      │
-                    └─────────────────────┘
-                              ▲
-                    ┌─────────┴───────────┐
- Claude Code hooks →│ adapters/            │
- (hook-notify.sh    │  claude-code.sh      │
-  shim, unchanged)  └──────────────────────┘
+✅ code-reviewer finished — Found 2 issues in the diff, both low severity
 ```
 
-- **Generic status input (any agent/harness):**
+A long message (e.g. a full tool output) is auto-paginated:
 
-  ```bash
-  relay-notify.sh "Deploy finished OK"                 # raw text
-  echo '{"label":"deploy","text":"finished OK"}' \
-    | relay-notify.sh                                     # structured JSON
-  ```
+```
+[1/3]
+✅ build finished — Compiling mycelium-core v0.4.0 ...
+```
 
-  See [`relay-notify.sh`](relay-notify.sh)'s header for the full usage
-  (`--label`, `--raw`, stdin vs args). It's a drop-in replacement for
-  calling `tg-send.sh` directly, plus optional structured
-  label:text formatting and relay.toml-driven config.
+### (d) Sending `/dashboard` → image back
 
-- **Adapters** (see [`adapters/README.md`](adapters/README.md)) turn a
-  harness's native event shape into a `relay-notify.sh` call. Today:
-  Claude Code (`adapters/claude-code.sh`), plus a copy-paste stub
-  (`adapters/generic-example.sh`) for writing your own.
+```
+You:  /dashboard
+Bot:  [sends a PNG: Relay Dashboard — last 24h]
+```
 
-- **`tg-send.sh` / `tg-poll.sh` stay harness-neutral** — a plain `curl`
-  send and a plain stdout event stream, unchanged interfaces, exactly as
-  before.
+Zero model tokens — `tg-poll.sh` matches the command, backgrounds
+`handlers/dashboard.sh`, which renders and sends the image (or the
+text-fallback dashboard) directly. See
+[`docs/COMMANDS.md`](docs/COMMANDS.md) for the full command table.
+
+### (e) A plain message → forwarded to the agent
+
+```
+You:  can you check the CI run on PR 42?
+```
+
+`tg-poll.sh` sees no command match and emits, on its own stdout:
+
+```
+[telegram] can you check the CI run on PR 42?
+```
+
+for your agent's `Monitor`-style event loop to pick up as its next input —
+this is the only inbound path that costs a model turn.
 
 ## Configurable via `relay.toml` (optional)
 
 Copy [`relay.toml.example`](relay.toml.example) to `relay.toml` to
 configure page size/delay, the reassemble window, which Claude Code hook
-events are enabled + their prefix, the `[generic]` prefix, and in-chat
-commands. **Every script falls back to its pre-existing env-var/hardcoded
-default with no `relay.toml` present** — this is the backward-compat
-guarantee: an existing bridge with no `relay.toml` behaves byte-for-byte
-as it always has. See the example file's comments for the full schema.
+events are enabled + their prefix, the `[generic]` prefix, in-chat
+commands, and the dashboard window. **Every script falls back to its
+pre-existing env-var/hardcoded default with no `relay.toml` present** —
+this is the backward-compat guarantee: an existing bridge with no
+`relay.toml` behaves byte-for-byte as it always has. See the example
+file's comments for the full schema, and
+[`docs/USAGE.md`](docs/USAGE.md) / [`docs/COMMANDS.md`](docs/COMMANDS.md)
+for how to use it.
 
 ## In-chat commands (user → agent)
 
@@ -97,14 +216,14 @@ keyword prefix (`status ...`, `pause ...`) defined in `relay.toml`'s
 
 **With no `relay.toml` (or no `[commands.*]` section), nothing is ever
 tagged** — every message emits exactly as `[telegram] <text>`, today's
-behavior. See `relay.toml.example`'s `[commands.*]` section for the
-schema (`keyword`, `slash`, `tag`).
+behavior.
 
 A command can also be **relay-handled** (`mode = "relay"` + `handler`)
 instead of forwarded — the relay runs a local script and answers
 directly, at zero model tokens, instead of ever emitting the event to the
-agent. This routing already works (`tg-poll.sh`'s `dispatch_command()`);
-no built-in handler ships yet — see [`handlers/README.md`](handlers/README.md).
+agent. Four such commands ship today (`/dashboard`, `/stats`, `/uptime`,
+`/help`) — see [`docs/COMMANDS.md`](docs/COMMANDS.md) for what each does
+and how to define your own.
 
 ## Files
 
@@ -115,7 +234,7 @@ no built-in handler ships yet — see [`handlers/README.md`](handlers/README.md)
 | `relay.toml.example` | Non-secret config template (committed). Copy to `relay.toml` to customize. |
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
 | `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars. |
-| `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap. |
+| `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
 | `relay-notify.sh` | **Generic, harness-agnostic entry point** — any agent/script can send a status update through it directly. |
 | `adapters/claude-code.sh` | Claude Code hook-JSON adapter — parses the payload, formats a per-event summary, calls `relay-notify.sh --raw`. |
 | `adapters/generic-example.sh` | Copy-paste stub for writing a new harness adapter. |
@@ -124,28 +243,32 @@ no built-in handler ships yet — see [`handlers/README.md`](handlers/README.md)
 | `lib/relay-config.sh` | Optional `relay.toml` loader (`cfg_get`/`cfg_has_section`), shared by every script. |
 | `lib/relay-common.sh` | Shared helpers (`oneline`, `cap_if_huge`, `emit_metric`). |
 | `lib/toml_to_json.py` | `relay.toml` → JSON (Python stdlib `tomllib`; the only TOML-parsing code in the repo). |
-| `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` (a routing seam — see [`handlers/README.md`](handlers/README.md); no built-in handler ships yet). |
-| `.metrics.log` | **Local-only, gitignored, auto-created** — a TSV event log (`emit_metric`) for a future dashboard; not read by anything yet. |
+| `lib/metrics_agg.py` | Pure/stdlib metrics aggregation over `.metrics.log` (used by the dashboard/stats/uptime handlers, unit-tested independently of matplotlib). |
+| `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. |
+| `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` — `dashboard.sh`, `stats.sh`, `uptime.sh`, `help.sh` ship today; see [`docs/COMMANDS.md`](docs/COMMANDS.md) and [`handlers/README.md`](handlers/README.md). |
+| `.metrics.log` | **Local-only, gitignored, auto-created** — a TSV event log (`emit_metric`) that the dashboard/stats/uptime commands read. |
 | `go-live.sh` | Validates the token, auto-resolves your id, sends the "🟢 live" DM. |
 | `watch-go-live.sh` | Optional: waits for a token to appear, then runs `go-live.sh`. |
 | `SETUP.md` | Step-by-step setup + security notes. |
+| `docs/USAGE.md` | How to send status, receive/reassemble messages, run commands, and read the dashboard. |
+| `docs/COMMANDS.md` | The built-in commands, relay-handled vs. forwarded, and how to define your own. |
 | `ROADMAP.md` | Where this is headed. |
-
-## Setup
-
-See [`SETUP.md`](SETUP.md). In short: create a bot with `@BotFather`, copy
-the token into a local `.env`, message the bot once, then
-`bash go-live.sh`.
 
 ## Security
 
-- Allowlist by numeric `user_id`; all other senders ignored.
-- Bot token lives only in the local `.env` (gitignored, 0600) — never in
-  the repo. `relay.toml` (if you create one) holds no secret either.
-- No inbound port (Telegram long-poll is outbound).
-- Secret-scanned: [gitleaks](https://github.com/gitleaks/gitleaks) runs as
-  a pre-commit hook (`.pre-commit-config.yaml`) and a CI check
-  (`.github/workflows/gitleaks.yml`) on every push/PR.
+- **Allowlist by numeric `user_id`**; all other senders are silently
+  ignored — never forwarded, never logged with content.
+- **Bot token lives only in the local `.env`** (gitignored, 0600) — never
+  in the repo. `relay.toml` (if you create one) holds no secret either.
+- **Outbound-only.** Telegram bots work by your machine *polling out*
+  (`getUpdates`) and *pushing out* (`sendMessage`/`sendPhoto`) — no
+  inbound port is ever opened on this machine.
+- **Secret-scanned:** [gitleaks](https://github.com/gitleaks/gitleaks)
+  runs as a pre-commit hook (`.pre-commit-config.yaml`) and a CI check
+  (`.github/workflows/gitleaks.yml`) on every push/PR, including a
+  repo-specific rule for this bot token's exact shape (`.gitleaks.toml`).
+
+See [`SETUP.md`](SETUP.md#security-model) for the full security model.
 
 ## License
 
