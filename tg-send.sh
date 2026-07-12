@@ -11,11 +11,25 @@
 #
 # Security: the token lives only in .env (mode 0600); this script never
 # echoes or logs it. Outbound-only (a plain curl POST) - no listening port.
+#
+# Auto-pagination: a message over TG_PAGE_SIZE chars (default 3500, safely
+# under Telegram's 4096 hard cap once the "[k/n]\n" prefix + multibyte margin
+# are accounted for) is split on line/paragraph boundaries into multiple
+# messages, each prefixed "[k/n]", and sent in order with a short
+# TG_PAGE_DELAY between sends so Telegram preserves ordering. A single line
+# that alone exceeds the page size is hard-split as a fallback. A short
+# message still sends as exactly one message, with no prefix.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$BRIDGE_DIR/.env"
 LAST_MSG_FILE="$BRIDGE_DIR/.last-sent"
+
+# Telegram's hard cap is 4096 chars; stay safely under it.
+PAGE_SIZE="${TG_PAGE_SIZE:-3500}"
+[[ "$PAGE_SIZE" =~ ^[0-9]+$ ]] || PAGE_SIZE=3500
+# Delay (seconds, may be fractional) between sequential page sends.
+PAGE_DELAY="${TG_PAGE_DELAY:-0.4}"
 
 # Message text: args take priority over stdin.
 if [[ $# -gt 0 ]]; then
@@ -38,7 +52,9 @@ source "$CONFIG_FILE"
 [[ -z "${ALLOWED_CHAT_ID:-}" ]] && exit 0
 
 # Light rate-limit/dedup: skip an identical message sent within the last 10s,
-# so a hook storm (e.g. several subagents finishing at once) can't flood the chat.
+# so a hook storm (e.g. several subagents finishing at once) can't flood the
+# chat. Keyed on the full, pre-split $MSG, so a multi-page message is deduped
+# (or not) as one unit - never partially.
 NOW=$(date +%s)
 if [[ -f "$LAST_MSG_FILE" ]]; then
     LAST_LINE=$(head -n1 "$LAST_MSG_FILE" 2>/dev/null || true)
@@ -49,10 +65,63 @@ if [[ -f "$LAST_MSG_FILE" ]]; then
     fi
 fi
 
-curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-    --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
-    --data-urlencode "text=${MSG}" \
-    >/dev/null 2>&1 || true
+# --- Split $MSG into PAGES[] on line boundaries; only hard-split a single
+# --- line that alone exceeds PAGE_SIZE. A message within PAGE_SIZE is a
+# --- single unmodified page (today's exact behavior). ---
+PAGES=()
+if (( ${#MSG} <= PAGE_SIZE )); then
+    PAGES=("$MSG")
+else
+    CUR=""
+    while IFS= read -r LINE || [[ -n "$LINE" ]]; do
+        if [[ -n "$CUR" ]]; then
+            CAND="${CUR}"$'\n'"${LINE}"
+        else
+            CAND="$LINE"
+        fi
+
+        if (( ${#CAND} <= PAGE_SIZE )); then
+            CUR="$CAND"
+            continue
+        fi
+
+        # CAND overflowed the page: flush whatever we already had.
+        [[ -n "$CUR" ]] && PAGES+=("$CUR")
+        CUR=""
+
+        if (( ${#LINE} <= PAGE_SIZE )); then
+            CUR="$LINE"
+        else
+            # A single line longer than PAGE_SIZE: hard-split it (fallback).
+            REST="$LINE"
+            while (( ${#REST} > PAGE_SIZE )); do
+                PAGES+=("${REST:0:PAGE_SIZE}")
+                REST="${REST:PAGE_SIZE}"
+            done
+            CUR="$REST"
+        fi
+    done <<< "$MSG"
+    [[ -n "$CUR" ]] && PAGES+=("$CUR")
+    (( ${#PAGES[@]} == 0 )) && PAGES=("$MSG")
+fi
+
+TOTAL=${#PAGES[@]}
+IDX=0
+for PAGE in "${PAGES[@]}"; do
+    IDX=$((IDX + 1))
+    if (( TOTAL > 1 )); then
+        SEND_TEXT="[${IDX}/${TOTAL}]"$'\n'"${PAGE}"
+    else
+        SEND_TEXT="$PAGE"
+    fi
+
+    curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
+        --data-urlencode "text=${SEND_TEXT}" \
+        >/dev/null 2>&1 || true
+
+    (( IDX < TOTAL )) && sleep "$PAGE_DELAY"
+done
 
 printf '%s|%s\n' "$NOW" "$MSG" > "$LAST_MSG_FILE" 2>/dev/null || true
 

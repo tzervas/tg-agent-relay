@@ -4,4 +4,6 @@
 # Runtime state written by the scripts.
 .offset
 .last-sent
+.tg-buffer
+.tg-buffer-ts
 *.log

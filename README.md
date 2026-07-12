@@ -24,9 +24,9 @@ Telegram bots are **outbound-only** — no inbound port is exposed.
 |---|---|
 | `.env.example` | Config template (committed). Copy to `.env` and fill `BOT_TOKEN`. |
 | `.env` | **Local-only, gitignored, 0600** — holds the live bot token. Never committed. |
-| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup. |
-| `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>`. |
-| `hook-notify.sh` | Hook shim: parses hook JSON, forwards a short summary to `tg-send.sh`. |
+| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `TG_PAGE_SIZE` (default 3500) chars. |
+| `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>`; reassembles a rapid burst into one event after a `TG_REASSEMBLE_WINDOW` (default 4s) quiet gap. |
+| `hook-notify.sh` | Hook shim: parses hook JSON, forwards the FULL summary to `tg-send.sh` (which paginates it), capped only at an extreme `TG_HOOK_MAX_PAGES` outlier (default 6 pages) with a `[+M more pages omitted]` marker. |
 | `go-live.sh` | Validates the token, auto-resolves your id, sends the "🟢 live" DM. |
 | `watch-go-live.sh` | Optional: waits for a token to appear, then runs `go-live.sh`. |
 | `SETUP.md` | Step-by-step setup + security notes. |
