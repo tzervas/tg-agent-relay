@@ -1,0 +1,7 @@
+# The real config holds a live bot token — LOCAL ONLY, never committed/pushed.
+.env
+
+# Runtime state written by the scripts.
+.offset
+.last-sent
+*.log
