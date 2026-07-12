@@ -1,9 +1,19 @@
 # The real config holds a live bot token — LOCAL ONLY, never committed/pushed.
 .env
 
+# The real user config — not inherently secret, but local/user-specific
+# (same reasoning as .env; commit relay.toml.example instead). Anchored to
+# the repo root so it does NOT shadow tests/fixtures/relay.toml (a
+# committed test fixture, intentionally named the same).
+/relay.toml
+
 # Runtime state written by the scripts.
 .offset
 .last-sent
 .tg-buffer
 .tg-buffer-ts
+.metrics.log
 *.log
+
+# Test-only marker file written by handlers/example-echo.sh.
+.example-echo-received
