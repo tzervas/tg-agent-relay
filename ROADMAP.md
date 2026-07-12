@@ -26,13 +26,30 @@ with ANY agent using ANY harness, maximum portability + usability.
   for any other harness.
 - **Configurable hooks (`relay.toml`).** `relay.toml.example` (committed)
   documents `[general]` (page size/delay, reassemble window, hook page
-  cap), `[generic]` (the harness-agnostic prefix), `[claude_code.<Event>]`
-  (per-event enable + prefix, covering the documented Claude Code hook
+  cap), `[generic]` (the harness-agnostic prefix + format), `[claude_code.<Event>]`
+  (per-event enable + prefix + format, covering the documented Claude Code hook
   event set — see `adapters/claude-code.sh`'s header for the full list and
   which are actually wired vs. available to wire), and `[commands.<name>]`
   (in-chat commands). Every script falls back to its pre-existing
   env-var/hardcoded default with no `relay.toml` present — the
   backward-compat guarantee.
+- **Configurable hooks for all abilities (complete).** `adapters/claude-code.sh`
+  now handles ALL 30 documented Claude Code hook events (not just the
+  original 11), each with its own `[claude_code.<Event>]`
+  `enabled`/`prefix`/`format` in `relay.toml` — `lib/claude-code-events.sh`
+  is the single source of truth for the event list + each event's
+  install-time default (five low-volume lifecycle events default on, the
+  other 25 are opt-in; a genuinely unrecognized/future event still
+  defaults on, preserving the original universal-default contract).
+  `install-hooks.sh` (+ `--uninstall`) is the one-command,
+  idempotent/merge-not-clobber sync from `relay.toml`'s `enabled` set into
+  `~/.claude/settings.json`'s `hooks.<Event>` entries — `jq`-driven,
+  never destroys another tool's hook entry on the same event, never
+  writes invalid JSON. `[generic].format` gives the harness-agnostic path
+  (`relay-notify.sh`, and any adapter calling it via `--label`) the same
+  templating engine (`lib/relay-common.sh`'s `render_template`, shared
+  across all three config surfaces). All additive; an existing `relay.toml`
+  (or none) behaves byte-for-byte as before.
 - **In-chat commands (user→agent).** `tg-poll.sh` recognizes a leading
   `/slash` command OR a configured keyword prefix (`status ...`) from
   `relay.toml`'s `[commands.*]` tables and tags the emitted event
@@ -71,14 +88,6 @@ with ANY agent using ANY harness, maximum portability + usability.
 
 ## Next
 
-- **Deeper per-event message templating.** Today `[claude_code.<Event>]`
-  only overrides `enabled`/`prefix`; the rest of each event's message
-  shape is still code-defined in `adapters/claude-code.sh`. A `format`
-  string with `{field}` interpolation (à la Python `str.format`) would let
-  users fully customize wording without editing the adapter — worth doing
-  once there's a second or third adapter to validate the design against a
-  real second use case, so the template mini-language earns its
-  complexity rather than being speculative.
 - **More adapters.** A generic-webhook adapter (accepts any POSTed JSON on
   a local pipe/FIFO — still outbound-only, no listening port opened) and
   a plain-log-tail adapter (watches a file, forwards new lines) would

@@ -36,6 +36,31 @@ cap_if_huge() {
     printf '%s\n\n[+%s more pages omitted]' "$kept" "$omitted_pages"
 }
 
+# render_template <template> [<name1> <value1> [<name2> <value2> ...]]
+#
+# Minimal `{name}` interpolation shared by adapters/claude-code.sh (per-event
+# `[claude_code.<Event>].format`) and relay-notify.sh (`[generic].format`) -
+# ONE implementation so both config surfaces behave identically. Every
+# "{name}" literal in <template> whose <name> was passed in is replaced with
+# its <value>; a "{name}" that was NOT passed in is left LITERAL in the
+# output. This is deliberate, not a bug: a typo'd placeholder in a
+# hand-written relay.toml `format` string stays visibly wrong on the phone
+# instead of silently rendering as an empty gap - the same
+# never-silent-failure posture as the rest of this repo (see
+# lib/relay-common.sh's other helpers).
+#
+# Example: render_template '{prefix} {agent} finished' prefix "✅" agent "build"
+#   -> "✅ build finished"
+render_template() {
+    local tmpl="$1"
+    shift
+    while [[ $# -ge 2 ]]; do
+        tmpl="${tmpl//\{$1\}/$2}"
+        shift 2
+    done
+    printf '%s' "$tmpl"
+}
+
 # emit_metric <source> <event> [detail]
 #
 # Extension SEAM for a later metrics dashboard - not built here, see
