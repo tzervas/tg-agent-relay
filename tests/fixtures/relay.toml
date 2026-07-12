@@ -1,0 +1,40 @@
+# Fixture relay.toml for tests/run-tests.sh - exercises every config surface
+# the scripts read (general knobs, generic prefix, per-event claude_code
+# overrides including an explicit `enabled = false`, and two commands).
+[general]
+page_size = 1234
+page_delay = 0.1
+reassemble_window = 9
+hook_max_pages = 2
+
+[generic]
+prefix = "📣"
+
+[claude_code.SubagentStop]
+enabled = false
+
+[claude_code.Notification]
+prefix = "⭐"
+
+[commands.status]
+keyword = "status"
+slash = "/status"
+tag = "status"
+
+[commands.pause]
+keyword = "pause"
+slash = "/pause"
+
+# Name != tag, to prove dispatch_command() emits the configured tag, not
+# the table name it looked the command up by.
+[commands.helpme]
+keyword = "help"
+tag = "assist"
+
+# mode = "relay": routed to a local handler instead of forwarded to the
+# agent (the seam - see handlers/README.md). example-echo.sh is test-only.
+[commands.example]
+keyword = "example"
+slash = "/example"
+mode = "relay"
+handler = "handlers/example-echo.sh"

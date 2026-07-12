@@ -1,8 +1,10 @@
-# Telegram <-> Claude Code bridge — setup
+# TG Agent Relay — setup
 
 A secure, token-frugal bridge between your phone (Telegram) and this Claude
-Code session. Everything lives under `~/.claude/telegram-bridge/` (mode
-0700) — no other repo is touched.
+Code session (or, via `relay-notify.sh`/an adapter, any other agent or
+harness — see the repo [README](README.md)). Everything lives under
+`~/.claude/telegram-bridge/` (mode 0700, kept at this path deliberately —
+see the README's repo/directory note) — no other repo is touched.
 
 ## How it stays token-frugal
 
@@ -88,12 +90,23 @@ DM from *any* session's subagents/notifications, not only this one.
 
 ## Files
 
+See the repo [README](README.md#files) for the full, current file table
+(generic core, adapters, `relay.toml`, `lib/`). The files that matter for
+day-one setup:
+
 | File | Purpose |
 |---|---|
 | `.env` | Secrets/config (`BOT_TOKEN`, `ALLOWED_USER_ID`, `ALLOWED_CHAT_ID`), mode 0600 |
 | `tg-send.sh` | Outbound: sends one Telegram message; silent no-op with no token |
 | `tg-poll.sh` | Inbound: long-polls Telegram, prints `[telegram] <text>` per allowed message (run as a `Monitor` source) |
-| `hook-notify.sh` | Hook shim: turns a `SubagentStop`/`Notification` hook payload into a short summary for `tg-send.sh` |
+| `hook-notify.sh` | Hook shim: turns a `SubagentStop`/`Notification` hook payload into a short summary via `adapters/claude-code.sh` |
 | `go-live.sh` | One-shot activation: validate token, resolve your id, send the "live" DM |
 | `.offset` | Persisted `getUpdates` offset (auto-created) |
 | `.last-sent` | Last-sent message + timestamp, for outbound dedup (auto-created) |
+
+**Not just Claude Code:** any other agent/script on this machine can push
+a status update through the same bridge without touching hook JSON at
+all — `~/.claude/telegram-bridge/relay-notify.sh "your status text"`. See
+the README's [Harness-agnostic core](README.md#harness-agnostic-core)
+section, and `adapters/README.md` if you want to integrate a harness that
+has its own structured event format worth parsing.

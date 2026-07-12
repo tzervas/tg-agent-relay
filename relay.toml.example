@@ -1,0 +1,141 @@
+# relay.toml.example - TG Agent Relay configuration TEMPLATE.
+#
+# Copy to `relay.toml` (in this same directory) and edit. `relay.toml` is
+# gitignored - it holds no secret (the bot token stays in `.env` only), but
+# it's local/user-specific config, same pattern as `.env`/`.env.example`.
+#
+#   cp relay.toml.example relay.toml
+#
+# BACKWARD-COMPATIBLE BY DESIGN: every script (tg-send.sh, tg-poll.sh,
+# relay-notify.sh, adapters/claude-code.sh) works exactly as it always has
+# with NO relay.toml present - every value below has a hardcoded/env-var
+# fallback (documented in the matching script's header). relay.toml only
+# ever ADDS behavior (overrides a default, enables a new command/event);
+# it never changes what already-live invocations do until you opt in.
+#
+# Every key here is optional - uncomment/add only what you want to change.
+
+[general]
+# Telegram's hard cap is 4096 chars; stay safely under it.
+# Same as env var TG_PAGE_SIZE.
+# page_size = 3500
+
+# Delay (seconds, may be fractional) between sequential paginated sends.
+# Same as env var TG_PAGE_DELAY.
+# page_delay = 0.4
+
+# Quiet window (seconds) with no new inbound message before a buffered
+# burst flushes as one combined event. Same as env var TG_REASSEMBLE_WINDOW.
+# reassemble_window = 4
+
+# Cap on how many tg-send.sh pages a single hook/adapter event may emit
+# before being truncated with a "[+N more pages omitted]" marker. Same as
+# env var TG_HOOK_MAX_PAGES.
+# hook_max_pages = 6
+
+# --------------------------------------------------------------------------
+# [generic] - relay-notify.sh's own formatting, for callers that are NOT
+# using a named adapter (any script/agent calling relay-notify.sh directly
+# with free text or {"label":..,"text":..} JSON). Has NO effect on
+# adapters/claude-code.sh (it calls relay-notify.sh --raw, which always
+# bypasses this section - see relay-notify.sh's header).
+[generic]
+# Prepended to every generic (non---raw) send. Empty/absent -> no prefix,
+# i.e. the exact passthrough behavior relay-notify.sh has always had.
+# prefix = "📣"
+
+# --------------------------------------------------------------------------
+# [claude_code.<EventName>] - one table per Claude Code hook event, read by
+# adapters/claude-code.sh. `enabled` defaults to true for EVERY event
+# (including ones not listed here) - matching the original hook-notify.sh's
+# unconditional-emit behavior, before this "enabled" concept existed. Set
+# `enabled = false` to silence an event; only `prefix` is currently
+# overridable per-event (a full message-template DSL is a documented future
+# enhancement - see ROADMAP.md - not implemented yet, so this stays honest
+# about what's actually configurable today).
+#
+# NOTE: only SubagentStop/Notification are wired into ~/.claude/settings.json
+# today (`hooks.SubagentStop` / `hooks.Notification` -> hook-notify.sh). The
+# other events below only fire if YOU add their own hook entry in
+# settings.json pointing at the same hook-notify.sh - adapters/claude-code.sh
+# already knows how to format them once you do.
+
+[claude_code.SubagentStop]
+# enabled = true
+# prefix = "✅"
+
+[claude_code.Notification]
+# enabled = true
+# prefix = "🔔"
+
+[claude_code.Stop]
+# enabled = true
+# prefix = "🏁"
+
+[claude_code.SubagentStart]
+# enabled = false   # noisy if every subagent start also pings - opt-in
+# prefix = "🚀"
+
+[claude_code.PreToolUse]
+# enabled = false   # very high-volume; opt-in only
+# prefix = "🔧"
+
+[claude_code.PostToolUse]
+# enabled = false   # very high-volume; opt-in only
+# prefix = "🔧"
+
+[claude_code.PostToolUseFailure]
+# enabled = true
+# prefix = "⚠️"
+
+[claude_code.StopFailure]
+# enabled = true
+# prefix = "🛑"
+
+[claude_code.SessionStart]
+# enabled = false
+# prefix = "🟢"
+
+[claude_code.SessionEnd]
+# enabled = false
+# prefix = "🔴"
+
+[claude_code.PreCompact]
+# enabled = false
+# prefix = "🗜️"
+
+# --------------------------------------------------------------------------
+# [commands.<name>] - in-chat commands (user -> agent), read by tg-poll.sh.
+# A flushed inbound message starting with `slash` OR `keyword` is, by
+# default (`mode = "forward"`, or `mode` omitted), tagged
+# "[telegram:cmd:<tag>] <text>" (instead of the plain "[telegram] <text>")
+# so the consuming agent/hook can recognize + act on it. `tag` defaults to
+# the table name if omitted. WITH NO [commands.*] SECTION AT ALL (the
+# default - this whole block commented out), tg-poll.sh never tags
+# anything - every message emits exactly as it always has.
+#
+# [commands.status]
+# keyword = "status"     # a message starting with "status " or "status:"
+# slash = "/status"       # or exactly "/status" / "/status <args>"
+# tag = "status"           # -> "[telegram:cmd:status] status: how's it going?"
+#
+# [commands.pause]
+# keyword = "pause"
+# slash = "/pause"
+# tag = "pause"
+
+# --- Relay-handled commands (SEAM, not a shipped feature - see
+# --- handlers/README.md) --------------------------------------------------
+# `mode = "relay"` routes a matched command to a LOCAL handler script
+# instead of forwarding it to the agent - zero model tokens, since the
+# agent/Monitor never sees the event. tg-poll.sh's dispatch_command()
+# already implements this routing; no built-in handler ships yet (a
+# follow-up adds real ones - /dashboard, /stats, /metrics, /uptime,
+# /help, ...). Uncomment + point `handler` at a real script to use it
+# today:
+#
+# [commands.example]
+# keyword = "example"
+# slash = "/example"
+# mode = "relay"
+# handler = "handlers/example-echo.sh"   # relative to this dir, or absolute

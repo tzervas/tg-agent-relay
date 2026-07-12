@@ -19,17 +19,33 @@
 # TG_PAGE_DELAY between sends so Telegram preserves ordering. A single line
 # that alone exceeds the page size is hard-split as a fallback. A short
 # message still sends as exactly one message, with no prefix.
+#
+# Config fallback order (backward-compatible): TG_PAGE_SIZE/TG_PAGE_DELAY env
+# vars (if set) > relay.toml [general].page_size/page_delay (if a relay.toml
+# is present) > the hardcoded defaults below. No relay.toml -> behavior is
+# identical to before relay.toml existed.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="$BRIDGE_DIR/.env"
 LAST_MSG_FILE="$BRIDGE_DIR/.last-sent"
 
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/relay-config.sh" ]] && source "$BRIDGE_DIR/lib/relay-config.sh"
+if declare -f load_relay_config >/dev/null 2>&1; then
+    load_relay_config "$BRIDGE_DIR/relay.toml"
+else
+    cfg_get() { printf '%s' "$2"; }  # lib missing (shouldn't happen) -> default-only shim
+fi
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
+declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+
 # Telegram's hard cap is 4096 chars; stay safely under it.
-PAGE_SIZE="${TG_PAGE_SIZE:-3500}"
+PAGE_SIZE="${TG_PAGE_SIZE:-$(cfg_get '.general.page_size' 3500)}"
 [[ "$PAGE_SIZE" =~ ^[0-9]+$ ]] || PAGE_SIZE=3500
 # Delay (seconds, may be fractional) between sequential page sends.
-PAGE_DELAY="${TG_PAGE_DELAY:-0.4}"
+PAGE_DELAY="${TG_PAGE_DELAY:-$(cfg_get '.general.page_delay' 0.4)}"
 
 # Message text: args take priority over stdin.
 if [[ $# -gt 0 ]]; then
@@ -124,5 +140,7 @@ for PAGE in "${PAGES[@]}"; do
 done
 
 printf '%s|%s\n' "$NOW" "$MSG" > "$LAST_MSG_FILE" 2>/dev/null || true
+
+emit_metric "tg-send" "send" "pages=${TOTAL}"
 
 exit 0
