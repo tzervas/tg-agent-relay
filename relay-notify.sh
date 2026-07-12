@@ -29,9 +29,18 @@
 # Config (relay.toml, optional - see relay.toml.example):
 #   [general] page_size / hook_max_pages   (else TG_PAGE_SIZE / TG_HOOK_MAX_PAGES / hardcoded defaults)
 #   [generic] prefix                       (else no prefix - unchanged passthrough)
+#   [generic] format                       (else the built-in "<prefix ><label>: <text>" /
+#                                            "<prefix ><text>" shape below - unchanged)
 # No relay.toml -> every value below falls back to today's env-var/hardcoded
 # defaults, so this script's plain-text mode is byte-for-byte what
 # tg-send.sh alone already did.
+#
+# [generic].format (structured/non---raw mode only - see render_template's
+# header in lib/relay-common.sh for the substitution rules, shared with
+# adapters/claude-code.sh's per-event [claude_code.<Event>].format):
+# available placeholders are {prefix}, {label}, {text}. With no `format`
+# configured, the original hardcoded shape below is used exactly as
+# before - this is purely additive.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,7 +110,10 @@ else
     fi
 
     PREFIX="$(cfg_get '.generic.prefix' '')"
-    if [[ -n "$LABEL" ]]; then
+    FORMAT="$(cfg_get '.generic.format' '')"
+    if [[ -n "$FORMAT" ]]; then
+        MSG="$(render_template "$FORMAT" prefix "$PREFIX" label "$LABEL" text "$TEXT")"
+    elif [[ -n "$LABEL" ]]; then
         if [[ -n "$PREFIX" ]]; then
             MSG="${PREFIX} ${LABEL}: ${TEXT}"
         else

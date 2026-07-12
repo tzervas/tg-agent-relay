@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/other-tool/notify.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "theme": "dark"
+}

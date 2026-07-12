@@ -172,3 +172,12 @@ Copy the shape of `handlers/dashboard.sh`/`handlers/stats.sh` (real
 handlers) rather than `handlers/example-echo.sh` (a test-only fixture
 used by `tests/run-tests.sh` to prove the dispatch seam works, not
 registered in `relay.toml.example`).
+
+## See also
+
+Commands are the inbound (phone → agent) side. For the outbound side —
+which Claude Code hook events ping your phone, enabling more of them, and
+customizing their message text — see
+[`USAGE.md`'s "Sending status" section](USAGE.md#sending-status-outbound-phone---agent)
+and the repo README's
+["Installing hooks" section](../README.md#installing-hooks-for-more-events).

@@ -9,41 +9,74 @@
 # among possibly many; see adapters/README.md to write another).
 #
 # Wired into ~/.claude/settings.json today under hooks.SubagentStop /
-# hooks.Notification (via the hook-notify.sh shim). Always exits 0: these
-# events are advisory (SubagentStop) or fire-and-forget (Notification) -
-# this script must never affect Claude Code's own control flow, no matter
-# which event fires.
+# hooks.Notification (via the hook-notify.sh shim) - see the README's "live
+# bridge" note. Use install-hooks.sh (repo root) to wire any of the other 28
+# documented events below, driven by relay.toml's [claude_code.<Event>]
+# tables. Always exits 0: hook events are advisory (SubagentStop) or
+# fire-and-forget (Notification, ...) - this script must never affect
+# Claude Code's own control flow, no matter which event fires.
 #
 # Full documented Claude Code hook event set (verified against
-# code.claude.com/docs/en/hooks.md, checked 2026-07-12): SessionStart,
-# Setup, UserPromptSubmit, UserPromptExpansion, PreToolUse,
+# code.claude.com/docs/en/hooks-guide.md + hooks.md, checked 2026-07-12):
+# SessionStart, Setup, UserPromptSubmit, UserPromptExpansion, PreToolUse,
 # PermissionRequest, PermissionDenied, PostToolUse, PostToolUseFailure,
 # PostToolBatch, Notification, MessageDisplay, SubagentStart, SubagentStop,
 # TaskCreated, TaskCompleted, Stop, StopFailure, TeammateIdle,
 # InstructionsLoaded, ConfigChange, CwdChanged, FileChanged,
 # WorktreeCreate, WorktreeRemove, PreCompact, PostCompact, Elicitation,
-# ElicitationResult, SessionEnd. Only SubagentStop/Notification are
-# actually wired into settings.json's hooks today (that wiring is
-# untouched by this change - see README's "live bridge" note); the
-# handling below covers the subset "that makes sense" as a status ping
-# (Stop, SubagentStart, PreToolUse/PostToolUse[Failure], SessionStart/End,
-# PreCompact, StopFailure) so wiring one in later needs no code change -
-# only a settings.json hook entry (+ optionally a relay.toml
-# [claude_code.<Event>] override).
+# ElicitationResult, SessionEnd. EVERY one of these 30 is handled below
+# (see lib/claude-code-events.sh for the canonical list + each event's
+# install-time default enabled/disabled + default prefix) - wiring one via
+# install-hooks.sh (or a manual settings.json hook entry) needs no code
+# change here, only relay.toml configuration.
 #
-# Field names per event, from the same reference:
-#   SubagentStop:  agent_type, last_assistant_message, stop_hook_active.
-#   Notification:  notification_type, message.
-#   Stop:          last_assistant_message, stop_hook_active.
-#   SubagentStart: agent_type.
-#   PreToolUse:    tool_name, tool_input.
-#   PostToolUse:   tool_name, tool_input, tool_output.
-#   PostToolUseFailure: tool_name, tool_input, error.
-#   StopFailure:   error_type.
-#   SessionStart:  source, model, session_title.
-#   SessionEnd:    end_reason.
-#   PreCompact:    compaction_trigger.
+# Field names per event, from the same reference (only the fields this
+# adapter actually reads - see the docs for the full per-event schema):
+#   SessionStart:       source, model, agent_type, session_title.
+#   Setup:               source (init/maintenance).
+#   UserPromptSubmit:    prompt.
+#   UserPromptExpansion: command (sparsely documented; read defensively).
+#   PreToolUse:          tool_name, tool_input.
+#   PermissionRequest:   tool_name.
+#   PermissionDenied:    tool_name.
+#   PostToolUse:         tool_name, tool_input, tool_output.
+#   PostToolUseFailure:  tool_name, error_message.
+#   PostToolBatch:       (no per-event fields used).
+#   Notification:        notification_type, message.
+#   MessageDisplay:       content.
+#   SubagentStart:       agent_type, agent_id.
+#   SubagentStop:        agent_type, last_assistant_message.
+#   TaskCreated:         task/description/title (read defensively).
+#   TaskCompleted:       task/description/title (read defensively).
+#   Stop:                last_assistant_message.
+#   StopFailure:         error_type.
+#   TeammateIdle:        (no per-event fields used).
+#   InstructionsLoaded:  load_reason.
+#   ConfigChange:        source, file_path.
+#   CwdChanged:          cwd (read defensively).
+#   FileChanged:         file_path.
+#   WorktreeCreate:      hookSpecificOutput.worktreePath (read defensively).
+#   WorktreeRemove:      (no per-event fields used).
+#   PreCompact:          trigger.
+#   PostCompact:         trigger.
+#   Elicitation:         mcp_server_name, action.
+#   ElicitationResult:   mcp_server_name, action.
+#   SessionEnd:          reason.
 # All events also carry hook_event_name (used to dispatch below).
+#
+# --- Per-event message templates ("format") --------------------------------
+# Beyond `enabled`/`prefix`, relay.toml's [claude_code.<Event>] tables accept
+# a `format` string with `{placeholder}` interpolation (rendered by
+# lib/relay-common.sh's render_template - shared with relay-notify.sh's own
+# [generic].format). Every event supports at minimum {prefix} and {event};
+# see relay.toml.example's [claude_code.<Event>] blocks for the full
+# per-event placeholder list. With NO `format` configured, each event
+# renders its ORIGINAL built-in default text below, byte-for-byte -
+# backward-compat is by construction, not by convention: the default
+# template IS the exact string this adapter has always produced. A
+# placeholder referenced in a custom `format` that this event does not
+# provide is left LITERAL (never silently blanked) - see render_template's
+# own header for why.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +84,8 @@ BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$BRIDGE_DIR/lib/relay-config.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-common.sh"
+# shellcheck disable=SC1091
+source "$BRIDGE_DIR/lib/claude-code-events.sh"
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
@@ -59,18 +94,30 @@ PAYLOAD="$(cat 2>/dev/null || true)"
 
 EVENT=$(printf '%s' "$PAYLOAD" | jq -r '.hook_event_name // "unknown"' 2>/dev/null)
 
-# event_enabled <EventName> -> "true"/"false" (relay.toml
-# [claude_code.<EventName>].enabled, default "true" - matching the
-# original hook-notify.sh's unconditional-emit behavior for every event it
-# was ever actually invoked with, since no "enabled" concept existed
-# before this change).
+# pf <jq-filter> - read one field off $PAYLOAD, "" on any parse failure.
+pf() {
+    printf '%s' "$PAYLOAD" | jq -r "$1" 2>/dev/null
+}
+
+# event_enabled <EventName> -> "true"/"false"
+# relay.toml [claude_code.<EventName>].enabled, falling back to that
+# event's install-time default (lib/claude-code-events.sh) rather than a
+# single hardcoded default - see that file's header for the backward-compat
+# argument (the two events already live, SubagentStop/Notification, keep
+# defaulting to enabled either way).
 event_enabled() {
-    cfg_get ".claude_code.\"$1\".enabled" "true"
+    cfg_get ".claude_code.\"$1\".enabled" "$(cc_event_default_enabled "$1")"
 }
 
 # event_prefix <EventName> <built-in-default-prefix>
 event_prefix() {
     cfg_get ".claude_code.\"$1\".prefix" "$2"
+}
+
+# event_format <EventName> -> relay.toml [claude_code.<EventName>].format,
+# or "" (meaning: use this event's built-in default template).
+event_format() {
+    cfg_get ".claude_code.\"$1\".format" ""
 }
 
 if [[ "$(event_enabled "$EVENT")" != "true" ]]; then
@@ -82,71 +129,234 @@ emit_metric "hook" "$EVENT" ""
 
 SUMMARY=""
 case "$EVENT" in
-    SubagentStop)
-        PREFIX="$(event_prefix "$EVENT" '✅')"
-        AGENT_TYPE=$(printf '%s' "$PAYLOAD" | jq -r '.agent_type // "agent"' 2>/dev/null)
-        LAST_MSG=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // ""' 2>/dev/null)
-        SNIPPET="$(oneline "$LAST_MSG")"
-        SUMMARY="${PREFIX} ${AGENT_TYPE} finished"
-        [[ -n "$SNIPPET" ]] && SUMMARY="${SUMMARY} — ${SNIPPET}"
+    SessionStart)
+        PREFIX="$(event_prefix "$EVENT" '🟢')"
+        SRC=$(pf '.source // "startup"')
+        MODEL=$(pf '.model // ""')
+        TITLE=$(pf '.session_title // ""')
+        AGENT_TYPE=$(pf '.agent_type // ""')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} session started ({source\})}" \
+            prefix "$PREFIX" event "$EVENT" source "$SRC" model "$MODEL" \
+            session_title "$TITLE" agent "$AGENT_TYPE")"
         ;;
-    Notification)
-        PREFIX="$(event_prefix "$EVENT" '🔔')"
-        NTYPE=$(printf '%s' "$PAYLOAD" | jq -r '.notification_type // "notice"' 2>/dev/null)
-        NMSG=$(printf '%s' "$PAYLOAD" | jq -r '.message // ""' 2>/dev/null)
-        SNIPPET="$(oneline "$NMSG")"
-        SUMMARY="${PREFIX} ${NTYPE}"
-        [[ -n "$SNIPPET" ]] && SUMMARY="${SUMMARY}: ${SNIPPET}"
+    Setup)
+        PREFIX="$(event_prefix "$EVENT" '⚙️')"
+        SRC=$(pf '.source // "init"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} setup ({source\})}" prefix "$PREFIX" event "$EVENT" source "$SRC")"
         ;;
-    Stop)
-        PREFIX="$(event_prefix "$EVENT" '🏁')"
-        LAST_MSG=$(printf '%s' "$PAYLOAD" | jq -r '.last_assistant_message // ""' 2>/dev/null)
-        SNIPPET="$(oneline "$LAST_MSG")"
-        SUMMARY="${PREFIX} session turn finished"
-        [[ -n "$SNIPPET" ]] && SUMMARY="${SUMMARY} — ${SNIPPET}"
+    UserPromptSubmit)
+        PREFIX="$(event_prefix "$EVENT" '⌨️')"
+        SNIPPET="$(oneline "$(pf '.prompt // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} prompt submitted{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" prompt "$SNIPPET" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
         ;;
-    SubagentStart)
-        PREFIX="$(event_prefix "$EVENT" '🚀')"
-        AGENT_TYPE=$(printf '%s' "$PAYLOAD" | jq -r '.agent_type // "agent"' 2>/dev/null)
-        SUMMARY="${PREFIX} ${AGENT_TYPE} started"
+    UserPromptExpansion)
+        PREFIX="$(event_prefix "$EVENT" '🧩')"
+        SNIPPET="$(oneline "$(pf '.command // .prompt // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} prompt expansion{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
         ;;
     PreToolUse | PostToolUse)
         PREFIX="$(event_prefix "$EVENT" '🔧')"
-        TOOL=$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // "tool"' 2>/dev/null)
+        TOOL=$(pf '.tool_name // "tool"')
         VERB="using"
         [[ "$EVENT" == "PostToolUse" ]] && VERB="used"
-        SUMMARY="${PREFIX} ${VERB} ${TOOL}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {verb\} {tool\}}" \
+            prefix "$PREFIX" event "$EVENT" tool "$TOOL" verb "$VERB")"
         ;;
     PostToolUseFailure)
         PREFIX="$(event_prefix "$EVENT" '⚠️')"
-        TOOL=$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // "tool"' 2>/dev/null)
-        ERR=$(printf '%s' "$PAYLOAD" | jq -r '.error // ""' 2>/dev/null)
-        SNIPPET="$(oneline "$ERR")"
-        SUMMARY="${PREFIX} ${TOOL} failed"
-        [[ -n "$SNIPPET" ]] && SUMMARY="${SUMMARY}: ${SNIPPET}"
+        TOOL=$(pf '.tool_name // "tool"')
+        SNIPPET="$(oneline "$(pf '.error_message // .error // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {tool\} failed{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" tool "$TOOL" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    PostToolBatch)
+        PREFIX="$(event_prefix "$EVENT" '📦')"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} tool batch completed}" prefix "$PREFIX" event "$EVENT")"
+        ;;
+    PermissionRequest)
+        PREFIX="$(event_prefix "$EVENT" '🔐')"
+        TOOL=$(pf '.tool_name // "tool"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} permission requested for {tool\}}" \
+            prefix "$PREFIX" event "$EVENT" tool "$TOOL")"
+        ;;
+    PermissionDenied)
+        PREFIX="$(event_prefix "$EVENT" '🚫')"
+        TOOL=$(pf '.tool_name // "tool"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {tool\} denied}" prefix "$PREFIX" event "$EVENT" tool "$TOOL")"
+        ;;
+    Stop)
+        PREFIX="$(event_prefix "$EVENT" '🏁')"
+        SNIPPET="$(oneline "$(pf '.last_assistant_message // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=" — ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} session turn finished{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
         ;;
     StopFailure)
         PREFIX="$(event_prefix "$EVENT" '🛑')"
-        ETYPE=$(printf '%s' "$PAYLOAD" | jq -r '.error_type // "error"' 2>/dev/null)
-        SUMMARY="${PREFIX} turn ended in error: ${ETYPE}"
+        ETYPE=$(pf '.error_type // "error"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} turn ended in error: {error_type\}}" \
+            prefix "$PREFIX" event "$EVENT" error_type "$ETYPE")"
         ;;
-    SessionStart)
-        PREFIX="$(event_prefix "$EVENT" '🟢')"
-        SRC=$(printf '%s' "$PAYLOAD" | jq -r '.source // "startup"' 2>/dev/null)
-        SUMMARY="${PREFIX} session started (${SRC})"
+    SubagentStart)
+        PREFIX="$(event_prefix "$EVENT" '🚀')"
+        AGENT_TYPE=$(pf '.agent_type // "agent"')
+        AGENT_ID=$(pf '.agent_id // ""')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {agent\} started}" \
+            prefix "$PREFIX" event "$EVENT" agent "$AGENT_TYPE" agent_id "$AGENT_ID")"
         ;;
-    SessionEnd)
-        PREFIX="$(event_prefix "$EVENT" '🔴')"
-        REASON=$(printf '%s' "$PAYLOAD" | jq -r '.end_reason // "unknown"' 2>/dev/null)
-        SUMMARY="${PREFIX} session ended (${REASON})"
+    SubagentStop)
+        PREFIX="$(event_prefix "$EVENT" '✅')"
+        AGENT_TYPE=$(pf '.agent_type // "agent"')
+        SNIPPET="$(oneline "$(pf '.last_assistant_message // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=" — ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {agent\} finished{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" agent "$AGENT_TYPE" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    TeammateIdle)
+        PREFIX="$(event_prefix "$EVENT" '💤')"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} teammate idle}" prefix "$PREFIX" event "$EVENT")"
+        ;;
+    TaskCreated | TaskCompleted)
+        PREFIX="$(event_prefix "$EVENT" "$(cc_event_default_prefix "$EVENT")")"
+        SNIPPET="$(oneline "$(pf '.task // .description // .title // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        VERB="created"
+        [[ "$EVENT" == "TaskCompleted" ]] && VERB="completed"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} task {verb\}{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" verb "$VERB" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    ConfigChange)
+        PREFIX="$(event_prefix "$EVENT" '⚙️')"
+        SRC=$(pf '.source // "settings"')
+        FILE=$(pf '.file_path // ""')
+        DETAIL_SUFFIX=""
+        [[ -n "$FILE" ]] && DETAIL_SUFFIX=": ${FILE}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} config changed ({source\}){detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" source "$SRC" file "$FILE" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    CwdChanged)
+        PREFIX="$(event_prefix "$EVENT" '📂')"
+        CWD=$(pf '.cwd // .new_cwd // ""')
+        DETAIL_SUFFIX=""
+        [[ -n "$CWD" ]] && DETAIL_SUFFIX=": ${CWD}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} working directory changed{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" cwd "$CWD" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    FileChanged)
+        PREFIX="$(event_prefix "$EVENT" '📝')"
+        FILE=$(pf '.file_path // ""')
+        DETAIL_SUFFIX=""
+        [[ -n "$FILE" ]] && DETAIL_SUFFIX=": ${FILE}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} file changed{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" file "$FILE" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    InstructionsLoaded)
+        PREFIX="$(event_prefix "$EVENT" '📖')"
+        REASON=$(pf '.load_reason // "session_start"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} instructions loaded ({reason\})}" \
+            prefix "$PREFIX" event "$EVENT" reason "$REASON")"
         ;;
     PreCompact)
         PREFIX="$(event_prefix "$EVENT" '🗜️')"
-        TRIGGER=$(printf '%s' "$PAYLOAD" | jq -r '.compaction_trigger // "auto"' 2>/dev/null)
-        SUMMARY="${PREFIX} context compacting (${TRIGGER})"
+        TRIGGER=$(pf '.trigger // .compaction_trigger // "auto"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} context compacting ({trigger\})}" \
+            prefix "$PREFIX" event "$EVENT" trigger "$TRIGGER")"
+        ;;
+    PostCompact)
+        PREFIX="$(event_prefix "$EVENT" '📦')"
+        TRIGGER=$(pf '.trigger // "auto"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} context compaction finished ({trigger\})}" \
+            prefix "$PREFIX" event "$EVENT" trigger "$TRIGGER")"
+        ;;
+    WorktreeCreate)
+        PREFIX="$(event_prefix "$EVENT" '🌳')"
+        WPATH=$(pf '.hookSpecificOutput.worktreePath // .worktreePath // ""')
+        DETAIL_SUFFIX=""
+        [[ -n "$WPATH" ]] && DETAIL_SUFFIX=": ${WPATH}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} worktree created{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" path "$WPATH" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    WorktreeRemove)
+        PREFIX="$(event_prefix "$EVENT" '🪓')"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} worktree removed}" prefix "$PREFIX" event "$EVENT")"
+        ;;
+    Elicitation | ElicitationResult)
+        PREFIX="$(event_prefix "$EVENT" "$(cc_event_default_prefix "$EVENT")")"
+        SERVER=$(pf '.mcp_server_name // "mcp-server"')
+        ACTION=$(pf '.action // ""')
+        FORMAT="$(event_format "$EVENT")"
+        if [[ "$EVENT" == "Elicitation" ]]; then
+            SUMMARY="$(render_template "${FORMAT:-{prefix\} MCP elicitation requested ({server\})}" \
+                prefix "$PREFIX" event "$EVENT" server "$SERVER" action "$ACTION")"
+        else
+            SUMMARY="$(render_template "${FORMAT:-{prefix\} MCP elicitation resolved ({server\}: {action\})}" \
+                prefix "$PREFIX" event "$EVENT" server "$SERVER" action "$ACTION")"
+        fi
+        ;;
+    Notification)
+        PREFIX="$(event_prefix "$EVENT" '🔔')"
+        NTYPE=$(pf '.notification_type // "notice"')
+        SNIPPET="$(oneline "$(pf '.message // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} {notification_type\}{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" notification_type "$NTYPE" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    MessageDisplay)
+        PREFIX="$(event_prefix "$EVENT" '💬')"
+        SNIPPET="$(oneline "$(pf '.content // .message // ""')")"
+        DETAIL_SUFFIX=""
+        [[ -n "$SNIPPET" ]] && DETAIL_SUFFIX=": ${SNIPPET}"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} message displayed{detail_suffix\}}" \
+            prefix "$PREFIX" event "$EVENT" message "$SNIPPET" detail_suffix "$DETAIL_SUFFIX")"
+        ;;
+    SessionEnd)
+        PREFIX="$(event_prefix "$EVENT" '🔴')"
+        REASON=$(pf '.reason // .end_reason // "unknown"')
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} session ended ({reason\})}" \
+            prefix "$PREFIX" event "$EVENT" reason "$REASON")"
         ;;
     *)
-        SUMMARY="ℹ️ Claude Code event: ${EVENT}"
+        PREFIX="$(event_prefix "$EVENT" 'ℹ️')"
+        FORMAT="$(event_format "$EVENT")"
+        SUMMARY="$(render_template "${FORMAT:-{prefix\} Claude Code event: {event\}}" prefix "$PREFIX" event "$EVENT")"
         ;;
 esac
 
