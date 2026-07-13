@@ -181,3 +181,10 @@ customizing their message text — see
 [`USAGE.md`'s "Sending status" section](USAGE.md#sending-status-outbound-phone---agent)
 and the repo README's
 ["Installing hooks" section](../README.md#installing-hooks-for-more-events).
+
+Every relay-handled command's reply above (`/stats`, `/help`, `/uptime`,
+and the text-fallback path of `/dashboard`) is plain text built by its
+handler, which then goes through the same structured-formatting layer as
+everything else (`## `/leading-emoji headers, code fences, quotes —
+`relay.toml`'s `[format]` table) before it reaches your phone — see
+[`USAGE.md`'s "Structured formatting" section](USAGE.md#structured-formatting-outbound-messages).

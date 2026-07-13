@@ -59,7 +59,12 @@ cp ~/.claude/telegram-bridge/relay.toml.example ~/.claude/telegram-bridge/relay.
 
 Edit `relay.toml` and uncomment/add only what you want — every value has
 a hardcoded/env-var fallback, so an untouched `relay.toml` (or none at
-all) changes nothing. See [`docs/USAGE.md`](docs/USAGE.md) and
+all) changes nothing — **except structured formatting (`[format]`,
+v0.3.0), which is ON by default with no `relay.toml` needed at all.**
+Your phone will already receive bolded headers, code boxes, quoted
+notes, and word-wrapped prose instead of walls of text out of the box;
+add `[format]\nenabled = false` if you'd rather keep the old raw-text
+behavior. See [`docs/USAGE.md`](docs/USAGE.md) and
 [`docs/COMMANDS.md`](docs/COMMANDS.md) for what's configurable, and
 `relay.toml.example`'s inline comments for the full schema. `relay.toml`
 is gitignored too (it holds no secret, but is local/user-specific).
