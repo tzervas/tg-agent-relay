@@ -4,17 +4,25 @@ model, and project, over a harness's local session-transcript logs (the
 ingest side of the opt-in usage dashboard - see lib/dashboard_render.py's
 usage panels + handlers/usage.sh's `/usage` command).
 
-SOURCE-ADAPTER ABSTRACTION: `ADAPTERS` maps a `source` name (from
-relay.toml's `[usage].source`) to a function that enumerates + parses one
-harness's usage records into a flat list[UsageRow]. Adapters are filled
-primarily from the providers registry (`providers/*` `usage_source` +
-`usage_collect`); local `_collect_*` helpers remain as thin backward-compat
-fallbacks for "claude-code" and "grok". A new harness registers a
-Provider with `usage_collect` - no caller (usage.sh, dashboard.sh,
-dashboard_render.py) needs to change. `[usage].projects_dir` is the
-configurable "source path" - point it at any directory holding that
-adapter's transcripts (e.g. a different machine's synced Claude Code
-projects dir).
+SOURCE-ADAPTER ABSTRACTION (issue #31): `ADAPTERS` maps a `source` name
+(from relay.toml's `[usage].source`) to a function that enumerates + parses
+one harness's usage records into a flat list[UsageRow].
+
+**Registry is the sole registration path.** ADAPTERS is populated from the
+providers registry (`Provider.usage_source` + `Provider.usage_collect` on
+each entry in `providers/*`). A new harness adds usage by registering a
+Provider with `usage_collect` — no hard-coded ADAPTERS entries and no
+caller (usage.sh, dashboard.sh, dashboard_render.py) needs to change.
+
+**Local `_collect_*` are FALLBACK ONLY.** `_collect_claude_code` /
+`_collect_grok` fill the historical source keys only when the providers
+package fails to import (or a source has no collector). When providers are
+importable they always win. Call `refresh_usage_adapters()` after dynamic
+Provider registration so new collectors appear in collect().
+
+`[usage].projects_dir` is the configurable "source path" - point it at any
+directory holding that adapter's transcripts (e.g. a different machine's
+synced Claude Code projects dir).
 
 OPT-IN + BEST-EFFORT, NEVER FABRICATED (G2/VR-5 style - see this repo's
 CLAUDE.md house rules, which this feature deliberately mirrors even though
@@ -212,11 +220,17 @@ def _int_field(v: object) -> int:
 
 
 def _collect_claude_code(base: Path) -> list[UsageRow]:
-    """The "claude-code" adapter: recursively walk <base>/**/*.jsonl
-    (Claude Code's session-transcript layout, including nested
-    session/subagent directories). Project slug is the first path
-    component under `base` (e.g. `-fake-project-alpha`), never a
-    session-id parent. Best-effort per file AND per line."""
+    """FALLBACK collector for source "claude-code".
+
+    Prefer ``providers.claude.usage.collect_usage`` via the registry
+    (see ``refresh_usage_adapters``). This local copy is used only when
+    the providers package cannot be imported at registration time.
+
+    Recursively walks <base>/**/*.jsonl (Claude Code session-transcript
+    layout, including nested session/subagent directories). Project slug
+    is the first path component under `base`. Best-effort per file AND
+    per line.
+    """
     rows: list[UsageRow] = []
     try:
         transcripts = sorted(base.rglob("*.jsonl"))
@@ -275,16 +289,20 @@ def _collect_claude_code(base: Path) -> list[UsageRow]:
 
 
 def _collect_grok(base: Path) -> list[UsageRow]:
-    """Grok Build session adapter (Declared / best-effort).
+    """FALLBACK collector for source "grok" (Declared / best-effort).
+
+    Prefer ``providers.grok.usage.collect_usage`` via the registry
+    (see ``refresh_usage_adapters``). This local copy is used only when
+    the providers package cannot be imported at registration time.
 
     Grok does not persist Claude-style input/output token billing on
     assistant messages. We approximate using the peak
     `params._meta.totalTokens` seen in each session's updates.jsonl
     (running context total), attributed to the session's primary model
-    from summary.json / signals.json / chat_history. Rows carry
-    total_tokens-only mass in input_tokens (output/cache zero) so
-    aggregate totals remain non-zero; callers should treat this as a
-    context-peak proxy, not API billing. See module docs / UI labels.
+    from summary.json / signals.json. Rows carry total_tokens-only mass
+    in input_tokens (output/cache zero) so aggregate totals remain
+    non-zero; callers should treat this as a context-peak proxy, not
+    API billing. See module docs / UI labels.
     """
     rows: list[UsageRow] = []
     try:
@@ -373,25 +391,38 @@ def _collect_multi(base: Path) -> list[UsageRow]:
     return []
 
 
-# Populated primarily by _register_provider_usage_adapters() from
+# Sole public adapter map. Populated by refresh_usage_adapters() from
 # providers/* (usage_source + usage_collect). Local _collect_* functions
-# remain as thin backward-compat fallbacks when the registry is unavailable
-# or a source has no collector yet. Keys "claude-code" and "grok" stay stable.
+# are FALLBACK ONLY when the registry is unavailable. Keys "claude-code"
+# and "grok" stay stable for relay.toml / multi|auto.
 ADAPTERS: dict[str, Callable[[Path], list[UsageRow]]] = {}
 
+# Historical source names that get a local fallback if the providers
+# package cannot be imported. New harnesses must NOT be added here —
+# register Provider.usage_collect instead.
+_FALLBACK_COLLECTORS: dict[str, Callable[[Path], list[UsageRow]]] = {
+    "claude-code": _collect_claude_code,
+    "grok": _collect_grok,
+}
 
-def _register_provider_usage_adapters() -> None:
-    """Fill ADAPTERS from providers/* first; then local fallbacks.
 
-    Prefer each Provider.usage_collect when present so new harnesses register
-    only under providers/ — no hard-coded ADAPTERS entries required. Local
-    _collect_claude_code / _collect_grok remain as fallbacks for the classic
-    source names when the providers package cannot be imported.
+def refresh_usage_adapters() -> None:
+    """Populate ADAPTERS solely from the providers registry, then fallbacks.
+
+    For each registered Provider with both ``usage_source`` and
+    ``usage_collect``, install that collector under ADAPTERS[usage_source].
+    Registry always wins for a given source name.
+
+    Local ``_FALLBACK_COLLECTORS`` fill only sources still missing after the
+    registry pass (typically when ``import providers`` fails entirely).
+    Prefer zero hard-coded registration when providers load successfully.
+
+    Safe to call again after dynamic Provider.register(...) so a new
+    harness's collector appears in collect() without restarting the process.
     """
+    ADAPTERS.clear()
     try:
         repo = Path(__file__).resolve().parents[1]
-        import sys
-
         if str(repo) not in sys.path:
             sys.path.insert(0, str(repo))
         import providers  # noqa: F401
@@ -399,19 +430,22 @@ def _register_provider_usage_adapters() -> None:
 
         for p in list_providers():
             if p.usage_source and p.usage_collect:
-                # Registry wins over any prior local entry for that source.
+                # Registry wins — sole registration path when importable.
                 ADAPTERS[p.usage_source] = p.usage_collect  # type: ignore[assignment]
     except Exception:
+        # providers unavailable: fall through to local fallbacks only.
         pass
 
-    # Thin backward-compat wrappers for the two historical source names.
-    if "claude-code" not in ADAPTERS:
-        ADAPTERS["claude-code"] = _collect_claude_code
-    if "grok" not in ADAPTERS:
-        ADAPTERS["grok"] = _collect_grok
+    # FALLBACK ONLY: historical sources if registry did not supply them.
+    for name, collector in _FALLBACK_COLLECTORS.items():
+        if name not in ADAPTERS:
+            ADAPTERS[name] = collector
 
 
-_register_provider_usage_adapters()
+# Backward-compat private name used by older tests / callers.
+_register_provider_usage_adapters = refresh_usage_adapters
+
+refresh_usage_adapters()
 
 
 # --- aggregation ---------------------------------------------------------------
