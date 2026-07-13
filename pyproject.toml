@@ -89,7 +89,17 @@ quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
 
+# Pure-Python unit tests: `uv run pytest` (issue #29).
+# Shell/e2e smoke remains optional: `bash tests/run-tests.sh` (do not delete).
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
 pythonpath = [".", "lib"]
-addopts = "-q"
+addopts = [
+    "-q",
+    "--strict-markers",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

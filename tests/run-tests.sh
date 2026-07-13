@@ -1,5 +1,15 @@
 #!/bin/bash
-# tests/run-tests.sh - Offline unit tests for TG Agent Relay.
+# tests/run-tests.sh - Offline shell + e2e smoke for TG Agent Relay.
+#
+# Pure-Python unit tests are primary under pytest (issue #29):
+#
+#   uv run pytest
+#   uv run pytest tests/ -q
+#
+# This bash runner remains the optional shell/install-hooks/adapter smoke
+# suite (mock tg-send, no network). It still dual-invokes the Python modules
+# via relay_python for backward compatibility — prefer pytest for day-to-day
+# Python work. Do not delete this file.
 #
 # NO network calls. Every test that would otherwise hit Telegram swaps in a
 # mock tg-send.sh that records its message to a file instead of curling out

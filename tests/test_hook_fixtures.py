@@ -238,5 +238,11 @@ def main() -> int:
     return 0 if FAIL == 0 else 1
 
 
+def test_hook_fixtures() -> None:
+    """pytest entry — dual-runs the standalone script checks."""
+    rc = main()
+    assert rc == 0, f"script-style checks failed (exit {rc}); see PASS/FAIL lines above"
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
