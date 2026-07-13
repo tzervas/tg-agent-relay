@@ -366,6 +366,90 @@ is never dropped nor sent with broken markup. See
 [`docs/USAGE.md`](docs/USAGE.md#structured-formatting-outbound-messages)
 for the full writeup and more examples.
 
+### Syntax-highlighted code — inline alias + an opt-in HTML document (v0.5.0)
+
+**The hard constraint.** Telegram message *text* supports no color at all
+— a fixed HTML entity set, no `<span>`/color attribute of any kind, and
+`<pre>`/`<code>` can't even *nest* `<b>`/`<i>` around individual tokens
+(see the structured-formatting section above). So true per-token colored
+highlighting **inside a chat bubble is structurally impossible as text** —
+`<pre><code class="language-X">` (what `[format]` already emits for a
+fenced block, unconditionally, unchanged) only lights up on a Telegram
+**client** that ships its own highlighter, and even then it's
+monochrome-per-message-theme, never truly per-token colored.
+
+**Two tiers, both live today:**
+
+1. **The always-on inline box, now Mycelium-aware.** A `myc`/`mycelium`
+   fence's inline `<pre><code>` box now emits `language-rust` instead of
+   the literal `language-mycelium` — Telegram's client highlighter has
+   never heard of Mycelium (an in-development language), but its built-in
+   **Rust** highlighter colors Mycelium reasonably well (Rust-family
+   syntax: `fn`/`let`/`match`/`impl`/strings/comments/generic types all
+   align; only Mycelium-unique keywords like `nodule`/`phylum`/`swap`
+   render as plain identifiers — never actively wrong). Zero-infra,
+   already shipping, configurable (`[code_highlight].myc_inline_lang`,
+   default `"rust"`).
+2. **An opt-in, host-highlighted HTML document — the exact tier.** With
+   `[code_highlight] mode = "html-doc"`, each fenced block is
+   *additionally* rendered host-side to a self-contained HTML file (all
+   CSS inlined — no external stylesheet, no network fetch to view it —
+   [`lib/code_highlight.py`](lib/code_highlight.py), `pygments`'
+   `HtmlFormatter`) and sent via Telegram's `sendDocument`. Opened in the
+   phone's browser: real per-token colors on **any** device, no local
+   highlighter needed, and the code stays selectable/copyable right there
+   in the document — using the repo's own
+   [`MyceliumLexer`](lib/code_highlight.py) for the unique keywords too.
+
+This extends `lib/format.sh`'s existing fenced-code handling
+([`lib/code_highlight.sh`](lib/code_highlight.sh) reuses its exact fence
+regex) — it never replaces or removes the inline box, only adds the
+document alongside it.
+
+A `myc`/`mycelium` block:
+
+```myc
+// nodule: example
+nodule example
+
+fn swap(v: Value) -> Result<Value, SwapError> {
+    v.as_dense().ok_or(SwapError::OutOfRange)
+}
+```
+
+with `mode = "html-doc"` sends the inline box (colored on-phone via the
+rust alias) **and** a `snippet.myc.html` document (opened in-browser: full
+per-token color, including `nodule`/`swap`/`fuse` correctly recognized as
+Mycelium keywords via the real lexer) — paired with a `<pre>` caption on
+the document itself so the code is readable without even opening it. A
+rendered example of both tiers for this exact snippet (synthetic, not
+real code) is committed at
+[`docs/assets/code-highlight-example.html`](docs/assets/code-highlight-example.html)
+/ [`.txt`](docs/assets/code-highlight-example.txt) — see
+[`docs/assets/README.md`](docs/assets/README.md).
+
+Config — `relay.toml`'s `[code_highlight]` table, every key optional:
+
+```toml
+[code_highlight]
+mode = "inline-only"      # "off" | "inline-only" (DEFAULT, no-op) | "html-doc"
+theme = "monokai"          # a dark pygments style for the document; dracula/native/... also work
+line_numbers = false
+max_lines = 60              # a block over this many lines skips the document render
+keep_text = "caption"       # "caption" (omitted, never truncated, if >1024 chars) | "none"
+myc_inline_lang = "rust"    # applies UNCONDITIONALLY, regardless of mode - see below
+```
+
+`mode = "inline-only"` (the default) and `"off"` are behaviorally
+identical — the always-on inline box, nothing more; opt into
+`mode = "html-doc"` for the extra document. **Never-silent:**
+`pygments` absent, an oversized block (`max_lines`), or a genuine render
+failure just means no document is sent for that one block — the inline
+box already carries the full code either way, so nothing is ever
+dropped, and every skip is logged via `.metrics.log`. See
+[`docs/USAGE.md`](docs/USAGE.md#syntax-highlighted-code) for the full
+writeup.
+
 ### Voice messages (TTS) — self-hosted, off by default
 
 `tg-send.sh` can also generate a **voice note** locally from a message's
@@ -449,6 +533,8 @@ define your own.
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
 | `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; structured formatting (`[format]`, default ON); optional local TTS voice note (`[tts]`, default off). |
 | `lib/format.sh` | Structured-formatting layer (`[format]`, v0.3.0, on by default) — dynamic soft-wrap, bolded headers, code boxes (`myc`/`mycelium` first-class), quotes, emphasis, via `parse_mode=HTML`; never-silent fallback to plain text on a bad render or a Telegram-side rejection. |
+| `lib/code_highlight.sh` | Host-highlighted code documents (`[code_highlight]`, v0.5.0) — extends `lib/format.sh`'s fenced-code handling: `mode = "html-doc"` additionally renders each fenced block to a self-contained HTML file via `lib/code_highlight.py`, sent with `sendDocument`, paired with a copyable `<pre>` caption; the always-on inline code box is unaffected either way. Default `mode = "inline-only"` is a no-op. |
+| `lib/code_highlight.py` | `pygments` → self-contained HTML document renderer (`HtmlFormatter(noclasses=True)`, optional dep, skip-graceful like `lib/tts.sh`'s piper/`lib/dashboard_render.py`'s matplotlib — no Pillow needed) — includes a native `MyceliumLexer` (`myc`/`mycelium`, a Declared best-effort lexical approximation) plus pygments' own `get_lexer_by_name` for everything else, with a plain-text fallback for an unrecognized tag. |
 | `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. |
 | `fetch-voices.sh` | One-command piper voice model downloader (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful); no args fetches the recommended default (`en_US-joe-medium`), `--list` shows the full recommended table. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |

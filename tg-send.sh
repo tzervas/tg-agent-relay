@@ -45,6 +45,25 @@
 # rejection, retries ONCE as plain text - a message is never dropped nor
 # sent with broken markup). The "[k/n]" pagination header is bolded when
 # formatting is active, and stays exactly "[k/n]" plain text otherwise.
+#
+# Host-highlighted code DOCUMENTS (lib/code_highlight.sh, relay.toml
+# [code_highlight]): the v0.3.0 inline `<pre><code class="language-X">` box
+# above is ALWAYS sent for every fenced block, unchanged - Telegram TEXT
+# has no color at all (a fixed HTML entity set; <pre>/<code> can't even
+# nest <b>/<i>), so that's the best a chat bubble alone can do. With
+# `[code_highlight] mode = "html-doc"`, each fenced block is ADDITIONALLY
+# rendered host-side (pygments -> a self-contained HTML document, all CSS
+# inlined) and sent via sendDocument - opened in the phone's browser, it
+# shows real per-token colors on any device, no local highlighter needed,
+# and the code stays selectable/copyable. `mode = "inline-only"` (the
+# default) or `"off"` skip this entirely - just the inline box, as always.
+# Never-silent: pygments absent, a render error, or a block over
+# [code_highlight].max_lines just means no document is sent for that one
+# block - the inline box already carries the code either way, so nothing
+# is ever dropped. (Also see lib/format.sh's `_fmt_render_code_block` for
+# the separate, unconditional `[code_highlight].myc_inline_lang` alias
+# that makes a myc/mycelium inline box actually light up on stock
+# Telegram clients today.)
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,6 +86,15 @@ declare -f tts_send_voice >/dev/null 2>&1 || tts_send_voice() { return 1; }  # l
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/format.sh" ]] && source "$BRIDGE_DIR/lib/format.sh"
 declare -f format_message >/dev/null 2>&1 || format_message() { FMT_TEXT="$1"; FMT_PARSE_MODE=""; }  # lib missing -> passthrough shim
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/code_highlight.sh" ]] && source "$BRIDGE_DIR/lib/code_highlight.sh"
+# lib missing -> no-op shim (nothing queued; the inline code box from
+# format_message() above is entirely unaffected either way).
+if ! declare -f _img_process_message >/dev/null 2>&1; then
+    # shellcheck disable=SC2034  # IMG_PENDING_* are consumed further down in this script
+    _img_process_message() { IMG_PENDING_DOCS=(); IMG_PENDING_LANGS=(); IMG_PENDING_CAPTIONS=(); }
+    img_send_pending() { :; }
+fi
 
 # Telegram's hard cap is 4096 chars; stay safely under it.
 PAGE_SIZE="${TG_PAGE_SIZE:-$(cfg_get '.general.page_size' 3500)}"
@@ -208,6 +236,14 @@ if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
     for PAGE in "${PAGES[@]}"; do
         IDX=$((IDX + 1))
 
+        # _img_process_message populates the IMG_PENDING_* job queue
+        # (globals - same "plain statement, not $(...)" rule as
+        # format_message, see lib/code_highlight.sh's header) for any
+        # fenced block that should ALSO go out as a highlighted HTML
+        # document. It is purely READ-ONLY with respect to $PAGE - the
+        # text below is completely unaffected by it either way.
+        _img_process_message "$PAGE"
+
         # format_message sets FMT_TEXT/FMT_PARSE_MODE as globals - see
         # lib/format.sh's header for why this is NOT `x="$(format_message ...)"`
         # (command substitution's subshell would drop the second value).
@@ -242,6 +278,13 @@ if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
             # else: already plain - nothing more to try (matches the
             # original "|| true" swallow-and-move-on behavior).
         fi
+
+        # Any code-highlight document jobs queued for THIS page
+        # (best-effort, after the main text - which already carries the
+        # v0.3.0 inline code box - has gone out). A no-op (returns
+        # immediately) whenever [code_highlight] mode != "html-doc" or no
+        # fence was found/rendered.
+        img_send_pending "$BOT_TOKEN" "$ALLOWED_CHAT_ID"
 
         (( IDX < TOTAL )) && sleep "$PAGE_DELAY"
     done

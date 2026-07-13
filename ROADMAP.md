@@ -152,6 +152,58 @@ with ANY agent using ANY harness, maximum portability + usability.
   `usage-cache/*` patterns), never committed, and never transmitted
   anywhere but this relay's own allowlisted Telegram chat; test fixtures
   are synthetic/fabricated data only, never real usage.
+- **Syntax-highlighted code — inline alias + opt-in HTML document (v0.5.0,
+  headline feature).** `lib/code_highlight.sh` + `lib/code_highlight.py` +
+  `[code_highlight]` in `relay.toml`: EXTENDS `lib/format.sh`'s fenced-code
+  handling (reuses its exact fence regex, never a second, possibly-drifting
+  fence detector), additive to — never a replacement for — the
+  always-on inline `<pre><code class="language-X">` box. **The hard
+  constraint:** Telegram message text supports no color at all (a fixed
+  HTML entity set; `<pre>`/`<code>` can't even nest `<b>`/`<i>` around
+  individual tokens), so true per-token colored highlighting inside a chat
+  bubble is structurally impossible as text, full stop. Two tiers ship
+  today: (1) **the inline box, now Mycelium-aware** —
+  `[code_highlight].myc_inline_lang` (default `"rust"`, applies
+  UNCONDITIONALLY regardless of `mode`) aliases a `myc`/`mycelium` fence's
+  inline class from the literal `language-mycelium` (which no Telegram
+  client highlighter recognizes) to `language-rust` (Rust-family syntax
+  aligns closely enough — `fn`/`let`/`match`/`impl`/strings/comments/
+  generic types all color correctly; only Mycelium-unique keywords render
+  as plain identifiers, never actively wrong) — zero-infra color on stock
+  clients, today; (2) **an opt-in, host-highlighted HTML document** —
+  `[code_highlight] mode = "html-doc"` additionally renders each fenced
+  block to a SELF-CONTAINED HTML file (`pygments`' `HtmlFormatter(full=True,
+  noclasses=True)` — every color inlined as CSS, no external stylesheet,
+  no Pillow needed at all) and sends it via `sendDocument` — opened in the
+  phone's browser, real per-token color on ANY device, and the code stays
+  selectable/copyable in the document itself (unlike an image). A native
+  `MyceliumLexer` (`RegexLexer`, `Declared`/best-effort — pygments ships no
+  Mycelium lexer) covers the real keyword/type/comment/string/number
+  surface and registers under both `myc` and `mycelium`, the same two
+  first-class tags `lib/format.sh`'s `_fmt_known_lang` already treats
+  specially; every other tag resolves via pygments' own `get_lexer_by_name`
+  (hundreds of languages), with a plain-text-lexer fallback for an
+  unrecognized/absent tag — always a clean document, never a crash.
+  `mode = "inline-only"` (the DEFAULT) and `"off"` are behaviorally
+  identical (the inline box only, this file stays a no-op) — a deliberate
+  no-op default, since the always-on inline box is judged good-enough out
+  of the box; `mode = "html-doc"` opts into the extra document.
+  `[code_highlight].keep_text` — `"caption"` (default: a `<pre>` copy of
+  the code as the document's caption when it fits Telegram's 1024-char cap,
+  silently omitted rather than ever truncated when it doesn't — the inline
+  box already carries the full code either way) or `"none"`. Never-silent:
+  `pygments` absence, a block over `[code_highlight].max_lines` (never an
+  unbounded document), or a genuine render error just means no document is
+  sent for that ONE block — logged via `.metrics.log` — since the inline
+  box already carries the code, nothing is ever dropped. Landed alongside a
+  small batch of LOW-severity review fixes: `lib/format.sh` no longer emits
+  a stray/empty `<pre></pre>` for an unclosed fence at EOF (falls back to
+  literal text instead — a later, unrelated bare ` ``` ` line could
+  previously open an empty fence with no real content); `handlers/usage.sh`
+  and `handlers/dashboard.sh` swapped `mktemp -u` (a TOCTOU naming race) for
+  plain `mktemp`; and `lib/format.sh` gained a direct unit test that forces
+  `_fmt_html_balanced` to fail and asserts the escaped-plain-text fallback
+  actually fires (previously reasoning-verified but untested).
 
 ## Next
 

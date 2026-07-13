@@ -80,7 +80,12 @@ if [[ "$(cfg_get '.usage.enabled' "false")" == "true" ]] \
     [[ "$(cfg_get '.usage.models' "true")" == "false" ]] && USAGE_DISPLAY_FLAGS+=("--no-models")
 fi
 
-OUT_PNG="$(mktemp -u "${TMPDIR:-/tmp}/relay-dashboard-XXXXXX.png")"
+# Real mktemp (no -u): atomically CREATES the file so the name can never be
+# raced/reserved by another process between this call and
+# dashboard_render.py actually writing the image (the python side
+# overwrites it in place - fig.savefig()/write_bytes() on an existing path
+# is fine). Previously `mktemp -u` (TOCTOU race - #13 review LOW).
+OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-dashboard-XXXXXX.png")"
 
 RENDER_OUT=""
 if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then

@@ -1,0 +1,30 @@
+Tier 1 - the ALWAYS-ON inline code box (lib/format.sh's
+_fmt_render_code_block), exactly what sends in the main Telegram message
+for this synthetic .myc snippet - unconditionally, no config needed. Note
+the `language-rust` class: a myc/mycelium fence is aliased away from the
+literal (uncolored-on-most-clients) `language-mycelium` by default
+([code_highlight].myc_inline_lang) - Telegram's built-in Rust highlighter
+colors this reasonably well (fn/let/match/strings/comments all align);
+only the Mycelium-unique keywords (nodule, swap) render as plain
+identifiers, never actively wrong:
+
+<pre><code class="language-rust">// nodule: example
+nodule example
+
+fn swap(v: Value) -&gt; Result&lt;Value, SwapError&gt; {
+    let x = v.as_dense()
+    match x {
+        Option::Some(d) =&gt; Result::Ok(d),
+        Option::None =&gt; Result::Err(SwapError::OutOfRange),
+    }
+}</code></pre>
+
+Tier 2 - the OPT-IN host-highlighted HTML document
+(code-highlight-example.html, alongside this file): with
+[code_highlight] mode = "html-doc", the SAME snippet is ALSO rendered via
+lib/code_highlight.py's real MyceliumLexer (pygments' HtmlFormatter,
+noclasses=True - all CSS inlined, self-contained, no external
+stylesheet) and sent as a Telegram document via sendDocument. Opened in a
+browser it shows true per-token color, including the Mycelium-unique
+keywords (nodule, swap) that the Tier-1 rust alias above cannot
+distinguish from plain identifiers.

@@ -229,6 +229,33 @@ See `relay.toml.example`'s `[tts]` comments for the full schema, and
 `lib/tts.sh`'s header for the engine-selection/transcode/pitch/cadence/send
 pipeline.
 
+## Syntax-highlighted code (optional HTML-document tier)
+
+Every fenced code block (` ```lang ... ``` `) already sends as an inline
+`<pre><code class="language-X">` box, unconditionally, no setup needed —
+`myc`/`mycelium` fences are aliased to `language-rust` by default so
+Telegram's built-in Rust highlighter colors them today (see the README's
+"Syntax-highlighted code" section for why: Telegram text has no color at
+all, so a chat bubble alone can never show true per-token highlighting).
+
+Opting into `[code_highlight] mode = "html-doc"` **additionally** sends a
+self-contained, host-highlighted HTML document (real per-token color,
+opened in the phone's browser) alongside the inline box. It needs
+`pygments` (no Pillow — the HTML renderer is pure text generation):
+
+```bash
+pip install pygments    # add --break-system-packages if pip refuses on
+                         # an externally-managed env
+```
+
+Nothing else to configure — with `pygments` not installed, `mode =
+"html-doc"` just never sends a document (metric-logged, never
+user-visibly broken); the inline box is unaffected either way. See
+`relay.toml.example`'s `[code_highlight]` comments for the full schema
+(mode, theme, line numbers, the `max_lines` cap, the `keep_text` caption,
+and the `myc_inline_lang` alias), and `lib/code_highlight.sh`'s header
+for the full never-silent contract.
+
 ## Security model
 
 - **Allowlist by numeric `user_id`, not username.** `tg-poll.sh` only
