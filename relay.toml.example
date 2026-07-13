@@ -339,6 +339,27 @@
 #   never-silently-logged, via .metrics.log) falls back to espeak-ng or
 #   skips voice entirely if that's absent too - the text message always
 #   still sends.
+#   Recommended: run `./fetch-voices.sh` (fetches the deep-male
+#   en_US-joe-medium default into ./voices/) or `./fetch-voices.sh --list`
+#   to see every recommended voice (male + female, ~60-120MB each) -
+#   see SETUP.md's "Voice messages (TTS)" section.
+#
+# pitch = "-1"
+#   OPTIONAL, default unset (no pitch shift at all - today's plain
+#   transcode, byte-identical). A signed number of SEMITONES to shift
+#   pitch by (negative = deeper/lower); duration-preserving (asetrate +
+#   atempo compensate each other, so speech rate doesn't change) and
+#   skip-graceful (a filter failure just sends the unfiltered voice note -
+#   see lib/tts.sh's _tts_pitch_filter). A small extra depth nudge on top
+#   of an already-deep voice model, not a substitute for picking one.
+#
+# length_scale = "0.9"
+#   OPTIONAL, piper only, default unset (piper's own built-in default,
+#   1.0 - today's cadence, byte-identical). Wired straight through to
+#   piper's own `--length-scale` flag: LOWER = FASTER speech, higher =
+#   slower (e.g. "0.9" ~= 10% faster, "1.15" ~= 15% slower). Ignored by
+#   espeak-ng. Unset/empty/non-numeric -> the flag is omitted entirely,
+#   never passed to piper malformed.
 #
 # max_chars = 600
 #   Do NOT TTS a message longer than this - long reports/dashboards stay

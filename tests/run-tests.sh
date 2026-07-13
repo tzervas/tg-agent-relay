@@ -642,6 +642,29 @@ STUB
     chmod +x "$dir/piper"
 }
 
+# write_stub_piper_logged <stub_dir> <log_file> - like write_stub_piper, but
+# also records its own full argument list (one line per call) to <log_file>
+# - used to assert which flags tts_synthesize actually passes piper (e.g.
+# --length-scale).
+write_stub_piper_logged() {
+    local dir="$1" log="$2"
+    cat > "$dir/piper" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$log"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        --output_file) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+cat >/dev/null
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+    chmod +x "$dir/piper"
+}
+
 # write_stub_espeak <stub_dir> - a fake `espeak-ng -w F "text"`.
 write_stub_espeak() {
     local dir="$1"
@@ -879,6 +902,69 @@ assert_eq "tts_select_engine: engine=espeak explicit -> espeak regardless of pip
 
 RELAY_CONFIG_JSON="{}"
 rm -rf "$STUB_ENGINE" "$FAKE_MODEL"
+
+echo "== lib/tts.sh: _tts_pitch_filter() unit tests (optional depth knob) =="
+
+RELAY_CONFIG_JSON='{"tts":{}}'
+assert_empty "pitch filter: unset -> no filter (today's byte-identical behavior)" \
+    "$(_tts_pitch_filter 22050)"
+
+RELAY_CONFIG_JSON='{"tts":{"pitch":"0"}}'
+assert_empty "pitch filter: pitch=0 -> no filter" \
+    "$(_tts_pitch_filter 22050)"
+
+RELAY_CONFIG_JSON='{"tts":{"pitch":"not-a-number"}}'
+assert_empty "pitch filter: non-numeric pitch -> no filter (never a bad ffmpeg arg)" \
+    "$(_tts_pitch_filter 22050)"
+
+RELAY_CONFIG_JSON='{"tts":{"pitch":"-1.5"}}'
+assert_eq "pitch filter: negative semitones -> asetrate/aresample/atempo, duration-preserving" \
+    "asetrate=22050*0.917004,aresample=22050,atempo=1/0.917004" \
+    "$(_tts_pitch_filter 22050)"
+
+RELAY_CONFIG_JSON='{"tts":{"pitch":"-1.5"}}'
+assert_empty "pitch filter: no/invalid sample rate -> no filter (skip-graceful, never a malformed -af)" \
+    "$(_tts_pitch_filter '')"
+
+RELAY_CONFIG_JSON="{}"
+
+echo "== lib/tts.sh: tts_synthesize() piper --length-scale cadence knob =="
+
+STUB_LS="$(mktemp -d)"; tts_essential_path "$STUB_LS" >/dev/null
+LOG_LS="$(mktemp -u)"
+write_stub_piper_logged "$STUB_LS" "$LOG_LS"
+FAKE_MODEL_LS="$(mktemp)"
+OUT_WAV_LS="$(mktemp -u)"
+
+RELAY_CONFIG_JSON="{\"tts\":{\"voice_model\":\"$FAKE_MODEL_LS\"}}"
+PATH="$STUB_LS" tts_synthesize piper "cadence test" "$OUT_WAV_LS" >/dev/null 2>&1
+if ! grep -q -- "--length-scale" "$LOG_LS"; then
+    ok "tts_synthesize: length_scale unset -> no --length-scale flag (unchanged default)"
+else
+    fail "tts_synthesize: length_scale unset -> no --length-scale flag" "$(cat "$LOG_LS")"
+fi
+rm -f "$LOG_LS" "$OUT_WAV_LS"
+
+RELAY_CONFIG_JSON="{\"tts\":{\"voice_model\":\"$FAKE_MODEL_LS\",\"length_scale\":\"0.9\"}}"
+PATH="$STUB_LS" tts_synthesize piper "cadence test" "$OUT_WAV_LS" >/dev/null 2>&1
+if grep -q -- "--length-scale 0.9" "$LOG_LS"; then
+    ok "tts_synthesize: length_scale=0.9 -> passed through to piper"
+else
+    fail "tts_synthesize: length_scale=0.9 -> passed through to piper" "$(cat "$LOG_LS" 2>/dev/null)"
+fi
+rm -f "$LOG_LS" "$OUT_WAV_LS"
+
+RELAY_CONFIG_JSON="{\"tts\":{\"voice_model\":\"$FAKE_MODEL_LS\",\"length_scale\":\"not-a-number\"}}"
+PATH="$STUB_LS" tts_synthesize piper "cadence test" "$OUT_WAV_LS" >/dev/null 2>&1
+if ! grep -q -- "--length-scale" "$LOG_LS"; then
+    ok "tts_synthesize: non-numeric length_scale -> flag omitted (never a bad piper arg)"
+else
+    fail "tts_synthesize: non-numeric length_scale -> flag omitted" "$(cat "$LOG_LS" 2>/dev/null)"
+fi
+
+RELAY_CONFIG_JSON="{}"
+rm -rf "$STUB_LS" "$FAKE_MODEL_LS"
+rm -f "$LOG_LS" "$OUT_WAV_LS"
 
 # ============================================================================
 echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="

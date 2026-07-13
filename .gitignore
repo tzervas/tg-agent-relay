@@ -26,3 +26,11 @@
 # Python bytecode cache (lib/metrics_agg.py, lib/dashboard_render.py).
 __pycache__/
 *.pyc
+
+# Downloaded piper voice models (fetch-voices.sh, SETUP.md's "Voice
+# messages (TTS)" section) - large (tens of MB each), user-fetched, never
+# committed. fetch-voices.sh re-downloads them on demand; relay.toml (also
+# gitignored, above) points [tts].voice_model at one of them.
+voices/*.onnx
+voices/*.onnx.json
+voices/*.part
