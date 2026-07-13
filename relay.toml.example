@@ -428,13 +428,16 @@
 #   see lib/tts.sh's _tts_pitch_filter). A small extra depth nudge on top
 #   of an already-deep voice model, not a substitute for picking one.
 #
-# length_scale = "0.9"
+# length_scale = "0.81"
 #   OPTIONAL, piper only, default unset (piper's own built-in default,
 #   1.0 - today's cadence, byte-identical). Wired straight through to
 #   piper's own `--length-scale` flag: LOWER = FASTER speech, higher =
 #   slower (e.g. "0.9" ~= 10% faster, "1.15" ~= 15% slower). Ignored by
 #   espeak-ng. Unset/empty/non-numeric -> the flag is omitted entirely,
-#   never passed to piper malformed.
+#   never passed to piper malformed. RECOMMENDED: "0.81" - this bridge's
+#   tuned, approved-final cadence for en_US-joe-medium (a brisk but
+#   natural pace for short chat notes; pitch left unset alongside it -
+#   see above - cadence alone was judged sufficient).
 #
 # max_chars = 600
 #   Do NOT TTS a message longer than this - long reports/dashboards stay

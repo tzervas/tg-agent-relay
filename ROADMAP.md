@@ -98,6 +98,18 @@ with ANY agent using ANY harness, maximum portability + usability.
   with no `relay.toml`, or an existing one that doesn't set `[tts]`;
   skip-graceful (one `emit_metric` line, never a failed/blocked send) at
   every stage where an engine/model/`ffmpeg` is missing.
+- **Piper voice upgrade — pitch + cadence knobs, checksum-verified voice
+  fetch (v0.2.1).** `fetch-voices.sh` downloads a recommended piper voice
+  (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful) with
+  `en_US-joe-medium` (deep male) as the default. `[tts].length_scale`
+  wires piper's own `--length-scale` cadence control straight through
+  (lower = faster); `[tts].pitch` adds an optional, duration-preserving
+  ffmpeg pitch shift (signed semitones, `asetrate` + `atempo`) on top of
+  the chosen voice model. Both knobs are unset/off by default —
+  byte-identical behavior with no `relay.toml`, or an existing one that
+  doesn't set them. This bridge's own tuned, approved-final
+  recommendation is `en_US-joe-medium` + `length_scale = "0.81"` with
+  `pitch` left off — the cadence tweak alone was judged sufficient.
 - **Structured formatting (v0.3.0, headline feature).** `lib/format.sh` +
   `[format]` in `relay.toml`: every outbound send (`tg-send.sh`'s single
   choke point, so every handler/adapter/hook path that routes through it)
