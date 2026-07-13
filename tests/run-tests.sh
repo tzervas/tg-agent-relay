@@ -101,7 +101,7 @@ echo "== bash -n (syntax) =="
 for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
-         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh \
+         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh \
          handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
@@ -114,7 +114,7 @@ echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
-             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh \
+             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh \
              handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
@@ -583,6 +583,302 @@ else
     fail "handlers/help.sh lists both forwarded and relay-handled commands" "$HELP_OUT"
 fi
 rm -rf "$BRIDGE10"
+
+# ============================================================================
+echo "== lib/tts.sh + tg-send.sh: self-hosted TTS pipeline (offline, stubbed engines) =="
+# NO network calls (this file's contract, see header) - a stub `curl` in a
+# curated PATH records its args to a log file instead of hitting Telegram,
+# and `piper`/`espeak-ng`/`ffmpeg` are stubbed the same way so the tests
+# are deterministic regardless of what's actually installed on the host
+# running them (real end-to-end verification is a separate, manual,
+# clearly-marked live check - see the repo's TTS setup docs).
+
+# A curated PATH containing only real, essential coreutils (found via the
+# CURRENT PATH before we override it) plus whatever fake piper/espeak-ng/
+# ffmpeg/curl a scenario adds - so "no engine installed" is genuinely true
+# in the test even on a host that has real piper/espeak-ng/ffmpeg on its
+# normal PATH.
+tts_essential_path() {
+    local dir="$1" tool real
+    for tool in mktemp rm jq python3 dirname basename cat date head wc \
+                grep sed cut tr mkdir env true false expr sleep; do
+        real="$(command -v "$tool" 2>/dev/null || true)"
+        [[ -n "$real" ]] && ln -sf "$real" "$dir/$tool" 2>/dev/null
+    done
+    printf '%s' "$dir"
+}
+
+# write_stub_curl <stub_dir> <log_file> - records every invocation's full
+# argument list (one line per call) to <log_file>, always answers with a
+# minimal Telegram-style success body, never touches the network.
+write_stub_curl() {
+    local dir="$1" log="$2"
+    cat > "$dir/curl" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$log"
+printf '{"ok":true,"result":{}}'
+exit 0
+STUB
+    chmod +x "$dir/curl"
+}
+
+# write_stub_piper <stub_dir> - a fake `piper --model M --output_file F`
+# that consumes stdin (the text) and writes non-empty fake WAV bytes to F.
+write_stub_piper() {
+    local dir="$1"
+    cat > "$dir/piper" <<'STUB'
+#!/bin/bash
+OUT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output_file) OUT="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+cat >/dev/null
+[[ -n "$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "$OUT"
+exit 0
+STUB
+    chmod +x "$dir/piper"
+}
+
+# write_stub_espeak <stub_dir> - a fake `espeak-ng -w F "text"`.
+write_stub_espeak() {
+    local dir="$1"
+    cat > "$dir/espeak-ng" <<'STUB'
+#!/bin/bash
+OUT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -w) OUT="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "$OUT"
+exit 0
+STUB
+    chmod +x "$dir/espeak-ng"
+}
+
+# write_stub_ffmpeg <stub_dir> - a fake `ffmpeg ... -i IN ... OUT` that
+# "transcodes" (writes fake opus bytes to OUT) iff IN is non-empty.
+write_stub_ffmpeg() {
+    local dir="$1"
+    cat > "$dir/ffmpeg" <<'STUB'
+#!/bin/bash
+IN="" OUT="" PREV=""
+for a in "$@"; do
+    [[ "$PREV" == "-i" ]] && IN="$a"
+    PREV="$a"
+done
+OUT="${@: -1}"
+if [[ -s "$IN" ]]; then
+    printf 'OGG_FAKE_OPUS_DATA' > "$OUT"
+    exit 0
+fi
+exit 1
+STUB
+    chmod +x "$dir/ffmpeg"
+}
+
+# setup_tts_bridge - like setup_temp_bridge, but symlinks the REAL
+# tg-send.sh (not the recording mock) plus the real lib/ it needs, with a
+# throwaway .env - so these tests exercise the actual TTS wiring, not a
+# stand-in.
+setup_tts_bridge() {
+    local dir
+    dir="$(mktemp -d)"
+    mkdir -p "$dir/lib"
+    ln -s "$REPO_ROOT/tg-send.sh" "$dir/tg-send.sh"
+    ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
+    ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
+    ln -s "$REPO_ROOT/lib/tts.sh" "$dir/lib/tts.sh"
+    ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    cat > "$dir/.env" <<'ENV'
+BOT_TOKEN=TEST_TOKEN_123
+ALLOWED_USER_ID=999
+ALLOWED_CHAT_ID=999
+ENV
+    chmod 600 "$dir/.env"
+    printf '%s' "$dir"
+}
+
+# -- 1: mode=off (no relay.toml at all) -> byte-identical to pre-TTS
+# -- behavior: sendMessage only, NEVER sendVoice/sendAudio, even with
+# -- working engines on PATH.
+TTS1="$(setup_tts_bridge)"
+STUB1="$(mktemp -d)"; tts_essential_path "$STUB1" >/dev/null
+LOG1="$(mktemp -u)"; write_stub_curl "$STUB1" "$LOG1"
+write_stub_espeak "$STUB1"; write_stub_ffmpeg "$STUB1"
+PATH="$STUB1" "$TTS1/tg-send.sh" "hello, no tts configured" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG1" 2>/dev/null && ! grep -q "sendVoice\|sendAudio" "$LOG1" 2>/dev/null; then
+    ok "tts: mode=off (no relay.toml) -> text only, no voice attempted, even with engines available"
+else
+    fail "tts: mode=off (no relay.toml) -> text only, no voice attempted" "$(cat "$LOG1" 2>/dev/null)"
+fi
+rm -rf "$TTS1" "$STUB1" "$LOG1"
+
+# -- 2: mode="text+voice", espeak-ng+ffmpeg available -> BOTH sendMessage
+# -- and sendVoice fire, voice as an .ogg file.
+TTS2="$(setup_tts_bridge)"
+cat > "$TTS2/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 600
+TOML
+STUB2="$(mktemp -d)"; tts_essential_path "$STUB2" >/dev/null
+LOG2="$(mktemp -u)"; write_stub_curl "$STUB2" "$LOG2"
+write_stub_espeak "$STUB2"; write_stub_ffmpeg "$STUB2"
+PATH="$STUB2" "$TTS2/tg-send.sh" "a short status update" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG2" && grep -q "sendVoice" "$LOG2" && grep -q "voice=@.*\.ogg" "$LOG2"; then
+    ok "tts: mode=text+voice -> sends text THEN a sendVoice with an .ogg file"
+else
+    fail "tts: mode=text+voice -> sends text then voice" "$(cat "$LOG2" 2>/dev/null)"
+fi
+rm -rf "$TTS2" "$STUB2" "$LOG2"
+
+# -- 3: mode="voice-only", engine available -> ONLY sendVoice, no
+# -- sendMessage at all.
+TTS3="$(setup_tts_bridge)"
+cat > "$TTS3/relay.toml" <<'TOML'
+[tts]
+mode = "voice-only"
+engine = "auto"
+max_chars = 600
+TOML
+STUB3="$(mktemp -d)"; tts_essential_path "$STUB3" >/dev/null
+LOG3="$(mktemp -u)"; write_stub_curl "$STUB3" "$LOG3"
+write_stub_espeak "$STUB3"; write_stub_ffmpeg "$STUB3"
+PATH="$STUB3" "$TTS3/tg-send.sh" "a short status update" >/dev/null 2>&1
+if grep -q "sendVoice" "$LOG3" && ! grep -q "sendMessage" "$LOG3"; then
+    ok "tts: mode=voice-only + engine available -> voice only, text suppressed"
+else
+    fail "tts: mode=voice-only + engine available -> voice only" "$(cat "$LOG3" 2>/dev/null)"
+fi
+rm -rf "$TTS3" "$STUB3" "$LOG3"
+
+# -- 4: mode="voice-only", NO engine at all -> falls back to text, never
+# -- sends nothing; the skip is logged to .metrics.log (never-silent).
+TTS4="$(setup_tts_bridge)"
+cat > "$TTS4/relay.toml" <<'TOML'
+[tts]
+mode = "voice-only"
+engine = "auto"
+max_chars = 600
+TOML
+STUB4="$(mktemp -d)"; tts_essential_path "$STUB4" >/dev/null   # no piper/espeak-ng/ffmpeg
+LOG4="$(mktemp -u)"; write_stub_curl "$STUB4" "$LOG4"
+PATH="$STUB4" "$TTS4/tg-send.sh" "a short status update" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG4" && ! grep -q "sendVoice\|sendAudio" "$LOG4"; then
+    ok "tts: mode=voice-only + no engine -> falls back to text (never sends nothing)"
+else
+    fail "tts: mode=voice-only + no engine -> falls back to text" "$(cat "$LOG4" 2>/dev/null)"
+fi
+if grep -q "$(printf '\ttts\tskip\t')" "$TTS4/.metrics.log" 2>/dev/null; then
+    ok "tts: no-engine skip is logged to .metrics.log (never-silent)"
+else
+    fail "tts: no-engine skip is logged to .metrics.log" "$(cat "$TTS4/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$TTS4" "$STUB4" "$LOG4"
+
+# -- 5: max_chars guard - a message over the configured limit stays
+# -- text-only even in text+voice mode.
+TTS5="$(setup_tts_bridge)"
+cat > "$TTS5/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 10
+TOML
+STUB5="$(mktemp -d)"; tts_essential_path "$STUB5" >/dev/null
+LOG5="$(mktemp -u)"; write_stub_curl "$STUB5" "$LOG5"
+write_stub_espeak "$STUB5"; write_stub_ffmpeg "$STUB5"
+PATH="$STUB5" "$TTS5/tg-send.sh" "this message is definitely longer than ten characters" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG5" && ! grep -q "sendVoice\|sendAudio" "$LOG5"; then
+    ok "tts: message over max_chars -> stays text-only (voice never attempted)"
+else
+    fail "tts: message over max_chars -> stays text-only" "$(cat "$LOG5" 2>/dev/null)"
+fi
+rm -rf "$TTS5" "$STUB5" "$LOG5"
+
+# -- 6: ffmpeg absent -> the raw WAV is sent via sendAudio (still SOME
+# -- voice), not sendVoice; never a hard failure.
+TTS6="$(setup_tts_bridge)"
+cat > "$TTS6/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 600
+TOML
+STUB6="$(mktemp -d)"; tts_essential_path "$STUB6" >/dev/null
+LOG6="$(mktemp -u)"; write_stub_curl "$STUB6" "$LOG6"
+write_stub_espeak "$STUB6"   # no ffmpeg
+PATH="$STUB6" "$TTS6/tg-send.sh" "a short status update" >/dev/null 2>&1
+if grep -q "sendAudio" "$LOG6" && grep -q "audio=@.*\.wav" "$LOG6" && ! grep -q "sendVoice" "$LOG6"; then
+    ok "tts: ffmpeg absent -> WAV sent via sendAudio fallback (still SOME voice)"
+else
+    fail "tts: ffmpeg absent -> WAV sent via sendAudio fallback" "$(cat "$LOG6" 2>/dev/null)"
+fi
+rm -rf "$TTS6" "$STUB6" "$LOG6"
+
+# -- 7: pagination interaction - a multi-page message always skips TTS
+# -- entirely, even in voice-only mode (falls back to the paginated text).
+TTS7="$(setup_tts_bridge)"
+cat > "$TTS7/relay.toml" <<'TOML'
+[tts]
+mode = "voice-only"
+engine = "auto"
+max_chars = 600
+TOML
+STUB7="$(mktemp -d)"; tts_essential_path "$STUB7" >/dev/null
+LOG7="$(mktemp -u)"; write_stub_curl "$STUB7" "$LOG7"
+write_stub_espeak "$STUB7"; write_stub_ffmpeg "$STUB7"
+LONG_MSG="$(python3 -c "print('x' * 120)")"
+PATH="$STUB7" TG_PAGE_SIZE=50 "$TTS7/tg-send.sh" "$LONG_MSG" >/dev/null 2>&1
+SEND_COUNT="$(grep -c "sendMessage" "$LOG7" 2>/dev/null || echo 0)"
+if [[ "$SEND_COUNT" -ge 2 ]] && ! grep -q "sendVoice\|sendAudio" "$LOG7"; then
+    ok "tts: a paginated (multi-page) message always skips TTS - text-only"
+else
+    fail "tts: a paginated (multi-page) message always skips TTS" "pages=$SEND_COUNT log=$(cat "$LOG7" 2>/dev/null)"
+fi
+rm -rf "$TTS7" "$STUB7" "$LOG7"
+
+echo "== lib/tts.sh: tts_select_engine() unit tests (engine preference/fallback) =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/tts.sh"
+
+STUB_ENGINE="$(mktemp -d)"; tts_essential_path "$STUB_ENGINE" >/dev/null
+FAKE_MODEL="$(mktemp)"
+
+RELAY_CONFIG_JSON='{"tts":{"engine":"auto"}}'
+assert_empty "tts_select_engine: auto, neither piper nor espeak-ng installed -> nothing" \
+    "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+write_stub_espeak "$STUB_ENGINE"
+RELAY_CONFIG_JSON='{"tts":{"engine":"auto"}}'
+assert_eq "tts_select_engine: auto, only espeak-ng installed -> espeak" \
+    "espeak" "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+write_stub_piper "$STUB_ENGINE"
+RELAY_CONFIG_JSON="{\"tts\":{\"engine\":\"auto\",\"voice_model\":\"$FAKE_MODEL\"}}"
+assert_eq "tts_select_engine: auto, both installed + voice_model set -> prefers piper" \
+    "piper" "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+RELAY_CONFIG_JSON='{"tts":{"engine":"auto"}}'
+assert_eq "tts_select_engine: auto, piper installed but NO voice_model configured -> falls back to espeak" \
+    "espeak" "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+RELAY_CONFIG_JSON='{"tts":{"engine":"piper"}}'
+assert_empty "tts_select_engine: engine=piper explicit, no voice_model -> no silent fallback to espeak" \
+    "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+RELAY_CONFIG_JSON='{"tts":{"engine":"espeak"}}'
+assert_eq "tts_select_engine: engine=espeak explicit -> espeak regardless of piper's availability" \
+    "espeak" "$(PATH="$STUB_ENGINE" tts_select_engine)"
+
+RELAY_CONFIG_JSON="{}"
+rm -rf "$STUB_ENGINE" "$FAKE_MODEL"
 
 # ============================================================================
 echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="
