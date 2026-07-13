@@ -291,9 +291,9 @@ recognized as a command and routed one of two ways:
 
 - **`mode = "relay"`** — the relay itself runs a local `handlers/*.sh`
   script and replies directly; **nothing is emitted to the agent** —
-  zero model tokens. This is how `/dashboard`, `/stats`, `/uptime`, and
-  `/help` work out of the box. See [`COMMANDS.md`](COMMANDS.md) for the
-  full list and how to define your own.
+  zero model tokens. This is how `/dashboard`, `/stats`, `/uptime`,
+  `/help`, and `/usage` work out of the box. See [`COMMANDS.md`](COMMANDS.md)
+  for the full list and how to define your own.
 
 **With no `relay.toml` (or no `[commands.*]` section at all), no message
 is ever tagged or relay-handled** — everything emits as plain
@@ -319,6 +319,96 @@ reason), the same data renders as a text/unicode dashboard instead — see
 what that looks like. `/dashboard` never fails to send *something*.
 `/stats` gives the same numbers as plain text only (no image, lighter).
 
+## Token usage dashboard
+
+**OPT-IN — disabled by default.** `/usage` (and, when enabled, extra
+panels appended to `/dashboard` too) renders a token USAGE breakdown —
+by **provider** (Anthropic/OpenAI/Google/other, inferred from the model
+id), by **model**, and by **project** — over your local coding-agent
+session history. It's a separate, independent aggregation from
+`/dashboard`'s relay-operational metrics (`.metrics.log`): this one reads
+transcript files a *harness* writes, not this relay.
+
+### Enabling it
+
+Nothing runs until you opt in in `relay.toml`:
+
+```toml
+[usage]
+enabled = true
+```
+
+Uncomment `[commands.usage]` too (see
+[`COMMANDS.md`'s `/usage` entry](COMMANDS.md#the-five-built-in-relay-handled-commands))
+to get the `/usage` command; `/dashboard` picks up the usage panels
+automatically once `[usage].enabled = true`, no separate toggle needed.
+
+### The source adapter
+
+`[usage].source` selects which adapter reads `[usage].projects_dir`. **One
+ships today: `"claude-code"`** (the default) — it walks Claude Code's own
+on-disk session-transcript layout, `~/.claude/projects/<project>/*.jsonl`
+(the default `projects_dir`), reading each assistant message's `usage`
+object (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+`cache_creation_input_tokens`) and its `model` id. This relay talks to any
+harness (see the README's architecture overview) — a future harness gets
+its own adapter in `lib/usage_ingest.py` without any caller changing;
+point `projects_dir` at wherever that harness's compatible transcripts
+live. An unrecognized `source` value skip-gracefully disables collection
+(a clear "unknown usage source adapter" note in the reply) rather than
+guessing or erroring.
+
+**Best-effort, "where available":** a missing `projects_dir`, an empty
+history, or a malformed transcript line never errors and never fabricates
+a number — the dashboard/command just shows an honest empty or partial
+result, optionally with a short note explaining what was skipped.
+
+### Reading it
+
+```
+/usage             # relay.toml's [usage].window (default 7d)
+/usage today        # since local midnight
+/usage 30d          # last 30 days
+/usage all          # everything the source has
+```
+
+The image shows header stat tiles (total tokens, input/output split, top
+model, top project), a **tokens by model** bar, a **tokens by provider**
+share bar (percentages — deliberately a bar, not a pie: see the
+`/dataviz` design skill's guidance on comparing a handful of categories),
+a **tokens by project** bar, and — when there's enough spread of
+timestamps to be meaningful — a small over-time trend line. `[usage].providers`
+/`[usage].models` (both default `true`) can turn off either breakdown; the
+panel still renders in the same spot, labeled "(display disabled)" rather
+than silently vanishing. With `[usage].enabled = false` (the default),
+`/dashboard` renders **exactly** as it always has — no usage panels, no
+behavior change at all.
+
+### Privacy — read this before enabling
+
+**Token usage is personal data, and this relay/its source repo is
+typically public.** By design:
+
+- **Local-only, never transmitted anywhere but your own chat.** The
+  transcript files this reads live entirely on your machine
+  (`~/.claude/projects/` by default); the aggregated summary this writes
+  is a **local cache file** (`.usage/usage-summary.json`, under this
+  bridge's own directory); the rendered image/text is sent **only** to
+  the Telegram chat ID already allowlisted in your `.env` — this feature
+  makes no other network call, ever.
+- **Gitignored by construction.** `.gitignore` excludes `.usage/`,
+  `*.usage.json`, and `usage-cache/*` — the cache this feature writes can
+  never be accidentally committed. If you fork/customize this repo,
+  double-check `git status` shows nothing under those paths as trackable
+  before you push.
+- **Never enabled by accident.** `[usage].enabled` defaults to `false`;
+  with it unset, `/usage` replies that tracking is disabled (rather than
+  silently doing nothing), and `/dashboard` is byte-identical to before
+  this feature existed.
+- **Test fixtures are synthetic.** `tests/fixtures/usage-synthetic/` uses
+  fabricated project names, model ids, and token counts only — never real
+  usage data, by policy.
+
 ## Common workflows
 
 **"I want a heads-up when a long-running subagent finishes, without
@@ -327,9 +417,12 @@ is enabled by default and `PreToolUse`/`PostToolUse` are disabled by
 default (they're opt-in, high-volume). See `relay.toml.example`'s
 `[claude_code.*]` tables.
 
-**"I want to check bridge health from my phone."** Enable the four
-built-in commands (uncomment their blocks in `relay.toml` — see
+**"I want to check bridge health from my phone."** Enable the built-in
+commands (uncomment their blocks in `relay.toml` — see
 [`COMMANDS.md`](COMMANDS.md)) and send `/uptime` or `/stats`.
+
+**"I want to see where my token spend is going."** Enable `[usage]` and
+`/usage` (see "Token usage dashboard" above) and send `/usage 7d`.
 
 **"I want a custom in-chat shortcut that still goes through the agent."**
 Add a `[commands.<name>]` table with `mode = "forward"` (or omit `mode`)

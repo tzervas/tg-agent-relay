@@ -132,6 +132,26 @@ with ANY agent using ANY harness, maximum portability + usability.
   any failure; `tg-send.sh` itself retries a Telegram-side HTML-parse
   rejection once as plain text — a message is never dropped nor sent with
   broken markup, and every fallback is logged via `.metrics.log`.
+- **Opt-in token usage dashboard (v0.4.0).** `lib/usage_ingest.py` +
+  `[usage]` in `relay.toml`: an OPT-IN (`enabled = false` by default),
+  best-effort token-usage aggregation by **provider** (inferred from the
+  model id), **model**, and **project**, over a harness's local
+  session-transcript logs. A **source-adapter abstraction**
+  (`[usage].source`) ships one concrete adapter today — Claude Code's own
+  `~/.claude/projects/**/*.jsonl` — so other harnesses can point
+  `[usage].projects_dir` at their own compatible transcript directory
+  without a caller changing. `lib/dashboard_render.py` gained token-by-
+  model/provider(share)/project bars plus an over-time trend (when
+  timestamps allow), appended to `/dashboard` when `[usage].enabled =
+  true` and available standalone via the new `/usage` command
+  (`handlers/usage.sh`) — same image-with-text-fallback, never-fails-to-
+  answer contract as `/dashboard`. Window is configurable (`today` /
+  `all` / `<N>d` / `<N>h`, default `7d`), with `[usage].providers`/
+  `.models` display toggles. **Privacy is load-bearing:** the aggregate
+  cache is written under a gitignored `.usage/` (plus `*.usage.json` and
+  `usage-cache/*` patterns), never committed, and never transmitted
+  anywhere but this relay's own allowlisted Telegram chat; test fixtures
+  are synthetic/fabricated data only, never real usage.
 
 ## Next
 

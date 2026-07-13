@@ -69,11 +69,13 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
+    ln -s "$REPO_ROOT/lib/usage_ingest.py" "$dir/lib/usage_ingest.py"
     ln -s "$REPO_ROOT/handlers/example-echo.sh" "$dir/handlers/example-echo.sh"
     ln -s "$REPO_ROOT/handlers/dashboard.sh" "$dir/handlers/dashboard.sh"
     ln -s "$REPO_ROOT/handlers/stats.sh" "$dir/handlers/stats.sh"
     ln -s "$REPO_ROOT/handlers/uptime.sh" "$dir/handlers/uptime.sh"
     ln -s "$REPO_ROOT/handlers/help.sh" "$dir/handlers/help.sh"
+    ln -s "$REPO_ROOT/handlers/usage.sh" "$dir/handlers/usage.sh"
 
     cat > "$dir/tg-send.sh" <<'MOCK'
 #!/bin/bash
@@ -102,7 +104,7 @@ for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
          lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
-         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
+         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
     else
@@ -115,7 +117,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
              lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
-             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh; do
+             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
         else
@@ -583,6 +585,51 @@ else
     fail "handlers/help.sh lists both forwarded and relay-handled commands" "$HELP_OUT"
 fi
 rm -rf "$BRIDGE10"
+
+# ============================================================================
+echo "== handlers/usage.sh: DEFAULT OFF (opt-in) - no relay.toml at all -> disabled reply, never a crash =="
+BRIDGE11="$(setup_temp_bridge)"
+"$BRIDGE11/handlers/usage.sh" "/usage" >/dev/null 2>&1
+USAGE_OFF_OUT="$(recorded "$BRIDGE11")"
+if [[ "$USAGE_OFF_OUT" == *"disabled"* ]]; then
+    ok "handlers/usage.sh with no relay.toml replies that usage tracking is disabled (never silent, never enabled by accident)"
+else
+    fail "handlers/usage.sh with no relay.toml replies that usage tracking is disabled" "$USAGE_OFF_OUT"
+fi
+rm -rf "$BRIDGE11"
+
+echo "== handlers/usage.sh: [usage].enabled = true against the SYNTHETIC fixture tree =="
+BRIDGE12="$(setup_temp_bridge)"
+cat > "$BRIDGE12/relay.toml" <<TOML
+[usage]
+enabled = true
+source = "claude-code"
+projects_dir = "$REPO_ROOT/tests/fixtures/usage-synthetic"
+window = "all"
+TOML
+"$BRIDGE12/handlers/usage.sh" "/usage" >/dev/null 2>&1
+USAGE_ON_OUT="$(recorded "$BRIDGE12")"
+# No BOT_TOKEN in this offline bridge -> the IMAGE path's sendPhoto is a
+# silent no-op (same harmless-before-setup contract as handlers/dashboard.sh);
+# with no matplotlib in the interpreter it takes the TEXT path, which the
+# mock DOES record.
+if [[ -n "$USAGE_ON_OUT" ]]; then
+    ok "handlers/usage.sh enabled sends a real token-usage reply (text fallback) over the synthetic fixture tree"
+else
+    if python3 -c "import matplotlib" >/dev/null 2>&1; then
+        ok "handlers/usage.sh enabled took the image path (silent no-op with no BOT_TOKEN, as designed)"
+    else
+        fail "handlers/usage.sh enabled sends a real token-usage reply" "no output recorded"
+    fi
+fi
+# Never leaves an un-gitignored artifact behind - the cache dir must exist
+# under .usage/ (matches .gitignore's "Token-usage cache/data" block).
+if [[ -f "$BRIDGE12/.usage/usage-summary.json" ]]; then
+    ok "handlers/usage.sh writes its cache under .usage/ (the gitignored path)"
+else
+    fail "handlers/usage.sh writes its cache under .usage/" "no cache file found"
+fi
+rm -rf "$BRIDGE12"
 
 # ============================================================================
 echo "== lib/tts.sh + tg-send.sh: self-hosted TTS pipeline (offline, stubbed engines) =="
@@ -1273,6 +1320,19 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 else
     printf 'SKIP  python3 not installed - skipping aggregation unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== lib/usage_ingest.py + lib/dashboard_render.py: Python unit tests (opt-in token-usage aggregation, SYNTHETIC fixtures only) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(python3 "$REPO_ROOT/tests/test_usage_ingest.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "python3 tests/test_usage_ingest.py"
+    else
+        fail "python3 tests/test_usage_ingest.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping usage-ingest unit tests (never-silent: this line IS the record)\n'
 fi
 
 # ============================================================================

@@ -2,7 +2,7 @@
 
 **Status: shipped.** `tg-poll.sh`'s `dispatch_command()` routes a matched
 `[commands.<name>]` to a local handler instead of forwarding it to the
-agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`). Four
+agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`). Five
 real handlers ship in this directory:
 
 - **`dashboard.sh`** — a multi-panel metrics dashboard: header stat row,
@@ -10,7 +10,8 @@ real handlers ship in this directory:
   matplotlib PNG (dark-friendly, mobile-legible) via `sendPhoto` when
   matplotlib is available, or a unicode/text dashboard via `sendMessage`
   otherwise — never fails to send something. Optional trailing window
-  override, e.g. `/dashboard 48` for the last 48 hours.
+  override, e.g. `/dashboard 48` for the last 48 hours. Also appends
+  token-usage panels when `[usage].enabled = true` (see `usage.sh` below).
 - **`stats.sh`** — the key numbers only, as plain text (lighter than
   `/dashboard`). Same window override.
 - **`uptime.sh`** — how long the poll daemon (`tg-poll.sh`) has been
@@ -19,10 +20,21 @@ real handlers ship in this directory:
 - **`help.sh`** — lists every configured command (relay-handled +
   forwarded), read live from `relay.toml` so it never drifts from what's
   actually enabled.
+- **`usage.sh`** — an OPT-IN (`[usage].enabled = true`, default off) token
+  USAGE dashboard: tokens by provider/model/project, over `lib/usage_ingest.py`'s
+  aggregation of a harness's local session-transcript logs (one adapter
+  ships today, Claude Code's own `~/.claude/projects/**/*.jsonl`). Same
+  image-with-text-fallback contract as `dashboard.sh`. **PRIVACY:**
+  everything reads/writes stays local and gitignored — see
+  `docs/USAGE.md`'s "Token usage dashboard" section before enabling it.
 
-All four read `.metrics.log` (via `lib/metrics_agg.py`, the pure/testable
-aggregation module) and are registered in `relay.toml.example`. This file
-documents the contract a new handler follows.
+`dashboard.sh`/`stats.sh`/`uptime.sh`/`help.sh` read `.metrics.log` (via
+`lib/metrics_agg.py`, the pure/testable aggregation module); `usage.sh`
+(and `dashboard.sh`'s optional usage panels) read a harness's local
+transcript logs via `lib/usage_ingest.py` (a separate, opt-in aggregation
+module — see its module docstring for the source-adapter contract). All
+five are registered in `relay.toml.example`. This file documents the
+contract a new handler follows.
 
 ## Why this exists
 
