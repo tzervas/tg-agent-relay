@@ -1,4 +1,18 @@
-"""Routing facade — re-exports lib/routing.py + RouteResult protocol type."""
+"""Routing — project/backend resolve with shell parity (issue #24).
+
+Join API (stable, docs/AGENT_INTERFACES.md):
+  resolve(cfg, chat_id, thread_id, text) -> RouteResult
+  project_from_cwd(cfg, cwd) -> str
+  lookup_chat(cfg, backend, project) -> tuple[str, str]
+  RouteResult.as_pipe() -> "backend|project|text|match_kind"
+
+Implementation lives in lib/routing.py (pure functions); this module wraps
+results as RouteResult and re-exports helpers for package consumers.
+
+CLI:
+  python -m tg_agent_relay.cli route --config cfg.json --chat-id -1 --text '@grok hi'
+  python -m tg_agent_relay.routing resolve --config cfg.json --chat-id -1 --text hi
+"""
 
 from __future__ import annotations
 
@@ -14,53 +28,36 @@ if str(_LIB) not in sys.path:
 
 import routing as _routing  # type: ignore  # noqa: E402
 
+# Re-export pure helpers for direct use / tests
+chat_binding = _routing.chat_binding
+strip_prefix = _routing.strip_prefix
+has_routing_config = _routing.has_routing_config
+lookup_project = _routing.lookup_project
+project_worktree = _routing.project_worktree
+format_tag = _routing.format_tag
+inbound_tag = _routing.inbound_tag
+
 
 def resolve(cfg: dict[str, Any], chat_id: str, thread_id: str, text: str) -> RouteResult:
+    """Resolve inbound message to backend/project/text/match_kind."""
     b, p, t, k = _routing.resolve(cfg, chat_id, thread_id, text)
     return RouteResult(backend=b, project=p, text=t, match_kind=k)
 
 
 def project_from_cwd(cfg: dict[str, Any], cwd: str) -> str:
+    """Map filesystem path to longest-matching project slug."""
     return _routing.project_from_cwd(cfg, cwd)
 
 
-def strip_prefix(cfg: dict[str, Any], text: str) -> tuple[str, str, str] | None:
-    return _routing.strip_prefix(cfg, text)
-
-
-def chat_binding(cfg: dict[str, Any], chat_id: str, thread_id: str = "") -> dict | None:
-    return _routing.chat_binding(cfg, chat_id, thread_id)
-
-
 def lookup_chat(cfg: dict[str, Any], backend: str, project: str = "") -> tuple[str, str]:
-    """Return (chat_id, thread_id) using same preference as shell route_lookup_chat."""
-    chats = cfg.get("chats") or []
-    if not isinstance(chats, list):
-        return "", ""
+    """Return (chat_id, thread_id) using shell route_lookup_chat preference order."""
+    return _routing.lookup_chat(cfg, backend, project)
 
-    def match(pred):
-        for c in chats:
-            if isinstance(c, dict) and pred(c):
-                return str(c.get("chat_id", "")), str(c.get("thread_id") or "")
-        return None
 
-    if project and backend:
-        hit = match(
-            lambda c: (
-                str(c.get("project") or "") == project and str(c.get("backend") or "") == backend
-            )
-        )
-        if hit:
-            return hit
-    if project:
-        hit = match(lambda c: str(c.get("project") or "") == project and not c.get("backend"))
-        if hit:
-            return hit
-        hit = match(lambda c: str(c.get("project") or "") == project)
-        if hit:
-            return hit
-    if backend:
-        hit = match(lambda c: str(c.get("backend") or "") == backend)
-        if hit:
-            return hit
-    return "", ""
+def main(argv: list[str] | None = None) -> int:
+    """CLI shim — same commands as lib/routing.py main."""
+    return _routing.main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
