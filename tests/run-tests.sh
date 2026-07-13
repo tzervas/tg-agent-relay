@@ -123,7 +123,7 @@ for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
          lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
-         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
+         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh handlers/project.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
     else
@@ -136,7 +136,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
              lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
-             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
+             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh handlers/project.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
         else
@@ -2475,6 +2475,13 @@ if command -v python3 >/dev/null 2>&1; then
     else
         fail "relay_python tests/test_routing_tables.py" "$PY_OUT"
     fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_project_bind.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_project_bind.py"
+    else
+        fail "relay_python tests/test_project_bind.py" "$PY_OUT"
+    fi
 else
     printf 'SKIP  python3 not installed - skipping package interface unit tests\n'
 fi
@@ -2582,7 +2589,112 @@ load_relay_config "$RCFG"
 assert_eq "project-only + @grok" "grok|mycelium|hi|chat" "$(route_resolve -100999 3 '@grok hi')"
 assert_eq "project-only default backend" "claude|mycelium|hello|chat" "$(route_resolve -100999 3 'hello')"
 assert_eq "project_from_cwd" "mycelium" "$(project_from_cwd /tmp/mycelium-proj/src)"
+# Adapter contract: cwd → project → reverse-lookup room (forum topic)
+assert_eq "route_lookup_chat project-only room" "-100999|3" "$(route_lookup_chat claude mycelium)"
 rm -f "$RCFG"
+
+# ============================================================================
+echo "== handlers/project.sh: bind/unbind overlay (negative chat_id, merge) =="
+BRIDGE_PB="$(setup_temp_bridge)"
+cat > "$BRIDGE_PB/relay.toml" <<'EOF'
+[routing]
+default_backend = "claude"
+[backends.claude]
+prefixes = ["@claude"]
+tag = "claude"
+[backends.grok]
+prefixes = ["@grok"]
+tag = "grok"
+[projects.mycelium]
+root = "/tmp/mycelium-proj"
+default_backend = "claude"
+[[chats]]
+chat_id = -100
+backend = "claude"
+project = "from-toml"
+EOF
+# Forum topic bind with large negative supergroup id
+export RELAY_CHAT_ID="-1001234567890"
+export RELAY_THREAD_ID="7"
+"$BRIDGE_PB/handlers/project.sh" "/project bind mycelium" >/dev/null 2>&1
+OV="$BRIDGE_PB/.chats.d/bindings.json"
+if [[ -f "$OV" ]] && jq -e '.chats[] | select(.chat_id == -1001234567890 and .thread_id == 7 and .project == "mycelium")' "$OV" >/dev/null 2>&1; then
+    ok "project bind: negative chat_id + thread_id written to overlay"
+else
+    fail "project bind: negative chat_id + thread_id written to overlay" "$(cat "$OV" 2>/dev/null || echo missing)"
+fi
+# load_relay_config merge: overlay + static
+export RELAY_CHATS_OVERLAY="$OV"
+load_relay_config "$BRIDGE_PB/relay.toml"
+assert_eq "project bind: route_resolve sticky topic" \
+    "claude|mycelium|hello|chat" \
+    "$(route_resolve -1001234567890 7 'hello')"
+assert_eq "project bind: static [[chats]] still present" \
+    "claude|from-toml|x|chat" \
+    "$(route_resolve -100 '' 'x')"
+assert_eq "project bind: reverse lookup hits forum room" \
+    "-1001234567890|7" \
+    "$(route_lookup_chat grok mycelium)"
+# Re-bind same room → upsert project
+"$BRIDGE_PB/handlers/project.sh" "/project bind other" >/dev/null 2>&1
+assert_eq "project re-bind upserts project slug" \
+    "other" \
+    "$(jq -r '.chats[] | select(.chat_id == -1001234567890 and .thread_id == 7) | .project' "$OV")"
+# Group-level bind (no thread)
+export RELAY_THREAD_ID=""
+export RELAY_CHAT_ID="-100999"
+"$BRIDGE_PB/handlers/project.sh" "project bind group-proj" >/dev/null 2>&1
+if jq -e '.chats[] | select(.chat_id == -100999 and (.thread_id == null) and .project == "group-proj")' "$OV" >/dev/null 2>&1; then
+    ok "project bind: group-level thread_id null"
+else
+    fail "project bind: group-level thread_id null" "$(cat "$OV")"
+fi
+# Unbind forum topic only
+export RELAY_CHAT_ID="-1001234567890"
+export RELAY_THREAD_ID="7"
+"$BRIDGE_PB/handlers/project.sh" "/project unbind" >/dev/null 2>&1
+if jq -e '.chats | map(select(.chat_id == -1001234567890 and .thread_id == 7)) | length == 0' "$OV" >/dev/null 2>&1 \
+    && jq -e '.chats[] | select(.chat_id == -100999)' "$OV" >/dev/null 2>&1; then
+    ok "project unbind: removes only matching room"
+else
+    fail "project unbind: removes only matching room" "$(cat "$OV")"
+fi
+# Missing overlay: first bind creates it
+rm -rf "$BRIDGE_PB/.chats.d"
+export RELAY_CHAT_ID="-1"
+export RELAY_THREAD_ID=""
+"$BRIDGE_PB/handlers/project.sh" "/project bind fresh" >/dev/null 2>&1
+if [[ -f "$BRIDGE_PB/.chats.d/bindings.json" ]] \
+    && jq -e '.chats[0].project == "fresh" and .chats[0].chat_id == -1' "$BRIDGE_PB/.chats.d/bindings.json" >/dev/null 2>&1; then
+    ok "project bind: creates missing overlay"
+else
+    fail "project bind: creates missing overlay" "$(cat "$BRIDGE_PB/.chats.d/bindings.json" 2>/dev/null || echo missing)"
+fi
+# Corrupt overlay: refuse, leave file untouched
+printf '{bad' > "$BRIDGE_PB/.chats.d/bindings.json"
+BEFORE_CORRUPT="$(cat "$BRIDGE_PB/.chats.d/bindings.json")"
+clear_recorded "$BRIDGE_PB"
+export RELAY_CHAT_ID="-2"
+"$BRIDGE_PB/handlers/project.sh" "/project bind nope" >/dev/null 2>&1
+AFTER_CORRUPT="$(cat "$BRIDGE_PB/.chats.d/bindings.json")"
+REC="$(recorded "$BRIDGE_PB")"
+if [[ "$BEFORE_CORRUPT" == "$AFTER_CORRUPT" ]] && [[ "$REC" == *"corrupt"* || "$REC" == *"Corrupt"* || "$REC" == *"not a JSON"* ]]; then
+    ok "project bind: corrupt overlay refused, file unchanged"
+else
+    fail "project bind: corrupt overlay refused, file unchanged" "rec=[$REC] after=[$AFTER_CORRUPT]"
+fi
+# Invalid chat id
+clear_recorded "$BRIDGE_PB"
+printf '%s\n' '{"chats":[]}' > "$BRIDGE_PB/.chats.d/bindings.json"
+export RELAY_CHAT_ID="not-numeric"
+"$BRIDGE_PB/handlers/project.sh" "/project bind x" >/dev/null 2>&1
+if [[ "$(recorded "$BRIDGE_PB")" == *"Invalid chat_id"* ]]; then
+    ok "project bind: rejects non-numeric chat_id"
+else
+    fail "project bind: rejects non-numeric chat_id" "$(recorded "$BRIDGE_PB")"
+fi
+unset RELAY_CHAT_ID RELAY_THREAD_ID RELAY_CHATS_OVERLAY
+rm -rf "$BRIDGE_PB"
 
 # Hybrid context exclusive selection
 if command -v python3 >/dev/null 2>&1; then

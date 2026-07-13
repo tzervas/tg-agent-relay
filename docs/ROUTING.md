@@ -180,3 +180,85 @@ Writes `~/.grok/hooks/tg-agent-relay.json` only (merge-safe with other Grok hook
 Relay-handled commands (`/dashboard`, `/usage`, …) still cost zero model
 tokens and reply to the **originating** chat (`RELAY_CHAT_ID` from the
 poller), not only the legacy `ALLOWED_CHAT_ID`.
+
+## End-to-end checklist: project rooms
+
+Use this offline-friendly checklist when wiring **project rooms** (forum
+topics or whole groups). Auto-creating Telegram topics is **out of scope**
+— create rooms/topics yourself, then bind.
+
+### Prerequisites
+
+- [ ] Bot in the target supergroup (or group); you are `ALLOWED_USER_ID`.
+- [ ] `[projects.<slug>]` defined in `relay.toml` with `root = "…"` (for
+      hook `project_from_cwd` reverse-lookup).
+- [ ] At least one `[backends.*]` (or sticky `backend` on the bind).
+- [ ] Relay-handled `/project` enabled (copy `[commands.project]` from
+      `relay.toml.example`).
+- [ ] `jq` available on the host (overlay writes need it).
+
+### Pattern A — forum topics (one group, many topics)
+
+1. [ ] Create a supergroup, enable **Topics**, add the bot.
+2. [ ] Create one topic per repo (manually — the relay does not create topics).
+3. [ ] Inside topic *Mycelium*: `/project bind mycelium`
+4. [ ] Expect: `✅ Bound project mycelium … chat_id=<neg> thread_id=<n>`
+5. [ ] Confirm overlay: `.chats.d/bindings.json` has that `chat_id` +
+      `thread_id` + `"project":"mycelium"` (gitignored).
+6. [ ] In the same topic: `/project here` → `match_kind=chat`, project
+      `mycelium`.
+7. [ ] Send `@grok status` (or default backend text) → sticky project kept;
+      backend from prefix or project/global default.
+8. [ ] In a **different** topic (unbound): message must **not** inherit the
+      mycelium sticky bind.
+
+### Pattern B — separate group per project
+
+1. [ ] Create a group for the repo, add the bot.
+2. [ ] In that group (no topic / General): `/project bind mycelium`
+3. [ ] Expect bind with `thread_id=none` (overlay stores `"thread_id": null`).
+4. [ ] `/project here` → project `mycelium`, `match_kind=chat`.
+5. [ ] Prefix still works: `@claude …` keeps sticky project, switches backend.
+
+### Bind / unbind / list
+
+| Command | Expect |
+|---|---|
+| `/project` or `/project list` | Lists `[projects.*]` + bound rooms (static + overlay). |
+| `/project bind <slug>` | Upserts overlay row for **this** `chat_id`+`thread_id`. Re-bind same room with a new slug replaces the project. |
+| `/project unbind` | Removes **only** this room’s overlay row (static `[[chats]]` unchanged). |
+| `/project here` | Shows `backend\|project\|text\|kind` for the current room. |
+
+Negative supergroup `chat_id` values (e.g. `-100…`) must work. Missing
+overlay is created on first successful bind; a **corrupt** overlay is
+refused (not silently wiped) — fix or delete `.chats.d/bindings.json`.
+
+### Sticky project + prefix
+
+- [ ] Project-only bind (`backend` unset): room is sticky on **project**;
+      unprefixed text uses `[projects.<slug>].default_backend` or
+      `[routing].default_backend`.
+- [ ] Prefixed text inside the room (`@grok …`) changes **backend** only;
+      project stays the bound slug.
+- [ ] Unified DM (no sticky `[[chats]]` / overlay row): prefixes route
+      backend as usual; no forced project unless backend default sets one.
+
+### Hook reverse-lookup (adapters)
+
+Hooks set `RELAY_PROJECT` from cwd via `project_from_cwd`, then
+`relay-notify.sh` reverse-looks up the room with `route_lookup_chat`:
+
+1. [ ] Working tree under `[projects.mycelium].root` (or a configured
+      worktree path).
+2. [ ] Fire a hook (Claude / Grok) with no explicit `RELAY_CHAT_ID`.
+3. [ ] Ping lands in the bound forum topic or group for `mycelium`, not
+      only the legacy `ALLOWED_CHAT_ID`.
+
+### Overlay merge order (regression)
+
+Effective chats = static `[[chats]]` **minus** any row whose
+`chat_id|thread_id` key appears in `.chats.d/bindings.json`, **plus** all
+overlay rows. Overlay wins on conflict; other static rows stay.
+
+Offline tests: `tests/test_project_bind.py`, `tests/test_routing_tables.py`,
+and the `/project` bind section in `tests/run-tests.sh`.
