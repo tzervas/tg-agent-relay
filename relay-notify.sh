@@ -35,6 +35,14 @@
 # defaults, so this script's plain-text mode is byte-for-byte what
 # tg-send.sh alone already did.
 #
+# TG_SEND_SOURCE passthrough: if the caller (typically an adapter) exported
+# TG_SEND_SOURCE=hook to mark this as an automated/unattended event, it's a
+# real environment variable and so is inherited automatically by this
+# script's own call to tg-send.sh below - no extra flag or plumbing needed
+# here. See tg-send.sh's header ("Hook audio") and adapters/README.md
+# step 6 for what it changes (a voice read-through for long/paginated
+# pings, relay.toml [tts].hook_voice).
+#
 # [generic].format (structured/non---raw mode only - see render_template's
 # header in lib/relay-common.sh for the substitution rules, shared with
 # adapters/claude-code.sh's per-event [claude_code.<Event>].format):

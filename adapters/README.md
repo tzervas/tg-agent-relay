@@ -72,17 +72,29 @@ Claude Code events.
    reads which of your adapter's events are `enabled` in `relay.toml` and
    idempotently, merge-not-clobber writes/removes the matching entries in
    your harness's own config file via `jq` - never a raw overwrite.
-6. **Always exit 0** unless your harness genuinely needs the adapter's
+6. **Tag automated/unattended events with `TG_SEND_SOURCE=hook`** if your
+   harness fires events without a human directly typing them (the way
+   Claude Code's hooks do) - `TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh"
+   --raw "$SUMMARY"` (see `claude-code.sh`'s last line). It's a real
+   environment variable, so it passes straight through relay-notify.sh's
+   own call to `tg-send.sh` with no extra plumbing needed on either
+   script's part. `tg-send.sh` uses it to give these pings a voice
+   read-through even when long/paginated (`relay.toml [tts].hook_voice`) -
+   see `tg-send.sh`'s header. Leave it unset for a send that's already
+   effectively a direct/manual one (e.g. relaying a human-authored
+   message) - direct sends keep the original, stricter TTS eligibility
+   rule.
+7. **Always exit 0** unless your harness genuinely needs the adapter's
    exit code to signal something back to it (Claude Code's `SubagentStop`
    hook is advisory - a nonzero exit there would *block* the subagent from
    stopping, which is why `claude-code.sh` never does that). Never let a
    notification failure disrupt the harness it's observing.
-7. **Wire it into your harness's own hook/event config** pointing at your
+8. **Wire it into your harness's own hook/event config** pointing at your
    new adapter script (or, if your harness supports it, a shim script the
    way `hook-notify.sh` shims `claude-code.sh` - handy if the harness's
    config format is finicky about the exact command path and you want a
    stable indirection point).
-8. **Test offline.** See `tests/` at the repo root - feed a sample event
+9. **Test offline.** See `tests/` at the repo root - feed a sample event
    payload to your adapter with `tg-send.sh` swapped for a mock that
    records its argument instead of hitting the network (the pattern every
    existing test in `tests/` uses).

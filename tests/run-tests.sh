@@ -647,11 +647,14 @@ echo "== lib/tts.sh + tg-send.sh: self-hosted TTS pipeline (offline, stubbed eng
 # CURRENT PATH before we override it) plus whatever fake piper/espeak-ng/
 # ffmpeg/curl a scenario adds - so "no engine installed" is genuinely true
 # in the test even on a host that has real piper/espeak-ng/ffmpeg on its
-# normal PATH.
+# normal PATH. Includes `awk` (used by _tts_pitch_filter's semitone math
+# and tg-send.sh's send_interval_ms-to-seconds conversion) and `flock`
+# (tg-send.sh's serialized-send-queue lock) - genuinely essential, not
+# optional, for the scenarios that exercise those paths.
 tts_essential_path() {
     local dir="$1" tool real
     for tool in mktemp rm jq python3 dirname basename cat date head wc \
-                grep sed cut tr mkdir env true false expr sleep; do
+                grep sed cut tr mkdir env true false expr sleep awk flock; do
         real="$(command -v "$tool" 2>/dev/null || true)"
         [[ -n "$real" ]] && ln -sf "$real" "$dir/$tool" 2>/dev/null
     done
@@ -950,6 +953,175 @@ else
 fi
 rm -rf "$TTS7" "$STUB7" "$LOG7"
 
+echo "== tg-send.sh: [tts].hook_voice - automated hook pings get a voice read-through (v0.5.1) =="
+# These exercise TG_SEND_SOURCE=hook (what adapters/claude-code.sh exports
+# before calling relay-notify.sh -> tg-send.sh - see that adapter's last
+# line) against the REAL tg-send.sh, not a mock - the fix under test.
+
+# -- 8: hook + default hook_voice (true) + a message OVER max_chars but
+# -- SINGLE-PAGE -> a direct send would stay text-only (see TTS5 above);
+# -- a hook send gets voice too.
+TTS8="$(setup_tts_bridge)"
+cat > "$TTS8/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 10
+TOML
+STUB8="$(mktemp -d)"; tts_essential_path "$STUB8" >/dev/null
+LOG8="$(mktemp -u)"; write_stub_curl "$STUB8" "$LOG8"
+write_stub_espeak "$STUB8"; write_stub_ffmpeg "$STUB8"
+PATH="$STUB8" TG_SEND_SOURCE=hook "$TTS8/tg-send.sh" "this message is definitely longer than ten characters" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG8" && grep -q "sendVoice" "$LOG8"; then
+    ok "hook_voice: hook send over max_chars (single page) still gets voice (default hook_voice=true)"
+else
+    fail "hook_voice: hook send over max_chars still gets voice" "$(cat "$LOG8" 2>/dev/null)"
+fi
+rm -rf "$TTS8" "$STUB8" "$LOG8"
+
+# -- 9: hook + PAGINATED (multi-page) message -> ALL text pages still send
+# -- (never-silent - text is never dropped) AND a voice note also goes
+# -- out (the core fix: TTS7 proved a direct paginated send skips voice
+# -- entirely; a hook send must not).
+TTS9="$(setup_tts_bridge)"
+cat > "$TTS9/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 600
+TOML
+STUB9="$(mktemp -d)"; tts_essential_path "$STUB9" >/dev/null
+LOG9="$(mktemp -u)"; write_stub_curl "$STUB9" "$LOG9"
+write_stub_espeak "$STUB9"; write_stub_ffmpeg "$STUB9"
+LONG_MSG9="$(python3 -c "print('y' * 120)")"
+PATH="$STUB9" TG_SEND_SOURCE=hook TG_PAGE_SIZE=50 "$TTS9/tg-send.sh" "$LONG_MSG9" >/dev/null 2>&1
+SEND_COUNT9="$(grep -c "sendMessage" "$LOG9" 2>/dev/null || echo 0)"
+if [[ "$SEND_COUNT9" -ge 2 ]] && grep -q "sendVoice" "$LOG9"; then
+    ok "hook_voice: a paginated hook ping sends ALL text pages AND a voice note (never-silent text + additive voice)"
+else
+    fail "hook_voice: paginated hook ping - all pages + voice" "pages=$SEND_COUNT9 log=$(cat "$LOG9" 2>/dev/null)"
+fi
+rm -rf "$TTS9" "$STUB9" "$LOG9"
+
+# -- 10: same paginated-hook case but mode="voice-only" -> text STILL
+# -- always sends for a hook (stronger never-silent contract than a
+# -- direct voice-only send, which suppresses text on success - see TTS3).
+TTS10="$(setup_tts_bridge)"
+cat > "$TTS10/relay.toml" <<'TOML'
+[tts]
+mode = "voice-only"
+engine = "auto"
+max_chars = 600
+TOML
+STUB10="$(mktemp -d)"; tts_essential_path "$STUB10" >/dev/null
+LOG10="$(mktemp -u)"; write_stub_curl "$STUB10" "$LOG10"
+write_stub_espeak "$STUB10"; write_stub_ffmpeg "$STUB10"
+LONG_MSG10="$(python3 -c "print('z' * 120)")"
+PATH="$STUB10" TG_SEND_SOURCE=hook TG_PAGE_SIZE=50 "$TTS10/tg-send.sh" "$LONG_MSG10" >/dev/null 2>&1
+SEND_COUNT10="$(grep -c "sendMessage" "$LOG10" 2>/dev/null || echo 0)"
+if [[ "$SEND_COUNT10" -ge 2 ]] && grep -q "sendVoice" "$LOG10"; then
+    ok "hook_voice: mode=voice-only + hook -> text STILL always sends (never-silent), voice additive"
+else
+    fail "hook_voice: mode=voice-only + hook - text always sends" "pages=$SEND_COUNT10 log=$(cat "$LOG10" 2>/dev/null)"
+fi
+rm -rf "$TTS10" "$STUB10" "$LOG10"
+
+# -- 11: hook_voice = false -> restores the pre-v0.5.1 shape: a paginated
+# -- hook ping is text-only, same as a direct send (TTS7).
+TTS11="$(setup_tts_bridge)"
+cat > "$TTS11/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 600
+hook_voice = false
+TOML
+STUB11="$(mktemp -d)"; tts_essential_path "$STUB11" >/dev/null
+LOG11="$(mktemp -u)"; write_stub_curl "$STUB11" "$LOG11"
+write_stub_espeak "$STUB11"; write_stub_ffmpeg "$STUB11"
+LONG_MSG11="$(python3 -c "print('w' * 120)")"
+PATH="$STUB11" TG_SEND_SOURCE=hook TG_PAGE_SIZE=50 "$TTS11/tg-send.sh" "$LONG_MSG11" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG11" && ! grep -q "sendVoice\|sendAudio" "$LOG11"; then
+    ok "hook_voice=false: a paginated hook ping is text-only again (knob fully disables the relaxed rule)"
+else
+    fail "hook_voice=false: paginated hook ping stays text-only" "$(cat "$LOG11" 2>/dev/null)"
+fi
+rm -rf "$TTS11" "$STUB11" "$LOG11"
+
+# -- 12: hook_voice_max_chars truncates the SPOKEN text (piper stdin) but
+# -- leaves the sent TEXT message completely unabridged, and logs the
+# -- truncation (never-silent).
+TTS12="$(setup_tts_bridge)"
+cat > "$TTS12/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+hook_voice_max_chars = 20
+# formatting off -> the sent text is byte-identical to $MSG (no soft-wrap
+# line breaks), so this test's substring checks aren't entangled with the
+# unrelated structured-formatting layer (see its own e2e tests elsewhere).
+[format]
+enabled = false
+TOML
+STUB12="$(mktemp -d)"; tts_essential_path "$STUB12" >/dev/null
+LOG12="$(mktemp -u)"; write_stub_curl "$STUB12" "$LOG12"
+ESPEAK_LOG12="$(mktemp -u)"
+cat > "$STUB12/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG12"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB12/espeak-ng"
+write_stub_ffmpeg "$STUB12"
+LONG_MSG12="a message that is much longer than the twenty-char hook_voice_max_chars cap configured above"
+PATH="$STUB12" TG_SEND_SOURCE=hook "$TTS12/tg-send.sh" "$LONG_MSG12" >/dev/null 2>&1
+if grep -qF "$LONG_MSG12" "$LOG12" 2>/dev/null \
+    && grep -q "a message that" "$ESPEAK_LOG12" 2>/dev/null \
+    && ! grep -qF "$LONG_MSG12" "$ESPEAK_LOG12" 2>/dev/null; then
+    ok "hook_voice_max_chars: TEXT sends the full message; spoken text is truncated to the cap"
+else
+    fail "hook_voice_max_chars: text full / voice truncated" "curl=$(cat "$LOG12" 2>/dev/null) espeak=$(cat "$ESPEAK_LOG12" 2>/dev/null)"
+fi
+if grep -q "$(printf '\ttts\thook_voice_truncated\t')" "$TTS12/.metrics.log" 2>/dev/null; then
+    ok "hook_voice_max_chars: truncation is logged to .metrics.log (never-silent)"
+else
+    fail "hook_voice_max_chars: truncation logged" "$(cat "$TTS12/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$TTS12" "$STUB12" "$LOG12" "$ESPEAK_LOG12"
+
+# -- 13: a DIRECT (non-hook) send is completely unaffected by hook_voice
+# -- being on - the original max_chars/pagination rule still applies (this
+# -- re-proves TTS5's exact scenario still holds with hook_voice=true
+# -- configured, i.e. hook_voice never leaks into non-hook sends).
+TTS13="$(setup_tts_bridge)"
+cat > "$TTS13/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "auto"
+max_chars = 10
+hook_voice = true
+TOML
+STUB13="$(mktemp -d)"; tts_essential_path "$STUB13" >/dev/null
+LOG13="$(mktemp -u)"; write_stub_curl "$STUB13" "$LOG13"
+write_stub_espeak "$STUB13"; write_stub_ffmpeg "$STUB13"
+PATH="$STUB13" "$TTS13/tg-send.sh" "this message is definitely longer than ten characters" >/dev/null 2>&1
+if grep -q "sendMessage" "$LOG13" && ! grep -q "sendVoice\|sendAudio" "$LOG13"; then
+    ok "hook_voice=true: a DIRECT (non-hook) send keeps the original max_chars rule, unaffected"
+else
+    fail "hook_voice=true: direct send unaffected" "$(cat "$LOG13" 2>/dev/null)"
+fi
+rm -rf "$TTS13" "$STUB13" "$LOG13"
+
 echo "== lib/tts.sh: tts_select_engine() unit tests (engine preference/fallback) =="
 # shellcheck disable=SC1091
 source "$REPO_ROOT/lib/tts.sh"
@@ -1048,6 +1220,127 @@ fi
 RELAY_CONFIG_JSON="{}"
 rm -rf "$STUB_LS" "$FAKE_MODEL_LS"
 rm -f "$LOG_LS" "$OUT_WAV_LS"
+
+# ============================================================================
+echo "== tg-send.sh: serialized send queue - guaranteed ordering via flock (v0.5.1) =="
+# Two concurrent tg-send.sh invocations against the REAL script (mode=off,
+# so exactly one sendMessage curl call per invocation, no TTS noise). The
+# stub curl records a START timestamp (ns) BEFORE a short sleep and an END
+# timestamp AFTER, so the log directly proves (or disproves) mutual
+# exclusion: with the flock working, invocation B's START can only appear
+# after invocation A's END - never interleaved. A is launched first, with
+# a small head start, so it should also win the race for the lock (an
+# invocation-order proxy for "hook events fired moments apart stay in
+# order" - the maintainer's explicitly accepted trade-off).
+
+command -v flock >/dev/null 2>&1 || echo "  (flock not installed on this host - skipping ordering tests)"
+
+if command -v flock >/dev/null 2>&1; then
+    ORD="$(setup_tts_bridge)"
+    cat > "$ORD/relay.toml" <<'TOML'
+[general]
+send_interval_ms = 250
+TOML
+    STUB_ORD="$(mktemp -d)"; tts_essential_path "$STUB_ORD" >/dev/null
+    LOG_ORD="$(mktemp -u)"
+    cat > "$STUB_ORD/curl" <<STUB
+#!/bin/bash
+printf 'START %s %s\n' "\$(date +%s%N)" "\$*" >> "$LOG_ORD"
+sleep 0.15
+printf 'END %s\n' "\$(date +%s%N)" >> "$LOG_ORD"
+printf '{"ok":true,"result":{}}'
+exit 0
+STUB
+    chmod +x "$STUB_ORD/curl"
+
+    PATH="$STUB_ORD" "$ORD/tg-send.sh" "message ALPHA first" &
+    PID_A=$!
+    sleep 0.05
+    PATH="$STUB_ORD" "$ORD/tg-send.sh" "message BETA second" &
+    PID_B=$!
+    wait "$PID_A" "$PID_B"
+
+    NUM_STARTS="$(grep -c "^START" "$LOG_ORD" 2>/dev/null || echo 0)"
+    NUM_ENDS="$(grep -c "^END" "$LOG_ORD" 2>/dev/null || echo 0)"
+    assert_eq "ordering: exactly 2 sendMessage calls happened (1 per invocation)" "2" "$NUM_STARTS"
+    assert_eq "ordering: exactly 2 calls completed" "2" "$NUM_ENDS"
+
+    # Mutual exclusion: the log's physical line order must strictly
+    # alternate START, END, START, END - a second START before the first
+    # END would mean the two curl calls overlapped (the lock failed to
+    # serialize them).
+    PATTERN="$(grep -oE '^(START|END)' "$LOG_ORD" | tr '\n' ' ')"
+    assert_eq "ordering: sends never overlap (strict START/END alternation - mutual exclusion held)" \
+        "START END START END " "$PATTERN"
+
+    # Order preserved: ALPHA (launched first, with a head start) is the
+    # first START/END pair in the log.
+    FIRST_START_LINE="$(grep "^START" "$LOG_ORD" | head -n1)"
+    if [[ "$FIRST_START_LINE" == *"message ALPHA first"* ]]; then
+        ok "ordering: the earlier-fired invocation (ALPHA) sends before the later one (BETA)"
+    else
+        fail "ordering: ALPHA sends first" "$(cat "$LOG_ORD" 2>/dev/null)"
+    fi
+
+    # send_interval_ms enforcement: the gap between the first call's END
+    # and the second call's START must be >= the configured interval
+    # (250ms), minus a small tolerance for scheduling jitter.
+    END1_NS="$(grep "^END" "$LOG_ORD" | sed -n '1p' | awk '{print $2}')"
+    START2_NS="$(grep "^START" "$LOG_ORD" | sed -n '2p' | awk '{print $2}')"
+    GAP_MS="$(awk -v a="$END1_NS" -v b="$START2_NS" 'BEGIN { printf "%.0f", (b - a) / 1000000 }')"
+    if [[ "$GAP_MS" -ge 200 ]]; then
+        ok "ordering: send_interval_ms is honored (gap=${GAP_MS}ms >= ~250ms configured)"
+    else
+        fail "ordering: send_interval_ms honored" "gap=${GAP_MS}ms (expected >= ~200ms) log=$(cat "$LOG_ORD" 2>/dev/null)"
+    fi
+
+    rm -rf "$ORD" "$STUB_ORD" "$LOG_ORD"
+
+    # -- flock absent -> skip-graceful: sending still succeeds (logged
+    # -- once, never a hard failure) - simulate by hiding flock from PATH
+    # -- entirely (tts_essential_path curates it in for the tests above, so
+    # -- remove just that one symlink here to genuinely simulate a host
+    # -- without util-linux flock installed).
+    ORD2="$(setup_tts_bridge)"
+    STUB_ORD2="$(mktemp -d)"; tts_essential_path "$STUB_ORD2" >/dev/null
+    rm -f "$STUB_ORD2/flock"
+    LOG_ORD2="$(mktemp -u)"; write_stub_curl "$STUB_ORD2" "$LOG_ORD2"
+    PATH="$STUB_ORD2" "$ORD2/tg-send.sh" "no flock on this PATH" >/dev/null 2>&1
+    if grep -q "sendMessage" "$LOG_ORD2" 2>/dev/null; then
+        ok "ordering: flock unavailable -> send still succeeds, unserialized (skip-graceful)"
+    else
+        fail "ordering: flock unavailable -> send still succeeds" "$(cat "$LOG_ORD2" 2>/dev/null)"
+    fi
+    if grep -q "$(printf '\tqueue\tflock_unavailable\t')" "$ORD2/.metrics.log" 2>/dev/null; then
+        ok "ordering: flock-unavailable skip is logged to .metrics.log (never-silent)"
+    else
+        fail "ordering: flock-unavailable skip logged" "$(cat "$ORD2/.metrics.log" 2>/dev/null)"
+    fi
+    rm -rf "$ORD2" "$STUB_ORD2" "$LOG_ORD2"
+fi
+
+echo "== adapters/claude-code.sh: TG_SEND_SOURCE=hook propagates to tg-send.sh (v0.5.1) =="
+# The mock tg-send.sh from setup_temp_bridge only records $MSG, not the
+# environment - swap in a mock that ALSO records TG_SEND_SOURCE, so this
+# proves the adapter->relay-notify.sh->tg-send.sh env-var chain actually
+# carries the tag, independent of tg-send.sh's own TTS logic (already
+# covered above).
+SRC_DIR="$(setup_temp_bridge)"
+cat > "$SRC_DIR/tg-send.sh" <<'MOCK'
+#!/bin/bash
+set -u
+if [[ $# -gt 0 ]]; then MSG="$*"; else MSG="$(cat)"; fi
+d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+printf '%s' "$MSG" > "$d/.recorded"
+printf '%s' "${TG_SEND_SOURCE:-}" > "$d/.recorded-source"
+exit 0
+MOCK
+chmod +x "$SRC_DIR/tg-send.sh"
+echo '{"hook_event_name":"SubagentStop","agent_type":"build","last_assistant_message":"done"}' \
+    | "$SRC_DIR/hook-notify.sh" >/dev/null 2>&1
+assert_eq "TG_SEND_SOURCE=hook reaches tg-send.sh from a Claude Code hook event" \
+    "hook" "$(cat "$SRC_DIR/.recorded-source" 2>/dev/null)"
+rm -rf "$SRC_DIR"
 
 # ============================================================================
 echo "== lib/format.sh: structured-formatting layer (unit tests, sourced directly) =="

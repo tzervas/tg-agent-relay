@@ -45,6 +45,21 @@
 # env var TG_HOOK_MAX_PAGES.
 # hook_max_pages = 6
 
+# v0.5.1+. Guaranteed send ordering: every tg-send.sh invocation serializes
+# under an exclusive flock (.tg-send.lock) - a burst of concurrent hook
+# events (several SubagentStop firing close together) queues up and sends
+# one at a time (text pages + voice note) instead of racing independently
+# against the Telegram API, where network timing gives no ordering
+# guarantee. This is the minimum delay (milliseconds) the lock is held
+# AFTER one send finishes before the next queued invocation may begin -
+# a small, deliberate, accepted pause that also gives Telegram's own
+# delivery a consistent gap to preserve order by. Same as env var
+# TG_SEND_INTERVAL_MS. 0 disables the extra pause (mutual exclusion via
+# flock still applies). Needs `flock` (util-linux; present on essentially
+# every Linux box) - if it's missing, sends proceed unserialized, exactly
+# as before this feature existed, logged once to .metrics.log.
+# send_interval_ms = 350
+
 # --------------------------------------------------------------------------
 # [format] - structured formatting (lib/format.sh), applied to EVERY
 # outbound send (tg-send.sh's curl call - so relay-notify.sh, every
@@ -537,9 +552,33 @@
 #   see above - cadence alone was judged sufficient).
 #
 # max_chars = 600
-#   Do NOT TTS a message longer than this - long reports/dashboards stay
-#   text-only. A paginated (multi-message) send is always skipped for TTS
-#   too, regardless of this value (it's already far over it by construction).
+#   Do NOT TTS a DIRECT/manual message longer than this - long reports/
+#   dashboards stay text-only. A paginated (multi-message) direct send is
+#   always skipped for TTS too, regardless of this value (it's already far
+#   over it by construction). Automated hook pings (below) follow their
+#   own, more permissive rule instead.
+#
+# hook_voice = true
+#   v0.5.1+. Automated/unattended pings - anything an adapter tags with
+#   TG_SEND_SOURCE=hook (Claude Code's SubagentStop/Notification hooks,
+#   today's only shipped adapter) - get a voice read-through even when
+#   long or PAGINATED, where a direct send would stay text-only per
+#   max_chars/pagination above. This exists because hook pings routinely
+#   carry a full agent message and so are routinely over max_chars/
+#   multi-page - without this knob they silently never got voice at all,
+#   which is the exact defect this knob fixes. The TEXT send is completely
+#   unaffected either way (every page still goes out, unabridged, even in
+#   mode = "voice-only" - see hook_voice_max_chars below); this only ever
+#   ADDS a voice note, never removes text. Set `false` to restore the
+#   pre-v0.5.1 shape (hook pings are effectively text-only, same as any
+#   other over-max_chars/paginated message).
+#
+# hook_voice_max_chars = 1500
+#   How much of a long/paginated hook ping is actually SPOKEN - a sensible
+#   read-through, not the whole report (piper/espeak-ng on a huge string
+#   is slow and not a good listen anyway). Only bounds what's passed to
+#   the TTS engine; irrelevant when hook_voice = false. A truncation is
+#   logged to .metrics.log ("tts hook_voice_truncated") - never silent.
 
 # --------------------------------------------------------------------------
 # [dashboard] - shared config for the dashboard/stats relay-handled

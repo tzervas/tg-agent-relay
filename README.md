@@ -484,6 +484,53 @@ recommended cadence, with `pitch` left off) and
 [`SETUP.md`](SETUP.md#voice-messages-tts-optional) for installing piper
 or espeak-ng.
 
+### Hook pings get voice too (v0.5.1)
+
+Automated hook pings (`SubagentStop`, `Notification`, ...) are tagged
+`TG_SEND_SOURCE=hook` by `adapters/claude-code.sh`, and by default get a
+voice read-through even when the ping is long or gets split into several
+`[k/n]` pages — a direct/manual `tg-send.sh` call stays under the
+original, stricter rule (a single page within `max_chars`). This closes
+the exact gap that used to leave every hook ping text-only: hook pings
+routinely carry a full agent message and so are routinely over
+`max_chars`/multi-page.
+
+```toml
+[tts]
+mode = "text+voice"
+hook_voice = true              # default; false restores the old hook-is-text-only shape
+hook_voice_max_chars = 1500    # how much of a long ping is actually SPOKEN
+```
+
+The **text send is never affected** — every page still goes out
+unabridged, even in `mode = "voice-only"` (a hook ping always sends text;
+voice is purely additive). Only the *spoken* text is capped at
+`hook_voice_max_chars` — a sensible read-through, not the whole report; a
+truncation is logged to `.metrics.log` (`tts hook_voice_truncated`).
+Writing your own adapter? Tag any unattended/automated event the same way
+— see `adapters/README.md` step 6.
+
+### Guaranteed send ordering (v0.5.1)
+
+Every `tg-send.sh` invocation serializes under an exclusive `flock` on
+`.tg-send.lock`, so a burst of concurrent sends (several hook events
+firing close together) queue up and go out **one at a time** — each
+send's text pages and voice note complete before the next begins —
+instead of racing independently against the Telegram API, where network
+scheduling gives no ordering guarantee. A small, configurable delay is
+held after each send finishes before the next may begin, so Telegram's
+own delivery also preserves order:
+
+```toml
+[general]
+send_interval_ms = 350   # default; 0 disables the extra pause (mutual
+                          # exclusion via flock still applies)
+```
+
+Needs `flock` (util-linux — present on essentially every Linux box); if
+it's missing, sending proceeds unserialized exactly as before this
+feature existed, logged once to `.metrics.log` (never a hard failure).
+
 ### Per-event message templates
 
 Beyond `enabled`/`prefix`, every `[claude_code.<Event>]` table (and
@@ -531,7 +578,7 @@ define your own.
 | `.env` | **Local-only, gitignored, 0600** — holds the live bot token. Never committed. |
 | `relay.toml.example` | Non-secret config template (committed). Copy to `relay.toml` to customize. |
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
-| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; structured formatting (`[format]`, default ON); optional local TTS voice note (`[tts]`, default off). |
+| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; structured formatting (`[format]`, default ON); optional local TTS voice note (`[tts]`, default off, with a relaxed `hook_voice` rule for `TG_SEND_SOURCE=hook` pings, v0.5.1); every send serializes under a `flock` (`[general] send_interval_ms`, v0.5.1) for guaranteed ordering. |
 | `lib/format.sh` | Structured-formatting layer (`[format]`, v0.3.0, on by default) — dynamic soft-wrap, bolded headers, code boxes (`myc`/`mycelium` first-class), quotes, emphasis, via `parse_mode=HTML`; never-silent fallback to plain text on a bad render or a Telegram-side rejection. |
 | `lib/code_highlight.sh` | Host-highlighted code documents (`[code_highlight]`, v0.5.0) — extends `lib/format.sh`'s fenced-code handling: `mode = "html-doc"` additionally renders each fenced block to a self-contained HTML file via `lib/code_highlight.py`, sent with `sendDocument`, paired with a copyable `<pre>` caption; the always-on inline code box is unaffected either way. Default `mode = "inline-only"` is a no-op. |
 | `lib/code_highlight.py` | `pygments` → self-contained HTML document renderer (`HtmlFormatter(noclasses=True)`, optional dep, skip-graceful like `lib/tts.sh`'s piper/`lib/dashboard_render.py`'s matplotlib — no Pillow needed) — includes a native `MyceliumLexer` (`myc`/`mycelium`, a Declared best-effort lexical approximation) plus pygments' own `get_lexer_by_name` for everything else, with a plain-text fallback for an unrecognized tag. |

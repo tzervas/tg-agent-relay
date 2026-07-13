@@ -360,6 +360,12 @@ case "$EVENT" in
         ;;
 esac
 
-[[ -n "$SUMMARY" ]] && "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+# TG_SEND_SOURCE=hook tags this as an automated hook ping - it's a real
+# environment variable (not a shell-local one), so it's inherited
+# automatically all the way through relay-notify.sh's own call to
+# tg-send.sh with no extra plumbing on either script's part. tg-send.sh
+# uses it to give hook pings a voice read-through even when long/
+# paginated (see its header's "Hook audio" section, relay.toml [tts]).
+[[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
 
 exit 0
