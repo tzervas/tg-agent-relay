@@ -274,12 +274,15 @@ shows every recommended voice (male + female). Then:
 mode = "text+voice"
 engine = "piper"
 voice_model = "/root/.claude/telegram-bridge/voices/en_US-joe-medium.onnx"
+length_scale = "0.81"   # optional cadence tweak — see below; this is the
+                          # tuned, approved-final default for this voice
 max_chars = 600
 ```
 
 See `relay.toml.example`'s `[tts]` comments for the full schema (including
 the optional `pitch` depth knob and `length_scale` cadence knob, piper's
-own `--length-scale` — lower is faster) and
+own `--length-scale` — lower is faster; `"0.81"` above is this bridge's
+recommended cadence, with `pitch` left off) and
 [`SETUP.md`](SETUP.md#voice-messages-tts-optional) for installing piper
 or espeak-ng.
 
@@ -332,6 +335,7 @@ define your own.
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
 | `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; optional local TTS voice note (`[tts]`, default off). |
 | `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. |
+| `fetch-voices.sh` | One-command piper voice model downloader (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful); no args fetches the recommended default (`en_US-joe-medium`), `--list` shows the full recommended table. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
 | `relay-notify.sh` | **Generic, harness-agnostic entry point** — any agent/script can send a status update through it directly. |
 | `adapters/claude-code.sh` | Claude Code hook-JSON adapter — parses the payload, formats a per-event summary, calls `relay-notify.sh --raw`. |

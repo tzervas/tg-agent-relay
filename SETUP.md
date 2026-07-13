@@ -202,15 +202,21 @@ mode = "text+voice"   # or "voice-only"
 engine = "piper"       # or "auto" (prefers piper if voice_model is set +
                         # the binary is present, else falls back to espeak-ng)
 voice_model = "/root/.claude/telegram-bridge/voices/en_US-joe-medium.onnx"
-pitch = "-1"            # OPTIONAL, default unset (no shift) — a small
-                        # negative semitone value nudges pitch a bit deeper
-                        # still (duration-preserving; skip-graceful if the
-                        # filter fails, falls back to unfiltered audio).
-                        # See lib/tts.sh's _tts_pitch_filter header.
-length_scale = "0.9"    # OPTIONAL, piper only, default unset (piper's own
+length_scale = "0.81"  # OPTIONAL, piper only, default unset (piper's own
                         # 1.0 = unchanged cadence). Lower = faster speech,
                         # higher = slower — wired straight to piper's own
-                        # `--length-scale` flag.
+                        # `--length-scale` flag. 0.81 is this bridge's
+                        # tuned, approved-final cadence for en_US-joe-medium
+                        # — a brisk but natural pace for short chat notes.
+# pitch = "-1"          # OPTIONAL, default unset (no shift) — a small
+                        # negative semitone value nudges pitch a bit deeper
+                        # still (duration-preserving; skip-graceful if the
+                        # filter fails, falls back to unfiltered audio). NOT
+                        # part of the recommended default above — the
+                        # cadence tweak alone (length_scale) was judged
+                        # sufficient; pitch stays off unless you want to
+                        # experiment further. See lib/tts.sh's
+                        # _tts_pitch_filter header.
 max_chars = 600         # don't TTS anything longer than this — stays text-only
 ```
 
