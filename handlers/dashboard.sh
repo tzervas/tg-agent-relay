@@ -11,6 +11,14 @@
 # any reason. NEVER fails silently without sending something - see the
 # never-fail contract in lib/dashboard_render.py's header.
 #
+# Optional TOKEN USAGE panels: if relay.toml's `[usage].enabled = true`,
+# this handler refreshes the usage cache (lib/usage_ingest.py) and passes
+# it to dashboard_render.py, which appends tokens-by-model/provider/project
+# (+ trend) panels below the relay panels. With `[usage]` absent/disabled
+# (the default), this is a no-op and /dashboard renders EXACTLY as before -
+# see docs/USAGE.md's "Token usage dashboard" section. A dedicated,
+# usage-only image is also available via `/usage` (handlers/usage.sh).
+#
 # Usage (as invoked by tg-poll.sh's dispatch_command):
 #   dashboard.sh "<flattened command text>"
 # The flattened text may include a window override as a trailing number of
@@ -50,11 +58,33 @@ fi
 
 TEST_MARK="${RELAY_DASHBOARD_TEST_MARK:-}"
 
+# Opt-in usage panels (default disabled - see relay.toml.example's [usage]
+# table). Only refreshes/passes the cache when explicitly enabled; any
+# failure here (bad source, missing python3, ...) just leaves
+# USAGE_JSON_ARG empty, and dashboard_render.py renders with no usage
+# panels - never blocks the relay-metrics dashboard from sending.
+USAGE_JSON_ARG=""
+USAGE_DISPLAY_FLAGS=()
+if [[ "$(cfg_get '.usage.enabled' "false")" == "true" ]] \
+    && command -v python3 >/dev/null 2>&1 \
+    && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
+    USAGE_SOURCE="$(cfg_get '.usage.source' "claude-code")"
+    USAGE_PROJECTS_DIR="$(cfg_get '.usage.projects_dir' "$HOME/.claude/projects")"
+    USAGE_WINDOW="$(cfg_get '.usage.window' "7d")"
+    USAGE_CACHE_DIR="$BRIDGE_DIR/.usage"
+    mkdir -p "$USAGE_CACHE_DIR" 2>/dev/null
+    USAGE_JSON="$USAGE_CACHE_DIR/usage-summary.json"
+    python3 "$BRIDGE_DIR/lib/usage_ingest.py" "$USAGE_SOURCE" "$USAGE_PROJECTS_DIR" "$USAGE_WINDOW" "$USAGE_JSON" >/dev/null 2>&1
+    [[ -s "$USAGE_JSON" ]] && USAGE_JSON_ARG="$USAGE_JSON"
+    [[ "$(cfg_get '.usage.providers' "true")" == "false" ]] && USAGE_DISPLAY_FLAGS+=("--no-providers")
+    [[ "$(cfg_get '.usage.models' "true")" == "false" ]] && USAGE_DISPLAY_FLAGS+=("--no-models")
+fi
+
 OUT_PNG="$(mktemp -u "${TMPDIR:-/tmp}/relay-dashboard-XXXXXX.png")"
 
 RENDER_OUT=""
 if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
-    RENDER_OUT="$(python3 "$BRIDGE_DIR/lib/dashboard_render.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" "$OUT_PNG" 2>/dev/null)"
+    RENDER_OUT="$(python3 "$BRIDGE_DIR/lib/dashboard_render.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" "$OUT_PNG" ${USAGE_JSON_ARG:+"$USAGE_JSON_ARG"} "${USAGE_DISPLAY_FLAGS[@]}" 2>/dev/null)"
 elif command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/metrics_agg.py" ]]; then
     # dashboard_render.py missing but metrics_agg.py present (shouldn't
     # happen in a normal checkout) - still get a real text dashboard.

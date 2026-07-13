@@ -1,0 +1,25 @@
+📈 Token usage — 7d
+════════════════════════════════
+
+total tokens:   795
+  input:        550
+  output:       230
+  cache read:   10
+  cache create: 5
+
+By provider:
+  anthropic  ██████████████████  445
+  openai     ████████░░░░░░░░░░  210
+  google     █████░░░░░░░░░░░░░  120
+  other      █░░░░░░░░░░░░░░░░░  20
+
+By model:
+  claude-sonnet-5  ██████████████████  280
+  gpt-5            ██████████████░░░░  210
+  claude-opus-4-8  ███████████░░░░░░░  165
+  gemini-3-pro     ████████░░░░░░░░░░  120
+  mystery-model-x  █░░░░░░░░░░░░░░░░░  20
+
+By project:
+  -fake-project-al  ██████████████████  445
+  -fake-project-be  ██████████████░░░░  350

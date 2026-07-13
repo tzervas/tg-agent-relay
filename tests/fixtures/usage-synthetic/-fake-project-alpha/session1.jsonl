@@ -1,0 +1,6 @@
+{"type": "assistant", "timestamp": "2023-11-14T21:13:20.000Z", "message": {"model": "claude-opus-4-8", "usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 5}}}
+{"type": "assistant", "timestamp": "2023-11-14T20:13:20.000Z", "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 200, "output_tokens": 80}}}
+not-json-garbage{{{
+{"type": "user", "timestamp": "2023-11-14T19:13:20.000Z", "message": {"role": "user", "content": "synthetic prompt text, not real"}}
+{"type": "assistant", "timestamp": "2023-11-14T18:13:20.000Z", "message": {"model": "claude-opus-4-8"}}
+{"type": "assistant", "timestamp": "2023-11-06T14:13:20.000Z", "message": {"model": "claude-opus-4-8", "usage": {"input_tokens": 999, "output_tokens": 999}}}

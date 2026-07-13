@@ -21,12 +21,16 @@ the forwarded line or backgrounds the handler script
 (`<handler-path> "<flattened text>" &`, detached, output discarded, so a
 slow/hung handler can never block the poll loop).
 
-## The four built-in relay-handled commands
+## The five built-in relay-handled commands
 
 None are enabled by default — uncomment their blocks in `relay.toml`
-(copy from `relay.toml.example`, which documents all four together) to
-turn them on. All four read `.metrics.log` via the pure, independently
-unit-tested `lib/metrics_agg.py`.
+(copy from `relay.toml.example`, which documents all five together) to
+turn them on. `/dashboard`, `/stats`, `/uptime`, and `/help` read
+`.metrics.log` via the pure, independently unit-tested
+`lib/metrics_agg.py`. `/usage` additionally needs `[usage] enabled = true`
+— see [`USAGE.md`'s "Token usage dashboard"
+section](USAGE.md#token-usage-dashboard) for what it collects and the
+privacy note before turning it on.
 
 ### `/dashboard [<N>[h]]`
 
@@ -94,6 +98,36 @@ mode = "relay"
 handler = "handlers/help.sh"
 ```
 
+### `/usage [today|all|<N>d|<N>h]`
+
+**OPT-IN — default disabled.** A token USAGE dashboard: tokens by
+provider, model, and project, aggregated from a harness's local
+session-transcript logs (one adapter ships today — Claude Code's own
+`~/.claude/projects/**/*.jsonl`). Same image-with-text-fallback contract
+as `/dashboard`. With `[usage].enabled` left `false` (the default),
+replies that usage tracking is disabled rather than silently doing
+nothing. Accepts an optional trailing window override — `today` (since
+local midnight), `all` (everything the source has), or `<N>d`/`<N>h`
+(e.g. `/usage 30d`); defaults to `relay.toml`'s `[usage].window` (or
+`"7d"`).
+
+**Read [`USAGE.md`'s "Token usage dashboard"
+section](USAGE.md#token-usage-dashboard) — especially its privacy note —
+before enabling this.** Everything it reads/writes stays local and
+gitignored; nothing is ever transmitted anywhere but this relay's own
+allowlisted Telegram chat.
+
+```toml
+[usage]
+enabled = true
+
+[commands.usage]
+keyword = "usage"
+slash = "/usage"
+mode = "relay"
+handler = "handlers/usage.sh"
+```
+
 ### Example: `/dashboard` reply
 
 ```
@@ -101,7 +135,14 @@ You:  /dashboard 48
 Bot:  [PNG] Relay Dashboard — last 48h
 ```
 
-### Example: `/help` reply (with all four enabled)
+### Example: `/usage` reply
+
+```
+You:  /usage 30d
+Bot:  [PNG] Token Usage — 30d
+```
+
+### Example: `/help` reply (with all five enabled)
 
 ```
 🧭 TG Agent Relay — help
@@ -111,6 +152,7 @@ Relay-handled (zero model tokens):
   /stats — stats (zero model tokens)
   /uptime — uptime (zero model tokens)
   /help — help (zero model tokens)
+  /usage — usage (zero model tokens)
 
 Any other message is forwarded to the agent as-is.
 ```

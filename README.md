@@ -53,7 +53,7 @@ flowchart LR
         TS["tg-send.sh\n(paginate k-of-n, dedup)"]
         TP["tg-poll.sh\n(reassembly + command parser)"]
         DISP{"command matched?"}
-        HD["handlers/*.sh\n(dashboard, stats, uptime, help)"]
+        HD["handlers/*.sh\n(dashboard, stats, uptime, help, usage)"]
     end
 
     PHONE(["Your phone (Telegram)"])
@@ -93,6 +93,23 @@ If `matplotlib`/`python3` aren't available, the same data renders as a
 unicode/text dashboard instead — see
 [`docs/assets/dashboard-example.txt`](docs/assets/dashboard-example.txt).
 Either way, `/dashboard` never fails to send *something*.
+
+## Token usage dashboard (opt-in)
+
+**Disabled by default.** `/usage` renders tokens by **provider**
+(Anthropic/OpenAI/Google/other), **model**, and **project**, aggregated
+from a harness's local session-transcript logs (one adapter ships today —
+Claude Code's own `~/.claude/projects/**/*.jsonl`). Illustrative example
+(synthetic fixture data — see [`docs/assets/README.md`](docs/assets/README.md)):
+
+![usage example](docs/assets/usage-example.png)
+
+**Privacy first, read before enabling:** everything stays local
+(transcripts are never touched outside your machine, the aggregate cache
+is gitignored) and the render goes only to your own allowlisted Telegram
+chat — never any other network call. See
+[`docs/USAGE.md`'s "Token usage dashboard" section](docs/USAGE.md#token-usage-dashboard)
+for the full opt-in config and privacy note before turning `[usage]` on.
 
 ## Quickstart
 
@@ -227,8 +244,8 @@ guessed at.
 Copy [`relay.toml.example`](relay.toml.example) to `relay.toml` to
 configure page size/delay, the reassemble window, which Claude Code hook
 events are enabled + their prefix + their message format, the `[generic]`
-prefix/format, in-chat commands, the dashboard window, and optional local
-TTS voice notes. **Every script falls back to its pre-existing
+prefix/format, in-chat commands, the dashboard window, optional local
+TTS voice notes, and the opt-in token-usage dashboard. **Every script falls back to its pre-existing
 env-var/hardcoded default with no `relay.toml` present** — this is the
 backward-compat guarantee: an existing bridge with no `relay.toml`
 behaves byte-for-byte as it always has. See the example file's comments
@@ -300,9 +317,10 @@ behavior.
 A command can also be **relay-handled** (`mode = "relay"` + `handler`)
 instead of forwarded — the relay runs a local script and answers
 directly, at zero model tokens, instead of ever emitting the event to the
-agent. Four such commands ship today (`/dashboard`, `/stats`, `/uptime`,
-`/help`) — see [`docs/COMMANDS.md`](docs/COMMANDS.md) for what each does
-and how to define your own.
+agent. Five such commands ship today (`/dashboard`, `/stats`, `/uptime`,
+`/help`, `/usage` — the last opt-in, see "Token usage dashboard" above) —
+see [`docs/COMMANDS.md`](docs/COMMANDS.md) for what each does and how to
+define your own.
 
 ## Files
 
@@ -326,9 +344,11 @@ and how to define your own.
 | `lib/claude-code-events.sh` | Single source of truth for the documented Claude Code hook event list + each event's install-time default enabled/disabled + default prefix — shared by `adapters/claude-code.sh` and `install-hooks.sh`. |
 | `lib/toml_to_json.py` | `relay.toml` → JSON (Python stdlib `tomllib`; the only TOML-parsing code in the repo). |
 | `lib/metrics_agg.py` | Pure/stdlib metrics aggregation over `.metrics.log` (used by the dashboard/stats/uptime handlers, unit-tested independently of matplotlib). |
-| `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. |
-| `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` — `dashboard.sh`, `stats.sh`, `uptime.sh`, `help.sh` ship today; see [`docs/COMMANDS.md`](docs/COMMANDS.md) and [`handlers/README.md`](handlers/README.md). |
+| `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. Also renders the opt-in token-usage panels/image. |
+| `lib/usage_ingest.py` | **Opt-in** (`[usage].enabled`), pure/stdlib token-usage aggregation by provider/model/project over a harness's local session-transcript logs — source-adapter abstraction, one adapter ships today (Claude Code). See `docs/USAGE.md`'s "Token usage dashboard" section. |
+| `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` — `dashboard.sh`, `stats.sh`, `uptime.sh`, `help.sh`, `usage.sh` ship today; see [`docs/COMMANDS.md`](docs/COMMANDS.md) and [`handlers/README.md`](handlers/README.md). |
 | `.metrics.log` | **Local-only, gitignored, auto-created** — a TSV event log (`emit_metric`) that the dashboard/stats/uptime commands read. |
+| `.usage/` | **Local-only, gitignored, auto-created, opt-in** — the token-usage aggregate cache `handlers/usage.sh`/`dashboard.sh` write when `[usage].enabled = true`. Never committed; see the privacy note in `docs/USAGE.md`. |
 | `go-live.sh` | Validates the token, auto-resolves your id, sends the "🟢 live" DM. |
 | `watch-go-live.sh` | Optional: waits for a token to appear, then runs `go-live.sh`. |
 | `SETUP.md` | Step-by-step setup + security notes. |

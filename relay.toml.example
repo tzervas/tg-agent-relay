@@ -378,9 +378,64 @@
 # window_hours = 24
 
 # --------------------------------------------------------------------------
-# The four built-in relay-handled commands (handlers/README.md's real
-# consumers - a metrics dashboard, zero model tokens). Uncomment all four to
-# enable; each is independent.
+# [usage] - OPT-IN, best-effort TOKEN USAGE dashboard (by provider, model,
+# and project) - handlers/usage.sh (`/usage`) and, when enabled, extra
+# panels appended to `/dashboard` too (lib/usage_ingest.py +
+# lib/dashboard_render.py). DEFAULT OFF - with no [usage] section (or
+# `enabled` unset/false), NOTHING here runs: no transcript files are read,
+# no cache is written, `/usage` just replies that it's disabled, and
+# `/dashboard` renders exactly as it always has.
+#
+# PRIVACY (read before enabling - this repo/your fork is likely PUBLIC):
+# usage data is personal. Everything this feature reads/writes stays
+# LOCAL - `projects_dir` is never committed (it's outside this repo
+# entirely), and the aggregated summary it writes lands in a GITIGNORED
+# cache under this bridge's own directory (`.usage/` - see .gitignore).
+# The rendered image/text is sent ONLY to the allowlisted Telegram chat
+# this relay already talks to - nothing here makes any other network
+# call, and no real usage numbers/project paths are ever committed (test
+# fixtures under tests/fixtures/ use synthetic/fake data only). See
+# docs/USAGE.md's "Token usage dashboard" section for the full note.
+# [usage]
+# enabled = false
+
+# source = "claude-code"
+#   Which adapter reads `projects_dir` below. Only "claude-code" ships
+#   today (see lib/usage_ingest.py's module docstring for the
+#   source-adapter contract) - an unrecognized value skip-gracefully
+#   disables collection (never fabricates numbers) rather than erroring.
+
+# projects_dir = "~/.claude/projects"
+#   Where the configured `source` adapter looks - the "claude-code"
+#   adapter walks `<projects_dir>/<project>/*.jsonl` (Claude Code's own
+#   session-transcript layout: one directory per project, one JSONL file
+#   per session, each assistant message carrying a `usage` object). Point
+#   this at a different location (e.g. a synced copy from another
+#   machine, or another harness's compatible transcript directory) to
+#   track usage from somewhere other than this machine's default.
+
+# window = "7d"
+#   How far back to aggregate: "today" (since local midnight), "all"
+#   (everything the source has), or "<N>d" / "<N>h" (e.g. "30d", "12h").
+#   An unrecognized value is never silently treated as "all" (which could
+#   balloon the read) - it clearly labels itself "(unrecognized -
+#   defaulted to 7d)" in the rendered output instead. `/usage` and
+#   `/dashboard` both accept a trailing override in the same grammar,
+#   e.g. "/usage 30d" or "/usage today", same shape as /dashboard's "<N>h".
+
+# providers = true
+# models = true
+#   Display toggles for the by-provider/by-model panels and text
+#   sections - set either to `false` to omit that breakdown (the
+#   by-project breakdown and the totals always show; there's no
+#   `projects` toggle since "which project is spending tokens" is this
+#   feature's whole point).
+
+# --------------------------------------------------------------------------
+# The five built-in relay-handled commands (handlers/README.md's real
+# consumers - a metrics dashboard, zero model tokens). Uncomment to
+# enable; each is independent. `/usage` additionally needs `[usage]
+# enabled = true` above (see its block's own note).
 #
 # [commands.dashboard]
 # keyword = "dashboard"
@@ -390,7 +445,8 @@
 # # Renders a multi-panel PNG (matplotlib, dark-friendly) via sendPhoto, or
 # # a unicode/text dashboard via sendMessage if matplotlib is unavailable -
 # # never fails to send SOMETHING. Accepts an optional trailing window
-# # override, e.g. "/dashboard 48" for the last 48 hours.
+# # override, e.g. "/dashboard 48" for the last 48 hours. Also appends the
+# # token-usage panels when [usage].enabled = true (see above).
 #
 # [commands.stats]
 # keyword = "stats"
@@ -414,3 +470,14 @@
 # handler = "handlers/help.sh"
 # # Lists every configured command (relay-handled + forwarded), read live
 # # from this file so it never drifts from what's actually enabled.
+#
+# [commands.usage]
+# keyword = "usage"
+# slash = "/usage"
+# mode = "relay"
+# handler = "handlers/usage.sh"
+# # OPT-IN token-usage dashboard by provider/model/project - see the
+# # [usage] table above. With [usage].enabled left false (the default),
+# # replies that usage tracking is disabled rather than sending nothing.
+# # Optional trailing window override: "/usage 30d", "/usage today",
+# # "/usage all".

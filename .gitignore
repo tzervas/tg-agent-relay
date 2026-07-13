@@ -34,3 +34,19 @@ __pycache__/
 voices/*.onnx
 voices/*.onnx.json
 voices/*.part
+
+# Token-usage cache/data (lib/usage_ingest.py, handlers/usage.sh,
+# relay.toml's [usage] table) - PRIVATE, LOCAL ONLY, NEVER commit real
+# usage data. This is personal token/spend-shaped data (by provider,
+# model, and PROJECT - i.e. it can reveal what you're working on) in a
+# PUBLIC repo - see docs/USAGE.md's "Token usage dashboard" privacy note.
+# The feature is opt-in (default `[usage].enabled = false`) and writes
+# nothing until explicitly turned on.
+.usage/
+*.usage.json
+usage-cache/*
+# ...except committed, SYNTHETIC test fixtures (fabricated project/model
+# names, no real transcript data - same reasoning/pattern as
+# tests/fixtures/*.log above, scoped by directory instead of anchoring).
+!tests/fixtures/usage-synthetic/
+!tests/fixtures/usage-synthetic/**
