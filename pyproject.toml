@@ -92,6 +92,9 @@ line-ending = "lf"
 # Pure-Python unit tests: `uv run pytest` (issue #29).
 # Shell/e2e smoke remains optional: `bash tests/run-tests.sh` (do not delete).
 [tool.pytest.ini_options]
+# Script-style harness suites (SystemExit on run) are exercised via
+# tests/test_script_suites_pytest.py subprocess wrappers + run-tests.sh.
+
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
@@ -99,6 +102,11 @@ pythonpath = [".", "lib"]
 addopts = [
     "-q",
     "--strict-markers",
+    "--ignore=tests/test_send.py",
+    "--ignore=tests/test_poll.py",
+    "--ignore=tests/test_mcp_stub.py",
+    "--ignore=tests/test_tts_package.py",
+    "--ignore=tests/test_project_bind.py",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

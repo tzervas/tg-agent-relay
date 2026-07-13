@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
         print(res.as_pipe())
         return 0
 
-
     if args.cmd == "format":
         from tg_agent_relay.format_api import format_message
 
