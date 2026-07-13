@@ -19,25 +19,25 @@ Tracking lives on GitHub Issues for `tzervas/tg-agent-relay`.
 
 | # | Task | Size | Wave | Status |
 |---:|---|---|---|---|
-| 23 | Package scaffold `tg_agent_relay` + pyproject 3.14 | S | 0 | **Done in tree** (close when verified) |
-| 24 | Port routing to package | M | 1 | Partial — facade + `lib/routing.py` |
-| 25 | Port format.sh → Python | L | 2 | Stub `format_api.py` |
+| 23 | Package scaffold `tg_agent_relay` + pyproject 3.14 | S | 0 | **Closed** (cfaf364) |
+| 24 | Port routing to package | M | 1 | **PR [#45](https://github.com/tzervas/tg-agent-relay/pull/45)** |
+| 25 | Port format.sh → Python | L | 2 | Stub `format_api.py` — ready for Wave 2 |
 | 26 | Port tg-send → Python | L | 3 | Skeleton `send.py` |
 | 27 | Port tg-poll → Python | L | 3 | Not started |
 | 28 | Adapters/TTS pure Python | M | 3 | Partial |
 | 29 | pytest migration | M | 3 | Growing suite; bash still primary |
-| 30 | Claude format_hook in providers | L | 0/2 | **~Done** — verify wire + close |
-| 31 | Usage collectors only via registry | S | 1 | Partial — fallbacks remain |
-| 32 | Claude install-hooks via catalog | M | 2 | Open |
-| 33 | Ollama/llama docs stub | S | 2 | Open |
-| 34 | Project rooms harden + e2e | M | 4 | Open |
-| 35 | Voice full-mode recipe | S | 1 | Open (docs) |
-| 36 | Hybrid context AGENTS snippet | S | 1 | Open |
-| 37 | MCP facade stub | M | 4 | Open P2 |
-| 38 | CI Python 3.14 | M | 1 | Partial — `ci.yml` present |
-| 39 | Swarm issue template | S | 0 | **Done** — `swarm_task.yml` |
-| 40 | Hook JSON fixture pack | M | 0 | **Done** — grok 14 + claude samples |
-| 41 | Rust spike benchmarks | M | 4 | Deferred |
+| 30 | Claude format_hook in providers | L | 0 | **Closed** |
+| 31 | Usage collectors only via registry | S | 1 | **PR [#47](https://github.com/tzervas/tg-agent-relay/pull/47)** |
+| 32 | Claude install-hooks via catalog | M | 2 | Open — agent-context posted |
+| 33 | Ollama/llama docs stub | S | 2 | Open — agent-context posted |
+| 34 | Project rooms harden + e2e | M | 4 | Open — agent-context posted |
+| 35 | Voice full-mode recipe | S | 1 | **PR [#46](https://github.com/tzervas/tg-agent-relay/pull/46)** |
+| 36 | Hybrid context AGENTS snippet | S | 1 | **PR [#44](https://github.com/tzervas/tg-agent-relay/pull/44)** |
+| 37 | MCP facade stub | M | 4 | Open P2 — agent-context posted |
+| 38 | CI Python 3.14 | M | 1 | **PR [#43](https://github.com/tzervas/tg-agent-relay/pull/43)** |
+| 39 | Swarm issue template | S | 0 | **Closed** |
+| 40 | Hook JSON fixture pack | M | 0 | **Closed** |
+| 41 | Rust spike benchmarks | M | 4 | Deferred — agent-context posted |
 | 42 | Release v0.6.0 | S | — | **Closed** |
 
 ## Recommended execution order (for swarms)
