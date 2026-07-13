@@ -103,7 +103,7 @@ echo "== bash -n (syntax) =="
 for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
-         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh \
+         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
          handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
@@ -116,7 +116,7 @@ echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
-             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh \
+             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
              handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
@@ -754,7 +754,10 @@ STUB
 # setup_tts_bridge - like setup_temp_bridge, but symlinks the REAL
 # tg-send.sh (not the recording mock) plus the real lib/ it needs, with a
 # throwaway .env - so these tests exercise the actual TTS wiring, not a
-# stand-in.
+# stand-in. Also symlinks the real lib/format.sh (the structured-format
+# layer runs on the SAME real tg-send.sh path TTS does) so these tests
+# exercise the real format+TTS interaction, not the "lib missing ->
+# passthrough shim" fallback.
 setup_tts_bridge() {
     local dir
     dir="$(mktemp -d)"
@@ -763,6 +766,30 @@ setup_tts_bridge() {
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/tts.sh" "$dir/lib/tts.sh"
+    ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
+    ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    cat > "$dir/.env" <<'ENV'
+BOT_TOKEN=TEST_TOKEN_123
+ALLOWED_USER_ID=999
+ALLOWED_CHAT_ID=999
+ENV
+    chmod 600 "$dir/.env"
+    printf '%s' "$dir"
+}
+
+# setup_format_bridge - like setup_tts_bridge, but WITHOUT lib/tts.sh (TTS
+# stays the "lib missing" no-voice shim - irrelevant to these tests) and
+# with a stub `curl` pre-installed on PATH (see write_stub_curl above) so
+# every test below can inspect exactly what tg-send.sh's real HTML-format
+# pipeline POSTs, with no network call.
+setup_format_bridge() {
+    local dir
+    dir="$(mktemp -d)"
+    mkdir -p "$dir/lib"
+    ln -s "$REPO_ROOT/tg-send.sh" "$dir/tg-send.sh"
+    ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
+    ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
+    ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
@@ -1012,6 +1039,274 @@ fi
 RELAY_CONFIG_JSON="{}"
 rm -rf "$STUB_LS" "$FAKE_MODEL_LS"
 rm -f "$LOG_LS" "$OUT_WAV_LS"
+
+# ============================================================================
+echo "== lib/format.sh: structured-formatting layer (unit tests, sourced directly) =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/relay-config.sh"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/relay-common.sh"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/format.sh"
+RELAY_CONFIG_JSON="{}"
+FMT_HEADERS=true FMT_CODE_SPANS=true FMT_BLOCKQUOTES=true FMT_SOFT_WRAP=true
+
+# -- escaping ----------------------------------------------------------------
+assert_eq "escape: < > & all escaped, in order (no double-escape)" \
+    "a &lt; b &amp; c &gt; d" \
+    "$(_fmt_escape_html 'a < b & c > d')"
+
+assert_eq "escape: an existing literal <code> tag in the SOURCE text is neutralized (not left live)" \
+    "&lt;code&gt;danger&lt;/code&gt;" \
+    "$(_fmt_escape_html '<code>danger</code>')"
+
+RELAY_CONFIG_JSON="{}"
+format_message 'ok <b>not actually bold</b> & <script>bad</script>'
+assert_eq "format_message: literal HTML-looking source text is escaped, never live markup" \
+    "ok &lt;b&gt;not actually bold&lt;/b&gt; &amp; &lt;script&gt;bad&lt;/script&gt;" \
+    "$FMT_TEXT"
+assert_eq "format_message: parse_mode is HTML by default" "HTML" "$FMT_PARSE_MODE"
+
+# -- soft-wrap -----------------------------------------------------------------
+SHORT_LINE="short line, well under fifty chars"
+assert_eq "wrap: a line already <= wrap_width is untouched (single line, no split)" \
+    "$SHORT_LINE" \
+    "$(_fmt_wrap_line "$SHORT_LINE" 50)"
+
+LONG_LINE="this is a much longer line of plain prose that will need to be wrapped at word boundaries to fit a phone screen nicely"
+WRAPPED="$(_fmt_wrap_line "$LONG_LINE" 50)"
+WRAP_LINE_COUNT=$(printf '%s\n' "$WRAPPED" | wc -l)
+WRAP_MAX_LEN=$(printf '%s\n' "$WRAPPED" | awk '{ print length }' | sort -rn | head -1)
+if (( WRAP_LINE_COUNT > 1 )) && (( WRAP_MAX_LEN <= 50 )) \
+    && [[ "$(printf '%s' "$WRAPPED" | tr '\n' ' ')" == *"$LONG_LINE"* || "$(printf '%s' "$WRAPPED" | tr -d '\n')" == "$(printf '%s' "$LONG_LINE" | tr -d ' ')" ]]; then
+    ok "wrap: a long prose line splits into multiple lines, each <= wrap_width, no word lost/altered"
+else
+    fail "wrap: long line splits at word boundaries within width" "lines=$WRAP_LINE_COUNT maxlen=$WRAP_MAX_LEN out=[$WRAPPED]"
+fi
+
+URL_LINE="see https://example.com/a/very/long/path/that/would/never/fit/in/fifty/characters/at/all for details"
+URL_WRAPPED="$(_fmt_wrap_line "$URL_LINE" 50)"
+if [[ "$URL_WRAPPED" == *"https://example.com/a/very/long/path/that/would/never/fit/in/fifty/characters/at/all"* ]]; then
+    ok "wrap: a URL is never broken mid-URL, even though it exceeds wrap_width alone"
+else
+    fail "wrap: URL kept whole" "$URL_WRAPPED"
+fi
+
+CODE_SPAN_LINE='run the `some very long command with lots of embedded spaces inside` now please'
+CODE_WRAPPED="$(_fmt_wrap_line "$CODE_SPAN_LINE" 50)"
+if [[ "$CODE_WRAPPED" == *'`some very long command with lots of embedded spaces inside`'* ]]; then
+    ok "wrap: an inline \`code span\` (even with embedded spaces) is never broken mid-span"
+else
+    fail "wrap: code span kept whole" "$CODE_WRAPPED"
+fi
+
+# -- header / blockquote / emphasis rendering --------------------------------
+RELAY_CONFIG_JSON="{}"
+format_message "## Explicit Header
+prose line"
+assert_eq "header: explicit '## ' prefix -> bolded, prefix stripped" \
+    "<b>Explicit Header</b>
+prose line" \
+    "$FMT_TEXT"
+
+format_message "✅ BUILD FINISHED"
+assert_eq "header: leading-emoji ALL-CAPS short line -> bolded" \
+    "<b>✅ BUILD FINISHED</b>" \
+    "$FMT_TEXT"
+
+format_message "🚀 Deploy Started"
+assert_eq "header: leading-emoji Title-Case short line -> bolded" \
+    "<b>🚀 Deploy Started</b>" \
+    "$FMT_TEXT"
+
+format_message "✅ code-reviewer finished — Found 2 issues, both low severity"
+if [[ "$FMT_TEXT" != *"<b>"* ]]; then
+    ok "header: a leading-emoji SENTENCE (lowercase, not all-caps/title-case) is NOT bolded"
+else
+    fail "header: ordinary sentence must not be treated as a header" "$FMT_TEXT"
+fi
+
+format_message "> a quoted note
+> spanning two lines"
+assert_eq "blockquote: consecutive '> ' lines group into ONE <blockquote>" \
+    "<blockquote>a quoted note
+spanning two lines</blockquote>" \
+    "$FMT_TEXT"
+
+LONG_QUOTE_SRC="> line one
+> line two
+> line three
+> line four"
+format_message "$LONG_QUOTE_SRC"
+if [[ "$FMT_TEXT" == "<blockquote expandable>"* ]]; then
+    ok "blockquote: a >3-line quote becomes an EXPANDABLE blockquote"
+else
+    fail "blockquote: long quote should be expandable" "$FMT_TEXT"
+fi
+
+format_message "this is *emphasis* and this is _also italic_"
+assert_eq "emphasis: both *word* and _word_ render as <i>...</i>" \
+    "this is <i>emphasis</i> and this is <i>also italic</i>" \
+    "$FMT_TEXT"
+
+format_message "the identifier my_var_name must stay literal"
+if [[ "$FMT_TEXT" == *"my_var_name"* && "$FMT_TEXT" != *"<i>"* ]]; then
+    ok "emphasis: a snake_case identifier (unpaired/word-internal underscores) is never mistaken for italic"
+else
+    fail "emphasis: snake_case must not be treated as emphasis" "$FMT_TEXT"
+fi
+
+# -- parse_mode="none" / enabled=false passthrough ---------------------------
+RELAY_CONFIG_JSON='{"format":{"parse_mode":"none"}}'
+RAW='## not a header <literally> & such'
+format_message "$RAW"
+assert_eq "parse_mode=none: text passes through completely UNCHANGED" "$RAW" "$FMT_TEXT"
+assert_eq "parse_mode=none: FMT_PARSE_MODE is empty (no parse_mode param sent)" "" "$FMT_PARSE_MODE"
+
+RELAY_CONFIG_JSON='{"format":{"enabled":false}}'
+format_message "$RAW"
+assert_eq "enabled=false: text passes through completely UNCHANGED" "$RAW" "$FMT_TEXT"
+assert_eq "enabled=false: FMT_PARSE_MODE is empty" "" "$FMT_PARSE_MODE"
+RELAY_CONFIG_JSON="{}"
+
+# -- fenced code blocks: verbatim, language classes, mycelium tags ----------
+# NOTE: "verbatim" means never reflowed/wrapped/marked-up - it does NOT
+# exempt code content from the same three-character HTML escape every
+# other code path uses (< > &), since parse_mode=HTML would otherwise
+# mis-render (or Telegram would reject) a literal `<`/`>`/`&` in the
+# source. These expected strings run the same RUST_LONG_LINE/MYC_LINE
+# through _fmt_escape_html so the test can't silently drift from that
+# contract.
+RUST_LONG_LINE="fn this_is_a_very_long_rust_line_that_would_definitely_exceed_the_fifty_char_wrap_width(x: i32) -> i32 { x }"
+format_message "before
+
+\`\`\`rust
+${RUST_LONG_LINE}
+\`\`\`
+
+after"
+assert_eq "fenced rust block -> language-rust code box, content byte-for-byte VERBATIM (never wrapped, even far past wrap_width) + still HTML-escaped" \
+    "before
+
+<pre><code class=\"language-rust\">$(_fmt_escape_html "$RUST_LONG_LINE")</code></pre>
+
+after" \
+    "$FMT_TEXT"
+
+MYC_LINE1="nodule example"
+MYC_LINE2="  fn f(x) -> x"
+format_message "\`\`\`myc
+${MYC_LINE1}
+${MYC_LINE2}
+\`\`\`"
+assert_eq "fenced \`\`\`myc block -> language-mycelium (Mycelium is a first-class code-fence tag), escaped verbatim" \
+    "<pre><code class=\"language-mycelium\">$(_fmt_escape_html "$MYC_LINE1")
+$(_fmt_escape_html "$MYC_LINE2")</code></pre>" \
+    "$FMT_TEXT"
+
+format_message "\`\`\`mycelium
+nodule example2
+\`\`\`"
+assert_eq "fenced \`\`\`mycelium block also normalizes to language-mycelium" \
+    '<pre><code class="language-mycelium">nodule example2</code></pre>' \
+    "$FMT_TEXT"
+
+format_message "\`\`\`totallymadeupxyz
+some content
+\`\`\`"
+assert_eq "fenced block with an UNRECOGNIZED language tag -> still boxed, but plain <pre> (no class)" \
+    "<pre>some content</pre>" \
+    "$FMT_TEXT"
+
+MIXED_LONG="this paragraph of prose is definitely long enough that it must be wrapped across more than one line on a phone-width screen"
+MIXED_CODE_LINE="fn keep_this_line_totally_unwrapped_even_though_it_is_long(x) -> x"
+format_message "## Findings
+
+${MIXED_LONG}
+
+\`\`\`myc
+${MIXED_CODE_LINE}
+\`\`\`"
+MIXED_LINES=$(printf '%s\n' "$FMT_TEXT" | wc -l)
+if [[ "$FMT_TEXT" == *"<b>Findings</b>"* ]] \
+    && [[ "$FMT_TEXT" == *"<pre><code class=\"language-mycelium\">$(_fmt_escape_html "$MIXED_CODE_LINE")</code></pre>"* ]] \
+    && (( MIXED_LINES > 5 )); then
+    ok "mixed message: prose is soft-wrapped AND the fenced code block is preserved verbatim, in one message"
+else
+    fail "mixed message: prose wrap + verbatim code block" "$FMT_TEXT"
+fi
+_fmt_html_balanced "$FMT_TEXT" && ok "mixed message: final HTML is tag-balanced" || fail "mixed message: HTML balance check" "$FMT_TEXT"
+
+RELAY_CONFIG_JSON="{}"
+
+# -- end-to-end via the real tg-send.sh pipeline (stubbed curl, no network) --
+echo "== lib/format.sh + tg-send.sh: end-to-end (real pipeline, stubbed curl) =="
+STUB_FMT="$(mktemp -d)"; tts_essential_path "$STUB_FMT" >/dev/null
+LOG_FMT="$(mktemp -u)"; write_stub_curl "$STUB_FMT" "$LOG_FMT"
+FMT1="$(setup_format_bridge)"
+PATH="$STUB_FMT" "$FMT1/tg-send.sh" "## Header
+some prose"
+if grep -q 'text=<b>Header</b>' "$LOG_FMT" && grep -q 'parse_mode=HTML' "$LOG_FMT"; then
+    ok "e2e: default (no relay.toml) -> formatting ON, HTML parse_mode sent"
+else
+    fail "e2e: default formatting ON" "$(cat "$LOG_FMT" 2>/dev/null)"
+fi
+rm -rf "$FMT1" "$STUB_FMT" "$LOG_FMT"
+
+STUB_FMT2="$(mktemp -d)"; tts_essential_path "$STUB_FMT2" >/dev/null
+LOG_FMT2="$(mktemp -u)"; write_stub_curl "$STUB_FMT2" "$LOG_FMT2"
+FMT2="$(setup_format_bridge)"
+cat > "$FMT2/relay.toml" <<'TOML'
+[format]
+parse_mode = "none"
+TOML
+PATH="$STUB_FMT2" "$FMT2/tg-send.sh" "## Header
+some prose"
+if grep -q 'text=## Header' "$LOG_FMT2" && ! grep -q 'parse_mode=' "$LOG_FMT2"; then
+    ok "e2e: parse_mode=none -> plain text sent, byte-identical to pre-format behavior, no parse_mode param"
+else
+    fail "e2e: parse_mode=none passthrough" "$(cat "$LOG_FMT2" 2>/dev/null)"
+fi
+rm -rf "$FMT2" "$STUB_FMT2" "$LOG_FMT2"
+
+# A multi-page send: the "[k/n]" header stays intact and is bolded when
+# formatting is active.
+STUB_FMT3="$(mktemp -d)"; tts_essential_path "$STUB_FMT3" >/dev/null
+LOG_FMT3="$(mktemp -u)"; write_stub_curl "$STUB_FMT3" "$LOG_FMT3"
+FMT3="$(setup_format_bridge)"
+PAGINATED_MSG="$(python3 -c "print('word ' * 60)")"
+PATH="$STUB_FMT3" TG_PAGE_SIZE=100 "$FMT3/tg-send.sh" "$PAGINATED_MSG" >/dev/null 2>&1
+if grep -q 'text=<b>\[1/' "$LOG_FMT3"; then
+    ok "e2e: multi-page send bolds the [k/n] pagination header"
+else
+    fail "e2e: [k/n] header bolded" "$(cat "$LOG_FMT3" 2>/dev/null)"
+fi
+rm -rf "$FMT3" "$STUB_FMT3" "$LOG_FMT3"
+
+# Never-silent: a Telegram-side HTML rejection retries ONCE as plain text,
+# and the fallback is logged (never a dropped message, never a hung retry
+# loop).
+STUB_FMT4="$(mktemp -d)"; tts_essential_path "$STUB_FMT4" >/dev/null
+LOG_FMT4="$(mktemp -u)"
+cat > "$STUB_FMT4/curl" <<STUB
+#!/bin/bash
+if [[ "\$*" == *"parse_mode=HTML"* ]]; then
+    printf '{"ok":false,"description":"Bad Request: can'"'"'t parse entities"}'
+else
+    printf '{"ok":true,"result":{}}' >> "$LOG_FMT4"
+fi
+exit 0
+STUB
+chmod +x "$STUB_FMT4/curl"
+FMT4="$(setup_format_bridge)"
+PATH="$STUB_FMT4" "$FMT4/tg-send.sh" "## Header
+prose"
+if [[ -s "$LOG_FMT4" ]] && grep -q "format	send_fallback" "$FMT4/.metrics.log" 2>/dev/null; then
+    ok "e2e: a Telegram HTML-parse rejection retries ONCE as plain text (never dropped) and logs the fallback"
+else
+    fail "e2e: HTML-rejection retry-as-plain-text" "log=$(cat "$LOG_FMT4" 2>/dev/null) metrics=$(cat "$FMT4/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$FMT4" "$STUB_FMT4" "$LOG_FMT4"
 
 # ============================================================================
 echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="

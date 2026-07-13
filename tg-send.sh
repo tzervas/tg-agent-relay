@@ -34,6 +34,17 @@
 # the full skip-graceful contract. "voice-only" still sends the text
 # whenever TTS is unavailable/too-long - a message is never dropped
 # outright.
+#
+# Structured formatting (lib/format.sh, relay.toml [format]): ON by
+# default (headline v0.3.0 feature - phone-readable messages instead of a
+# wall of text) - dynamic soft-wrap, bolded section headers, code boxes,
+# quotes, light emphasis, sent via parse_mode=HTML. [format].enabled=false
+# or parse_mode="none" -> byte-identical to pre-format-layer plain text.
+# See lib/format.sh's header for the full input-markup convention and the
+# never-silent fallback (a malformed render, or a Telegram-side HTML parse
+# rejection, retries ONCE as plain text - a message is never dropped nor
+# sent with broken markup). The "[k/n]" pagination header is bolded when
+# formatting is active, and stays exactly "[k/n]" plain text otherwise.
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,6 +64,9 @@ declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing ->
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/tts.sh" ]] && source "$BRIDGE_DIR/lib/tts.sh"
 declare -f tts_send_voice >/dev/null 2>&1 || tts_send_voice() { return 1; }  # lib missing -> unavailable shim
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/format.sh" ]] && source "$BRIDGE_DIR/lib/format.sh"
+declare -f format_message >/dev/null 2>&1 || format_message() { FMT_TEXT="$1"; FMT_PARSE_MODE=""; }  # lib missing -> passthrough shim
 
 # Telegram's hard cap is 4096 chars; stay safely under it.
 PAGE_SIZE="${TG_PAGE_SIZE:-$(cfg_get '.general.page_size' 3500)}"
@@ -167,20 +181,67 @@ if [[ "$TTS_MODE" == "voice-only" && "$TTS_ELIGIBLE" -eq 1 ]]; then
     tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$MSG" && VOICE_SENT=1
 fi
 
+# _tg_post_send_message <text> <parse_mode> - one sendMessage POST.
+# <parse_mode> "" means no parse_mode param at all (plain text, today's
+# exact request shape). Returns 0 iff Telegram's response says "ok":true -
+# never trusts curl's own exit code alone (that only proves the HTTP round
+# trip happened, not that Telegram accepted the message).
+_tg_post_send_message() {
+    local text="$1" parse_mode="$2" resp
+    if [[ -n "$parse_mode" ]]; then
+        resp="$(curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "parse_mode=${parse_mode}" \
+            2>/dev/null)"
+    else
+        resp="$(curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            2>/dev/null)"
+    fi
+    [[ "$resp" == *'"ok":true'* ]]
+}
+
 if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
     IDX=0
     for PAGE in "${PAGES[@]}"; do
         IDX=$((IDX + 1))
+
+        # format_message sets FMT_TEXT/FMT_PARSE_MODE as globals - see
+        # lib/format.sh's header for why this is NOT `x="$(format_message ...)"`
+        # (command substitution's subshell would drop the second value).
+        format_message "$PAGE"
+
+        # Plain fallback text (today's exact pre-format shape) - always
+        # computed, used only if the formatted send fails (never-silent
+        # retry-as-plain-text, see lib/format.sh's header).
         if (( TOTAL > 1 )); then
-            SEND_TEXT="[${IDX}/${TOTAL}]"$'\n'"${PAGE}"
+            PLAIN_SEND_TEXT="[${IDX}/${TOTAL}]"$'\n'"${PAGE}"
         else
-            SEND_TEXT="$PAGE"
+            PLAIN_SEND_TEXT="$PAGE"
         fi
 
-        curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
-            --data-urlencode "text=${SEND_TEXT}" \
-            >/dev/null 2>&1 || true
+        if [[ -n "$FMT_PARSE_MODE" ]]; then
+            if (( TOTAL > 1 )); then
+                SEND_TEXT="<b>[${IDX}/${TOTAL}]</b>"$'\n'"${FMT_TEXT}"
+            else
+                SEND_TEXT="$FMT_TEXT"
+            fi
+        else
+            # Formatting off/disabled -> FMT_TEXT == PAGE unchanged, so this
+            # is byte-for-byte the pre-format-layer request.
+            SEND_TEXT="$PLAIN_SEND_TEXT"
+        fi
+
+        if ! _tg_post_send_message "$SEND_TEXT" "$FMT_PARSE_MODE"; then
+            if [[ -n "$FMT_PARSE_MODE" ]]; then
+                emit_metric "format" "send_fallback" "page=${IDX}/${TOTAL} formatted send failed, retrying as plain text"
+                _tg_post_send_message "$PLAIN_SEND_TEXT" "" || true
+            fi
+            # else: already plain - nothing more to try (matches the
+            # original "|| true" swallow-and-move-on behavior).
+        fi
 
         (( IDX < TOTAL )) && sleep "$PAGE_DELAY"
     done

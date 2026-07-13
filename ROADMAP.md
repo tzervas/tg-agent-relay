@@ -110,6 +110,28 @@ with ANY agent using ANY harness, maximum portability + usability.
   doesn't set them. This bridge's own tuned, approved-final
   recommendation is `en_US-joe-medium` + `length_scale = "0.81"` with
   `pitch` left off — the cadence tweak alone was judged sufficient.
+- **Structured formatting (v0.3.0, headline feature).** `lib/format.sh` +
+  `[format]` in `relay.toml`: every outbound send (`tg-send.sh`'s single
+  choke point, so every handler/adapter/hook path that routes through it)
+  is run through a phone-readability layer instead of arriving as a wall
+  of text — dynamic soft-wrap at word boundaries (never mid-word/URL/code
+  span), bolded section headers (`## Header`, or a leading-emoji short
+  all-caps/Title-Case line), real code boxes for fenced blocks
+  (`` ```lang ``` `` → `<pre><code class="language-lang">`, verbatim —
+  never reflowed; `myc`/`mycelium` are first-class tags, both normalizing
+  to `language-mycelium`), inline `` `code` `` spans, expandable
+  blockquotes for long `> quoted` text, and light `*emphasis*`/`_italic_`
+  (word-boundary-guarded against snake_case false positives) — all via
+  Telegram's `parse_mode=HTML` (far safer than MarkdownV2: only `< > &`
+  need escaping). The **one deliberate exception** to this bridge's
+  "byte-identical with no `relay.toml`" guarantee: `[format]` is **ON by
+  default**, meant to just work; `enabled = false` (or `parse_mode =
+  "none"`) restores the exact pre-v0.3.0 plain-text behavior. Never-silent
+  at two layers: `format_message()` self-checks the HTML it renders (an
+  open/close tag-balance check) and falls back to escaped plain text on
+  any failure; `tg-send.sh` itself retries a Telegram-side HTML-parse
+  rejection once as plain text — a message is never dropped nor sent with
+  broken markup, and every fallback is logged via `.metrics.log`.
 - **Opt-in token usage dashboard (v0.4.0).** `lib/usage_ingest.py` +
   `[usage]` in `relay.toml`: an OPT-IN (`enabled = false` by default),
   best-effort token-usage aggregation by **provider** (inferred from the
