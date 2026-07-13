@@ -7,8 +7,8 @@ the relay — zero model tokens either direction unless *you* start a
 conversation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/tzervas/tg-agent-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/ci.yml)
-[![gitleaks](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
+[![local-ci](https://img.shields.io/badge/quality-local--ci-brightgreen)](docs/RELEASING.md)
+[![gitleaks](https://img.shields.io/badge/gitleaks-manual-lightgrey)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
 
 Built with pure `curl` + `jq` + **Python 3.14** (preferred; 3.13 ok; ≥3.11
 minimum via `lib/python.sh` / `RELAY_PYTHON`) stdlib — no framework, no
@@ -130,8 +130,10 @@ bash go-live.sh
 Full walkthrough (including optional `relay.toml` config and wiring an
 adapter): see [`SETUP.md`](SETUP.md).
 
-**Releases & local upgrade:** [`docs/RELEASING.md`](docs/RELEASING.md) —
-`scripts/release.sh vX.Y.Z` publishes a GitHub Release;  
+**Releases & local upgrade (local-first):** [`docs/RELEASING.md`](docs/RELEASING.md) —
+`bash scripts/local-ci.sh` is the quality gate on this workstation;
+`bash scripts/release.sh vX.Y.Z` tags and publishes the GitHub Release via `gh`
+(no remote Actions required).  
 `scripts/deploy-local.sh [--ref vX.Y.Z]` updates `~/.claude/telegram-bridge`
 without touching `.env` / `relay.toml` / runtime state.
 
@@ -722,9 +724,10 @@ define your own.
   (`getUpdates`) and *pushing out* (`sendMessage`/`sendPhoto`) — no
   inbound port is ever opened on this machine.
 - **Secret-scanned:** [gitleaks](https://github.com/gitleaks/gitleaks)
-  runs as a pre-commit hook (`.pre-commit-config.yaml`) and a CI check
-  (`.github/workflows/gitleaks.yml`) on every push/PR, including a
-  repo-specific rule for this bot token's exact shape (`.gitleaks.toml`).
+  runs as a pre-commit hook (`.pre-commit-config.yaml`) and optionally via
+  `bash scripts/local-ci.sh --with-gitleaks`. The GitHub workflow
+  (`.github/workflows/gitleaks.yml`) is **manual-only** (`workflow_dispatch`).
+  Repo-specific rule for bot token shape: `.gitleaks.toml`.
 
 See [`SETUP.md`](SETUP.md#security-model) for the full security model.
 

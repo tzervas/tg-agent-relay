@@ -7,6 +7,10 @@
 #   bash scripts/dev.sh test      # offline tests via uv run
 #   bash scripts/dev.sh check     # lint + test
 #   bash scripts/dev.sh rust-check  # cargo fmt --check + clippy (when crates exist)
+#   bash scripts/dev.sh local-ci  # full workstation gate (see scripts/local-ci.sh)
+#
+# Releases: bash scripts/local-ci.sh --release && bash scripts/release.sh vX.Y.Z
+# Remote GitHub Actions are workflow_dispatch-only (manual).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -74,11 +78,14 @@ case "$cmd" in
         cargo fmt --all -- --check
         cargo clippy --workspace --all-targets -- -D warnings
         ;;
+    local-ci | ci)
+        bash "$ROOT/scripts/local-ci.sh" "$@"
+        ;;
     -h | --help | help)
-        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
         ;;
     *)
-        printf 'dev.sh: unknown command %s (sync|lint|format|test|check|rust-check)\n' "$cmd" >&2
+        printf 'dev.sh: unknown command %s (sync|lint|format|test|check|rust-check|local-ci)\n' "$cmd" >&2
         exit 2
         ;;
 esac

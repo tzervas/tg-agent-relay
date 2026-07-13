@@ -1,14 +1,24 @@
-# CI — Python 3.14 (uv + ruff + offline tests) and Rust MSRV 1.96
-# Issue #38 / epic #21. Gitleaks lives in gitleaks.yml (kept separate).
+# CI — manual only. Day-to-day and releases use local gates:
+#   bash scripts/local-ci.sh
+#   bash scripts/release.sh vX.Y.Z
+#
+# Remote runners are optional / on-demand (maintainer preference: local-first).
 name: ci
 
 on:
-  push:
-    branches: [main, master, "fix/**", "ci/**", "feat/**"]
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "Run full offline test suite"
+        type: boolean
+        default: true
+      python_version:
+        description: "Python version for uv"
+        type: string
+        default: "3.14"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-manual-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -16,15 +26,8 @@ permissions:
 
 jobs:
   python:
-    name: uv + ruff + tests (${{ matrix.python-version }})
+    name: uv + ruff + tests (${{ inputs.python_version }})
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Primary matrix: Python 3.14 (requires-python >=3.14).
-        # Optional 3.13 secondary allowed-to-fail is intentionally omitted:
-        # the package pins requires-python = ">=3.14".
-        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -37,11 +40,10 @@ jobs:
             uv.lock
             pyproject.toml
 
-      - name: Python ${{ matrix.python-version }} via uv
-        run: uv python install ${{ matrix.python-version }}
+      - name: Python ${{ inputs.python_version }} via uv
+        run: uv python install ${{ inputs.python_version }}
 
-      - name: Sync project (dev group + pygments extras)
-        # --all-groups installs [dependency-groups] dev (pytest, ruff, pygments).
+      - name: Sync project (dev group)
         run: uv sync --all-groups
 
       - name: Ruff check
@@ -51,6 +53,7 @@ jobs:
         run: uv run ruff format --check tg_agent_relay providers lib tests
 
       - name: Offline tests
+        if: ${{ inputs.run_tests }}
         run: |
           export RELAY_PYTHON="$(pwd)/.venv/bin/python"
           bash tests/run-tests.sh
@@ -75,9 +78,4 @@ jobs:
           rustc --version | grep -E '^rustc 1\.96\.'
           grep -q 'rust-version = "1.96"' Cargo.toml
           grep -q 'channel = "1.96"' rust-toolchain.toml
-          echo "MSRV asserts ok: rustc $(rustc --version), Cargo.toml + rust-toolchain.toml pin 1.96"
-
-      # When crates exist, enable:
-      # - run: cargo fmt --all -- --check
-      # - run: cargo clippy --workspace --all-targets -- -D warnings
-      # - run: cargo test --workspace
+          echo "MSRV asserts ok: rustc $(rustc --version)"

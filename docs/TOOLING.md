@@ -73,7 +73,25 @@ rustup component add --toolchain 1.96 rustfmt clippy rust-src rust-analyzer
 Optional crates land under `crates/` and are added to `[workspace].members` only after benchmarks (epic #22).
 Do not raise the MSRV without updating `rust-toolchain.toml`, `Cargo.toml`, CI, and this doc together.
 
-## CI
+## Local CI gate (preferred)
 
-- `.github/workflows/ci.yml` — uv sync, ruff check/format, offline tests on 3.14; rust metadata job
-- `.github/workflows/release.yml` — tag releases
+**Remote Actions are manual-only.** Quality and releases run on this workstation:
+
+```bash
+bash scripts/local-ci.sh              # full gate: uv, ruff, rust MSRV, offline tests, CLI smoke
+bash scripts/local-ci.sh --quick      # ruff + rust only
+bash scripts/local-ci.sh --release    # full gate + clean-tree preflight
+bash scripts/release.sh vX.Y.Z        # re-runs local-ci, then tag + gh release from this machine
+```
+
+Also: `bash scripts/dev.sh local-ci`.
+
+## Remote CI (optional, workflow_dispatch)
+
+| Workflow | Trigger | Role |
+|---|---|---|
+| `.github/workflows/ci.yml` | **manual only** | Optional remote re-check (uv/ruff/tests + MSRV 1.96) |
+| `.github/workflows/release.yml` | **manual only** | Optional asset refresh for an **existing** tag |
+| `.github/workflows/gitleaks.yml` | **manual only** | On-demand secret scan |
+
+Do not use remote green as the release gate — run `local-ci.sh` first.
