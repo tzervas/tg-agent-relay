@@ -257,7 +257,16 @@ with ANY agent using ANY harness, maximum portability + usability.
   input is stripped; the text send is byte-for-byte unchanged. The v0.5.1
   `hook_voice_max_chars` cap now counts SPOKEN chars (applied after
   stripping). Skip-graceful: if the stripper is unavailable it falls back to
-  the raw text (voice still speaks) rather than dropping the note.
+  the raw text (voice still speaks) rather than dropping the note. Hardened
+  from live testing: **code spans of any backtick run length** are detected
+  (CommonMark — `` `x` `` / `` ``x`` `` / ```` ```x``` ````, since the
+  maintainer's messages use 2-backtick spans), the strips work on the
+  **single flattened line** the Claude Code adapter produces (`oneline()`
+  runs before `tg-send.sh`, so `##`/`>`/fenced markers appear mid-line), and
+  a **bash-5.2 `render_template` corruption** (an unescaped `&` in a
+  `${var//pat/repl}` replacement is treated as the matched text, turning
+  `&lt;` into `{detail_suffix}lt;`) was fixed — that one also cleaned the
+  **sent** text, not just the voice.
 
 ## Next
 
