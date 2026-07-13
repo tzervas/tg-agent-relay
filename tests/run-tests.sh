@@ -2475,6 +2475,13 @@ if command -v python3 >/dev/null 2>&1; then
     else
         fail "relay_python tests/test_routing_tables.py" "$PY_OUT"
     fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_mcp_stub.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_mcp_stub.py"
+    else
+        fail "relay_python tests/test_mcp_stub.py" "$PY_OUT"
+    fi
 else
     printf 'SKIP  python3 not installed - skipping package interface unit tests\n'
 fi
