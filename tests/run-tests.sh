@@ -772,6 +772,7 @@ setup_tts_bridge() {
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/tts.sh" "$dir/lib/tts.sh"
+    ln -s "$REPO_ROOT/lib/tts_plain_text.py" "$dir/lib/tts_plain_text.py"
     ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
@@ -1121,6 +1122,149 @@ else
     fail "hook_voice=true: direct send unaffected" "$(cat "$LOG13" 2>/dev/null)"
 fi
 rm -rf "$TTS13" "$STUB13" "$LOG13"
+
+echo "== tg-send.sh: clean spoken transcript - markdown/HTML stripped before TTS (v0.5.2) =="
+# The spoken text (what piper/espeak receives) must be plain prose - no
+# formatting symbols, code/URLs referenced not read - while the SENT text
+# keeps full formatting. A logged espeak stub captures the spoken arg; the
+# stub curl captures what was actually sent.
+
+# -- 14: a message with headers/emphasis/inline+fenced code/a link/HTML
+# -- entities -> spoken text has NO #, backtick, &lt;, http, ](, <pre>/<b>;
+# -- code + link become "see the text message"; the SENT text still HTML.
+TTS14="$(setup_tts_bridge)"
+cat > "$TTS14/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+TOML
+STUB14="$(mktemp -d)"; tts_essential_path "$STUB14" >/dev/null
+LOG14="$(mktemp -u)"; write_stub_curl "$STUB14" "$LOG14"
+ESPEAK_LOG14="$(mktemp -u)"
+cat > "$STUB14/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG14"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB14/espeak-ng"
+write_stub_ffmpeg "$STUB14"
+MSG14="$(printf '## Header line\nSee *emphasis* and `inline_code` plus [the docs](https://example.com/x).\nEntity a &lt; b.\n```rust\nfn main() {}\n```\nBare https://foo.bar/baz done.')"
+PATH="$STUB14" TG_SEND_SOURCE=hook "$TTS14/tg-send.sh" "$MSG14" >/dev/null 2>&1
+SPOKEN14="$(cat "$ESPEAK_LOG14" 2>/dev/null)"
+# The spoken transcript must be free of every formatting symbol + the URL.
+if [[ -n "$SPOKEN14" ]] \
+    && [[ "$SPOKEN14" != *'#'* ]] \
+    && [[ "$SPOKEN14" != *'`'* ]] \
+    && [[ "$SPOKEN14" != *'&lt;'* ]] \
+    && [[ "$SPOKEN14" != *'http'* ]] \
+    && [[ "$SPOKEN14" != *']('* ]] \
+    && [[ "$SPOKEN14" != *'<pre>'* ]] \
+    && [[ "$SPOKEN14" != *'<b>'* ]]; then
+    ok "spoken transcript: no #/backtick/&lt;/http/](/<pre>/<b> symbols reach the TTS engine"
+else
+    fail "spoken transcript: symbols stripped" "spoken=[$SPOKEN14]"
+fi
+# Code + link are REFERENCED, not read aloud.
+if [[ "$SPOKEN14" == *'see the text message'* ]]; then
+    ok "spoken transcript: code + links say 'see the text message' (referenced, not voiced)"
+else
+    fail "spoken transcript: code/link reference present" "spoken=[$SPOKEN14]"
+fi
+# The engine never sees the fenced code body or the raw URL characters.
+if [[ "$SPOKEN14" != *'fn main'* ]] && [[ "$SPOKEN14" != *'foo.bar'* ]] && [[ "$SPOKEN14" != *'example.com'* ]]; then
+    ok "spoken transcript: fenced code body + URL characters are never voiced"
+else
+    fail "spoken transcript: code body/URL not voiced" "spoken=[$SPOKEN14]"
+fi
+# The prose words survive (the read is real content, not just references).
+if [[ "$SPOKEN14" == *'Header line'* ]] && [[ "$SPOKEN14" == *'emphasis'* ]]; then
+    ok "spoken transcript: real prose (header text, emphasis word) is preserved"
+else
+    fail "spoken transcript: prose preserved" "spoken=[$SPOKEN14]"
+fi
+# The SENT text message KEEPS its full formatting (unchanged) - only the
+# voice input was stripped. The formatted send is HTML (parse_mode=HTML).
+if grep -q 'parse_mode=HTML' "$LOG14" 2>/dev/null && grep -qE 'sendMessage' "$LOG14"; then
+    ok "spoken transcript: the SENT text is unchanged (still HTML-formatted), only the voice was stripped"
+else
+    fail "spoken transcript: sent text unchanged" "$(cat "$LOG14" 2>/dev/null)"
+fi
+rm -rf "$TTS14" "$STUB14" "$LOG14" "$ESPEAK_LOG14"
+
+# -- 15: [tts].speak_code = true reads the code body verbatim (escape hatch)
+# -- while still stripping the surrounding markdown.
+TTS15="$(setup_tts_bridge)"
+cat > "$TTS15/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+speak_code = true
+TOML
+STUB15="$(mktemp -d)"; tts_essential_path "$STUB15" >/dev/null
+LOG15="$(mktemp -u)"; write_stub_curl "$STUB15" "$LOG15"
+ESPEAK_LOG15="$(mktemp -u)"
+cat > "$STUB15/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG15"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB15/espeak-ng"
+write_stub_ffmpeg "$STUB15"
+MSG15="$(printf 'run `make build` now')"
+PATH="$STUB15" TG_SEND_SOURCE=hook "$TTS15/tg-send.sh" "$MSG15" >/dev/null 2>&1
+SPOKEN15="$(cat "$ESPEAK_LOG15" 2>/dev/null)"
+if [[ "$SPOKEN15" == *'make build'* ]] && [[ "$SPOKEN15" != *'`'* ]] && [[ "$SPOKEN15" != *'see the text message'* ]]; then
+    ok "speak_code=true: code body IS read verbatim (backticks still stripped), no reference substituted"
+else
+    fail "speak_code=true: code read verbatim" "spoken=[$SPOKEN15]"
+fi
+rm -rf "$TTS15" "$STUB15" "$LOG15" "$ESPEAK_LOG15"
+
+# -- 16: the hook_voice_max_chars cap counts SPOKEN (post-strip) chars, not
+# -- raw markup - a message whose markup is long but whose stripped prose is
+# -- short is NOT truncated.
+TTS16="$(setup_tts_bridge)"
+cat > "$TTS16/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+hook_voice_max_chars = 40
+TOML
+STUB16="$(mktemp -d)"; tts_essential_path "$STUB16" >/dev/null
+LOG16="$(mktemp -u)"; write_stub_curl "$STUB16" "$LOG16"
+write_stub_espeak "$STUB16"; write_stub_ffmpeg "$STUB16"
+# Raw is well over 40 chars (a big fenced code block), but the spoken prose
+# ("Hi there code, see the text message" ~ 35 chars) is under the cap.
+MSG16="$(printf 'Hi there\n```python\n%s\n```' "$(python3 -c "print('x=1; '*40)")")"
+PATH="$STUB16" TG_SEND_SOURCE=hook "$TTS16/tg-send.sh" "$MSG16" >/dev/null 2>&1
+if ! grep -q "hook_voice_truncated" "$TTS16/.metrics.log" 2>/dev/null; then
+    ok "hook cap counts SPOKEN chars: long-markup/short-prose message is NOT truncated (cap applied after stripping)"
+else
+    fail "hook cap counts spoken chars" "$(cat "$TTS16/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$TTS16" "$STUB16" "$LOG16"
 
 echo "== lib/tts.sh: tts_select_engine() unit tests (engine preference/fallback) =="
 # shellcheck disable=SC1091
@@ -1933,6 +2077,19 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 else
     printf 'SKIP  python3 not installed - skipping code-highlight unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== lib/tts_plain_text.py: Python unit tests (markdown/HTML -> clean spoken prose, v0.5.2) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(python3 "$REPO_ROOT/tests/test_tts_plain_text.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "python3 tests/test_tts_plain_text.py"
+    else
+        fail "python3 tests/test_tts_plain_text.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping tts-plain-text unit tests (never-silent: this line IS the record)\n'
 fi
 
 # ============================================================================

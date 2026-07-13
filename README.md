@@ -510,6 +510,34 @@ truncation is logged to `.metrics.log` (`tts hook_voice_truncated`).
 Writing your own adapter? Tag any unattended/automated event the same way
 — see `adapters/README.md` step 6.
 
+### The voice reads clean prose, not symbols (v0.5.2)
+
+Before any voice note is synthesized, the message is stripped to a
+plain-text transcript (`lib/tts_plain_text.py`) so the engine reads
+**words, never formatting symbols** — no `##` headers, `*`/`_` emphasis,
+`` ` ``/```` ``` ```` code, `<b>`/`<pre>` HTML tags, `&lt;`-style entities
+(unescaped to the real character), `>` quotes, `[k/n]` page headers, or
+`-`/`*`/`N.` list markers. **The sent text message keeps its full
+formatting** — only the voice's input is stripped.
+
+Code and links are **referenced, not read aloud** (reading code
+character-by-character, or spelling out `h-t-t-p-s-colon-slash-slash…`, is
+noise):
+
+```toml
+[tts]
+speak_code = false                              # default; a code span/block becomes a spoken reference…
+voice_code_ref = "code, see the text message"   # …this phrase (set speak_code=true to read code verbatim)
+voice_link_ref = "see the text message"         # a [label](url) → "label, <ref>"; a bare URL → "link, <ref>"
+```
+
+So `## Deploy done` · `see *the logs* at [dashboard](https://…)` · a
+```` ```rust … ``` ```` block reads aloud as *"Deploy done … see the logs
+at dashboard, see the text message … code, see the text message"* — clean
+prose that points you back to the chat bubble for the code and the link.
+The `hook_voice_max_chars` cap counts these *spoken* characters (applied
+after stripping).
+
 ### Guaranteed send ordering (v0.5.1)
 
 Every `tg-send.sh` invocation serializes under an exclusive `flock` on
@@ -582,7 +610,8 @@ define your own.
 | `lib/format.sh` | Structured-formatting layer (`[format]`, v0.3.0, on by default) — dynamic soft-wrap, bolded headers, code boxes (`myc`/`mycelium` first-class), quotes, emphasis, via `parse_mode=HTML`; never-silent fallback to plain text on a bad render or a Telegram-side rejection. |
 | `lib/code_highlight.sh` | Host-highlighted code documents (`[code_highlight]`, v0.5.0) — extends `lib/format.sh`'s fenced-code handling: `mode = "html-doc"` additionally renders each fenced block to a self-contained HTML file via `lib/code_highlight.py`, sent with `sendDocument`, paired with a copyable `<pre>` caption; the always-on inline code box is unaffected either way. Default `mode = "inline-only"` is a no-op. |
 | `lib/code_highlight.py` | `pygments` → self-contained HTML document renderer (`HtmlFormatter(noclasses=True)`, optional dep, skip-graceful like `lib/tts.sh`'s piper/`lib/dashboard_render.py`'s matplotlib — no Pillow needed) — includes a native `MyceliumLexer` (`myc`/`mycelium`, a Declared best-effort lexical approximation) plus pygments' own `get_lexer_by_name` for everything else, with a plain-text fallback for an unrecognized tag. |
-| `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. |
+| `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. Strips the message to clean spoken prose (`_tts_plain_text` → `lib/tts_plain_text.py`, v0.5.2) before synthesis. |
+| `lib/tts_plain_text.py` | Markdown/HTML → clean spoken-prose stripper (v0.5.2): removes formatting symbols + unescapes entities so the voice reads words, and references (never voices) code + URLs (`[tts].voice_code_ref`/`voice_link_ref`/`speak_code`). The sent text is unaffected; only the voice's input is stripped. |
 | `fetch-voices.sh` | One-command piper voice model downloader (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful); no args fetches the recommended default (`en_US-joe-medium`), `--list` shows the full recommended table. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
 | `relay-notify.sh` | **Generic, harness-agnostic entry point** — any agent/script can send a status update through it directly. |
