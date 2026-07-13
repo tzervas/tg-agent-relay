@@ -3,7 +3,9 @@
 
 provider_catalog.py list
 provider_catalog.py events grok
+provider_catalog.py events claude
 provider_catalog.py events grok --enabled-only   # default-on events
+provider_catalog.py events claude --names-only   # install-hooks.sh
 provider_catalog.py usage-sources
 """
 

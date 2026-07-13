@@ -78,6 +78,7 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/routing.sh" "$dir/lib/routing.sh"
     ln -s "$REPO_ROOT/lib/provider_hook.py" "$dir/lib/provider_hook.py"
     ln -s "$REPO_ROOT/lib/provider_catalog.py" "$dir/lib/provider_catalog.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/providers" "$dir/providers"
@@ -388,6 +389,51 @@ rm -f "$BAD_SETTINGS"
 
 rm -f "$SETTINGS_FIXTURE" /tmp/install_hooks_out /tmp/install_hooks_out2 /tmp/install_hooks_bad
 rm -rf "$BRIDGE_IH"
+
+# Catalog-driven install: event list + defaults come from provider_catalog
+# (providers/claude), not a hard-coded duplicate in install-hooks.sh.
+echo "== install-hooks.sh: provider_catalog drives event list / defaults =="
+BRIDGE_CAT="$(setup_temp_bridge)"
+# No relay.toml overrides → pure catalog defaults (5 default-enabled events).
+rm -f "$BRIDGE_CAT/relay.toml"
+SETTINGS_CAT="$(mktemp)"
+printf '%s\n' '{}' > "$SETTINGS_CAT"
+# Catalog must list the full Claude set (parity with providers/claude).
+CAT_COUNT="$(relay_python "$REPO_ROOT/lib/provider_catalog.py" events claude --names-only 2>/dev/null | grep -c . || true)"
+assert_eq "provider_catalog events claude --names-only: 30 events" "30" "$CAT_COUNT"
+CAT_ON="$(relay_python "$REPO_ROOT/lib/provider_catalog.py" events claude --enabled-only --names-only 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" >/tmp/install_hooks_cat 2>&1
+CAT_RC=$?
+if [[ $CAT_RC -eq 0 ]]; then
+    ok "install-hooks.sh (catalog defaults): exits 0"
+else
+    fail "install-hooks.sh (catalog defaults): exits 0" "$(cat /tmp/install_hooks_cat)"
+fi
+# Each catalog default-enabled event must be wired; default-disabled must not.
+for ev in PostToolUseFailure Stop StopFailure SubagentStop Notification; do
+    if jq -e --arg e "$ev" --arg cmd "$BRIDGE_CAT/hook-notify.sh" \
+        '.hooks[$e] // [] | any(.[].hooks[]?; .command == $cmd)' "$SETTINGS_CAT" >/dev/null 2>&1; then
+        ok "install-hooks.sh wires catalog default-on event: $ev"
+    else
+        fail "install-hooks.sh wires catalog default-on event: $ev" "$(jq -c . "$SETTINGS_CAT")"
+    fi
+done
+assert_empty "install-hooks.sh does NOT wire catalog default-off PreToolUse" \
+    "$(jq -r --arg cmd "$BRIDGE_CAT/hook-notify.sh" '.hooks.PreToolUse // [] | map(select(.hooks[]?.command == $cmd)) | .[]' "$SETTINGS_CAT" 2>/dev/null)"
+# --dry-run still works against an already-synced file (idempotent no-op path).
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" --dry-run >/tmp/install_hooks_cat_dry 2>&1
+if grep -qE 'no changes|dry-run' /tmp/install_hooks_cat_dry; then
+    ok "install-hooks.sh catalog path: --dry-run / no-op still reports status"
+else
+    fail "install-hooks.sh catalog path: --dry-run / no-op still reports status" "$(cat /tmp/install_hooks_cat_dry)"
+fi
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" --uninstall >/dev/null 2>&1
+assert_empty "install-hooks.sh --uninstall clears catalog-wired Notification" \
+    "$(jq -r --arg cmd "$BRIDGE_CAT/hook-notify.sh" '.hooks.Notification // [] | map(select(.hooks[]?.command == $cmd)) | .[]' "$SETTINGS_CAT" 2>/dev/null)"
+# shellcheck disable=SC2034  # CAT_ON kept for never-silent diagnostics on failure
+: "${CAT_ON:=}"
+rm -f "$SETTINGS_CAT" /tmp/install_hooks_cat /tmp/install_hooks_cat_dry
+rm -rf "$BRIDGE_CAT"
 
 # ============================================================================
 echo "== relay-notify.sh: generic harness-agnostic entry point =="
