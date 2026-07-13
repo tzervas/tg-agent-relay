@@ -440,7 +440,7 @@ def _fmt_tokens(n: object) -> str:
     stat tiles, where raw digit counts get unreadable fast."""
     try:
         n = int(n)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+    except (TypeError, ValueError) as _exc:
         return "0"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -476,7 +476,7 @@ def _load_usage_agg(path: str | None) -> dict | None:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except OSError, ValueError:
+    except (OSError, ValueError) as _exc:
         return None
     return data if isinstance(data, dict) else None
 

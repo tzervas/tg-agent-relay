@@ -1,13 +1,10 @@
-# Optional manual remote release helper.
+# Remote release helper — DISABLED for automatic runs (maintainer: Actions off).
 #
 # Preferred path is LOCAL (this workstation):
 #   bash scripts/local-ci.sh --release
 #   bash scripts/release.sh vX.Y.Z
 #
-# That runs the full gate locally, tags, pushes, and creates the GitHub Release
-# via `gh`. Do not rely on this workflow for day-to-day releases.
-#
-# Manual trigger only — never on tag push (avoids double-release / remote flakiness).
+# workflow_dispatch only — never on tag push.
 name: release
 
 on:

@@ -208,14 +208,14 @@ def _parse_iso8601(raw: object) -> int | None:
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         return int(datetime.datetime.fromisoformat(s).timestamp())
-    except ValueError, TypeError:
+    except (ValueError, TypeError) as _exc:
         return None
 
 
 def _int_field(v: object) -> int:
     try:
         return int(v)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+    except (TypeError, ValueError) as _exc:
         return 0
 
 
@@ -337,7 +337,7 @@ def _collect_grok(base: Path) -> list[UsageRow]:
                             if t is not None:
                                 ts = t
                                 break
-                except OSError, ValueError, TypeError:
+                except (OSError, ValueError, TypeError) as _exc:
                     pass
             signals_path = sess / "signals.json"
             if signals_path.is_file():
@@ -348,7 +348,7 @@ def _collect_grok(base: Path) -> list[UsageRow]:
                         models_used = signals.get("modelsUsed")
                         if isinstance(models_used, list) and models_used and model == "grok":
                             model = str(models_used[0])
-                except OSError, ValueError, TypeError:
+                except (OSError, ValueError, TypeError) as _exc:
                     pass
 
             peak = 0

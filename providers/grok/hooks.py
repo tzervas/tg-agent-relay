@@ -157,7 +157,7 @@ def _g(payload: dict[str, Any], *keys: str, default: str = "") -> str:
             if isinstance(v, (dict, list)):
                 try:
                     s = json.dumps(v, ensure_ascii=False)
-                except TypeError, ValueError:
+                except (TypeError, ValueError) as _exc:
                     s = str(v)
             else:
                 s = str(v)

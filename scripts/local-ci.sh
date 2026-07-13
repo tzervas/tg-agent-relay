@@ -87,6 +87,32 @@ if ! uv run ruff format --check tg_agent_relay providers lib tests; then
     note_fail "ruff format --check (run: bash scripts/dev.sh format)"
 fi
 
+# --- Python syntax (catches invalid except A, B: etc.) ---
+# NOTE: ruff 0.15.x format bug rewrites `except (A, B):` → `except A, B:`
+# (invalid Python 3) when there is no `as` clause. Always use
+# `except (A, B) as _exc:`. This py_compile gate catches regressions.
+step "python -m py_compile (lib/providers/tg_agent_relay)"
+if ! find tg_agent_relay providers lib -name '*.py' -print0 \
+    | xargs -0 -n1 -r uv run python -m py_compile; then
+    note_fail "py_compile"
+fi
+# Also compile with system python3 when present (uv may mask issues)
+if command -v python3 >/dev/null 2>&1; then
+    if ! find tg_agent_relay providers lib -name '*.py' -print0 \
+        | xargs -0 -n1 -r python3 -m py_compile; then
+        note_fail "py_compile (system python3)"
+    fi
+fi
+# Fail closed on Python-2 multi-except that ruff format may reintroduce
+if grep -RIn --include='*.py' -E '^\s*except\s+[^(:]*,[^:]*:' \
+    tg_agent_relay providers lib 2>/dev/null \
+    | grep -v ' as ' >/tmp/local-ci-except-bad.txt 2>/dev/null; then
+    if [[ -s /tmp/local-ci-except-bad.txt ]]; then
+        cat /tmp/local-ci-except-bad.txt >&2
+        note_fail "invalid multi-except (use: except (A, B) as _exc:)"
+    fi
+fi
+
 # --- Rust MSRV ---
 step "rust MSRV / workspace"
 if command -v rustup >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
@@ -98,6 +124,30 @@ else
     if (( RELEASE == 1 )); then
         note_fail "rust toolchain required for --release gate"
     fi
+fi
+
+# --- Shellcheck (safe static analysis when installed) ---
+step "shellcheck (key scripts)"
+if command -v shellcheck >/dev/null 2>&1; then
+    SC_FAIL=0
+    for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
+        install-grok-hooks.sh adapters/claude-code.sh adapters/grok.sh \
+        lib/relay-common.sh lib/relay-config.sh lib/tts.sh lib/format.sh \
+        scripts/local-ci.sh scripts/release.sh scripts/dev.sh scripts/deploy-local.sh; do
+        [[ -f "$f" ]] || continue
+        if ! shellcheck "$f" >/dev/null 2>&1; then
+            printf '  shellcheck FAIL: %s\n' "$f" >&2
+            shellcheck "$f" 2>&1 | head -8 >&2 || true
+            SC_FAIL=1
+        fi
+    done
+    if (( SC_FAIL != 0 )); then
+        note_fail "shellcheck"
+    else
+        printf '  shellcheck: ok\n'
+    fi
+else
+    printf 'local-ci.sh: shellcheck not installed — skip\n'
 fi
 
 # --- Optional gitleaks ---

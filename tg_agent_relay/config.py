@@ -32,7 +32,7 @@ def _merge_chats_overlay(cfg: dict[str, Any], overlay_path: Path) -> dict[str, A
         return cfg
     try:
         raw = json.loads(overlay_path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError) as _exc:
         return cfg
     over = raw.get("chats", raw) if isinstance(raw, dict) else raw
     if not isinstance(over, list):

@@ -99,8 +99,8 @@ NOTES_TMP="$(mktemp)"
     printf 'git fetch --tags && git checkout %s\n' "$TAG"
     printf 'bash scripts/deploy-local.sh --ref %s\n' "$TAG"
     printf '```\n\n'
-    printf 'Built and published **locally** via `scripts/release.sh` '
-    printf '(see `docs/RELEASING.md`). Python **3.14** preferred.\n'
+    printf 'Built and published **locally** via scripts/release.sh '
+    printf '(see docs/RELEASING.md). Python **3.14** preferred.\n'
 } > "$NOTES_TMP"
 
 if (( DRY_RUN == 1 )); then

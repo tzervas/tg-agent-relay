@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.config_json and Path(args.config_json).is_file():
         try:
             config = json.loads(Path(args.config_json).read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError) as _exc:
             config = {}
 
     opts = _event_opts(config, provider.config_namespace, norm, provider)

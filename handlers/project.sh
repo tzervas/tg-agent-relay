@@ -133,7 +133,8 @@ Must be sent from the target group/topic (need chat id)."
                 project: $p
               }]
           )
-        ' "$OVERLAY" > "$TMP" 2>/dev/null && mv "$TMP" "$OVERLAY" || rm -f "$TMP"
+        ' "$OVERLAY" > "$TMP" 2>/dev/null
+        if [[ -s "$TMP" ]]; then mv "$TMP" "$OVERLAY"; else rm -f "$TMP"; fi
         # Reload for confirmation
         load_relay_config "$BRIDGE_DIR/relay.toml"
         reply "✅ Bound project \`${slug}\` to this room
@@ -153,7 +154,8 @@ overlay: .chats.d/bindings.json"
                 ((.chat_id|tostring) != $cid)
                 or ((.thread_id // ""|tostring) != $tid)
               )))
-            ' "$OVERLAY" > "$TMP" && mv "$TMP" "$OVERLAY" || rm -f "$TMP"
+            ' "$OVERLAY" > "$TMP"
+            if [[ -s "$TMP" ]]; then mv "$TMP" "$OVERLAY"; else rm -f "$TMP"; fi
         fi
         reply "🗑 Unbound this room from overlay (chat_id=${CHAT_ID})."
         emit_metric "project" "unbind" ""

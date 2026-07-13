@@ -1,8 +1,9 @@
-# CI — manual only. Day-to-day and releases use local gates:
+# CI — DISABLED for automatic runs (maintainer: remote Actions off).
+# Day-to-day and releases use local gates only:
 #   bash scripts/local-ci.sh
 #   bash scripts/release.sh vX.Y.Z
 #
-# Remote runners are optional / on-demand (maintainer preference: local-first).
+# workflow_dispatch remains so the YAML can be re-enabled manually if desired.
 name: ci
 
 on:

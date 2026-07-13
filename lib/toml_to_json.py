@@ -38,7 +38,7 @@ def main() -> int:
         with open(path, "rb") as f:
             data = tomllib.load(f)
         print(json.dumps(data))
-    except OSError, tomllib.TOMLDecodeError:
+    except (OSError, tomllib.TOMLDecodeError) as _exc:
         print("{}")
 
     return 0

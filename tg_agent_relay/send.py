@@ -66,7 +66,7 @@ def send_message(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
         return '"ok":true' in raw.replace(" ", "")
-    except urllib.error.URLError, TimeoutError, OSError:
+    except (urllib.error.URLError, TimeoutError, OSError) as _exc:
         return False
 
 

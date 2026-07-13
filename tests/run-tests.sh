@@ -79,6 +79,7 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/provider_hook.py" "$dir/lib/provider_hook.py"
     ln -s "$REPO_ROOT/lib/provider_catalog.py" "$dir/lib/provider_catalog.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/providers" "$dir/providers"
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
@@ -801,6 +802,7 @@ setup_tts_bridge() {
     ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
 ALLOWED_USER_ID=999
@@ -828,6 +830,7 @@ setup_format_bridge() {
     ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
 ALLOWED_USER_ID=999
@@ -2266,7 +2269,11 @@ cat > "$IMG5/relay.toml" <<'TOML'
 [code_highlight]
 mode = "html-doc"
 TOML
-PATH="$STUB_IMG5" "$IMG5/tg-send.sh" '```myc
+# Force RELAY_PYTHON through the stub so a parent env that points at a
+# project .venv (with pygments installed via uv) cannot bypass the probe.
+# The stub fails only the `import pygments` probe; other python work uses
+# the real interpreter.
+PATH="$STUB_IMG5" RELAY_PYTHON="$STUB_IMG5/python3" "$IMG5/tg-send.sh" '```myc
 nodule example
 ```'
 if ! grep -q 'sendDocument' "$LOG_IMG5" && grep -q 'language-rust' "$LOG_IMG5" \

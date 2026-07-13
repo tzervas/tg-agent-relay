@@ -49,6 +49,27 @@ uv run ruff format path/to/changed.py
 
 Do not invent alternate linters (flake8/black) — Ruff only.
 
+**Ruff 0.15.x format footgun:** `ruff format` rewrites multi-exception handlers
+without an `as` target from valid Python 3:
+
+```python
+except (OSError, ValueError):      # valid
+```
+
+into invalid Python 2-style:
+
+```python
+except OSError, ValueError:        # SyntaxError on Python 3
+```
+
+**Always write:**
+
+```python
+except (OSError, ValueError) as _exc:
+```
+
+`scripts/local-ci.sh` py_compile-gates this; never skip that gate after `ruff format`.
+
 ## Rust (full toolchain)
 
 | Pin | File |
