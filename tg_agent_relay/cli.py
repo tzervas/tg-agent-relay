@@ -22,6 +22,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--chat-id", default="")
     r.add_argument("--thread-id", default="")
     r.add_argument("--text", default="")
+    f = sub.add_parser("format", help="Format plain text to Telegram HTML (stdin or --text)")
+    f.add_argument("--text", default="")
+    f.add_argument("--wrap-width", type=int, default=50)
+    f.add_argument("--disabled", action="store_true", help="passthrough (enabled=false)")
     args = p.parse_args(argv)
 
     if args.cmd in (None, "version"):
@@ -60,6 +64,18 @@ def main(argv: list[str] | None = None) -> int:
                 cfg = json.load(f)
         res = resolve(cfg, args.chat_id, args.thread_id, args.text)
         print(res.as_pipe())
+        return 0
+
+
+    if args.cmd == "format":
+        from tg_agent_relay.format_api import format_message
+
+        text = args.text if args.text else sys.stdin.read()
+        res = format_message(text, enabled=not args.disabled, wrap_width=args.wrap_width)
+        # stdout: body; stderr: parse_mode for shell consumers
+        print(res.text, end="" if res.text.endswith("\n") or not res.text else "\n")
+        if res.parse_mode:
+            print(res.parse_mode, file=sys.stderr)
         return 0
 
     return 2

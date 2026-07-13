@@ -22,10 +22,12 @@ tg_agent_relay/
   config.py      # load_config, cfg_get
   routing.py     # resolve → RouteResult
   metrics.py     # emit_metric
-  tts.py         # strip_formatting
+  tts.py         # strip_formatting (+ chunk helpers)
   hooks.py       # dispatch_hook(provider_id, payload) → (OK|SKIP, body)
-  format_api.py  # format_message stub (#25 fills in)
-  cli.py         # tg-relay version | hook | route
+  format_api.py  # format_message → FormatResult (HTML parity)
+  send.py        # EnvSender / pagination (#26)
+  poll.py        # inbound loop (#27)
+  cli.py         # tg-relay version | hook | route | format
 providers/       # provider extensions (hooks + usage)
 ```
 
@@ -41,15 +43,18 @@ printf '%s' '{"hookEventName":"stop","message":"hi"}' \
 
 ## Issue → module map
 
-| Issue | Module to fill | Protocol |
-|---|---|---|
-| #24 routing | `tg_agent_relay/routing.py` (+ tests) | `Router` |
-| #25 format | `tg_agent_relay/format_api.py` | `Formatter` |
-| #26 send | `tg_agent_relay/send.py` (create) | `Sender` |
-| #27 poll | `tg_agent_relay/poll.py` (create) | uses Router + handlers |
-| #30 Claude hooks | `providers/claude/hooks.py` | `format_hook` on Provider |
-| #31 usage registry | `lib/usage_ingest.py` + providers | `UsageCollector` |
-| #40 fixtures | `tests/fixtures/hooks/{grok,claude}/` | JSON stdin samples |
+| Issue | Module | Protocol | Status |
+|---|---|---|---|
+| #24 routing | `tg_agent_relay/routing.py` | `Router` | **done** |
+| #25 format | `tg_agent_relay/format_api.py` | `Formatter` | **done** |
+| #26 send | `tg_agent_relay/send.py` | `Sender` | in progress |
+| #27 poll | `tg_agent_relay/poll.py` | poll loop | in progress |
+| #28 TTS | `tg_agent_relay/tts.py` | strip/chunk | in progress |
+| #30 Claude hooks | `providers/claude/hooks.py` | `format_hook` | **done** |
+| #31 usage registry | `lib/usage_ingest.py` + providers | `UsageCollector` | **done** |
+| #40 fixtures | `tests/fixtures/hooks/{grok,claude}/` | JSON stdin | **done** |
+
+**Ruff note:** always `except (A, B) as _exc:` — bare `except (A, B):` is corrupted by ruff 0.15 format.
 
 ## RouteResult pipe format (stable)
 
