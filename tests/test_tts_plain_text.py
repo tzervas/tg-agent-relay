@@ -90,6 +90,33 @@ SC = strip("call my_var_name and other_thing please")
 check("snake_case identifier preserved (my_var_name)", "my_var_name" in SC, repr(SC))
 check("snake_case identifier preserved (other_thing)", "other_thing" in SC, repr(SC))
 
+# --- code spans of ANY backtick run length (CommonMark) --------------------
+DB = strip("run ``make build`` then done")
+check("2-backtick span referenced (no backticks read)", "`" not in DB and "see the text message" in DB, repr(DB))
+check("2-backtick span body 'make build' not voiced", "make build" not in DB, repr(DB))
+QB = strip("x ````weird```` y")
+check("4-backtick span referenced (no backticks)", "`" not in QB and "see the text message" in QB, repr(QB))
+MIX = strip("a `one` b ``two`` c ```three``` d")
+check("mixed 1/2/3-backtick spans all referenced, none left as ticks", "`" not in MIX, repr(MIX))
+
+# --- single-line (flattened) hook input - the REAL adapter shape ------------
+# The Claude Code adapter runs the message through `oneline` (newlines ->
+# spaces) before it reaches tg-send.sh, so the stripper must work with the
+# markers appearing MID-LINE, not only at a line start.
+FLAT = strip(
+    "✅ agent finished — ## Header text and *em* and "
+    "``dbl_code`` and a [doc](https://ex.com/p) plus bare https://foo.bar/z "
+    "> quoted ```rust fn main() {} ``` entity a &lt; b."
+)
+check("flattened: mid-line ## header marker stripped", "#" not in FLAT, repr(FLAT))
+check("flattened: mid-line > blockquote marker stripped", ">" not in FLAT, repr(FLAT))
+check("flattened: double-backtick span referenced (no backticks)", "`" not in FLAT, repr(FLAT))
+check("flattened: fenced code body 'fn main' NOT voiced", "fn main" not in FLAT, repr(FLAT))
+check("flattened: URL characters not voiced", "foo.bar" not in FLAT and "ex.com" not in FLAT and "http" not in FLAT, repr(FLAT))
+check("flattened: entity &lt; unescaped", "&lt;" not in FLAT, repr(FLAT))
+check("flattened: real prose ('Header text', 'em') preserved", "Header text" in FLAT and "em" in FLAT, repr(FLAT))
+check("flattened: code + link references present", FLAT.count("see the text message") >= 3, repr(FLAT))
+
 # --- speak_code escape hatch reads code verbatim ---------------------------
 SP = strip("run `make build` now\n```\nX=1\n```", speak_code=True)
 check("speak_code reads inline code body 'make build'", "make build" in SP, repr(SP))

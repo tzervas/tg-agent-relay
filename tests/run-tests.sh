@@ -199,6 +199,16 @@ assert_eq "render_template: unknown placeholder left LITERAL (never silently bla
     "prefix: {typo}" "$(render_template "prefix: {typo}" prefix "X")"
 assert_eq "render_template: empty value substitutes to nothing (not the literal braces)" \
     "got: " "$(render_template "got: {x}" x "")"
+# v0.5.2 regression: bash 5.2 made `&` in a ${var//pat/repl} replacement mean
+# "the matched text" (sed-style) - a value carrying `&`/`&lt;` was corrupted
+# into the placeholder name (e.g. "&lt;" -> "{detail_suffix}lt;"), which then
+# reached both the sent text AND the TTS voice. The value must insert LITERALLY.
+assert_eq "render_template: a value containing '&' is inserted LITERALLY (not the matched placeholder)" \
+    "x = a & b" "$(render_template "x = {v}" v "a & b")"
+assert_eq "render_template: an entity-laden value survives (regression: &lt; not mangled to a placeholder)" \
+    "finished — a &lt; b &amp; c" "$(render_template "finished{s}" s " — a &lt; b &amp; c")"
+assert_eq "render_template: a literal backslash in the value is preserved" \
+    'path a\b' "$(render_template "path {p}" p 'a\b')"
 
 # ============================================================================
 echo "== adapters/claude-code.sh: [claude_code.<Event>].format templates =="
@@ -1265,6 +1275,55 @@ else
     fail "hook cap counts spoken chars" "$(cat "$TTS16/.metrics.log" 2>/dev/null)"
 fi
 rm -rf "$TTS16" "$STUB16" "$LOG16"
+
+# -- 17: the REAL hook shape - a SINGLE-LINE (flattened, as the adapter's
+# -- oneline() produces) message with a DOUBLE-backtick code span and
+# -- mid-line ## / > markers. The spoken text must still be symbol-free with
+# -- the code referenced (regression for the two live-test findings: single-
+# -- line input + N-backtick spans).
+TTS17="$(setup_tts_bridge)"
+cat > "$TTS17/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 2000
+hook_voice = true
+TOML
+STUB17="$(mktemp -d)"; tts_essential_path "$STUB17" >/dev/null
+LOG17="$(mktemp -u)"; write_stub_curl "$STUB17" "$LOG17"
+ESPEAK_LOG17="$(mktemp -u)"
+cat > "$STUB17/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG17"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB17/espeak-ng"
+write_stub_ffmpeg "$STUB17"
+# One physical line (no newlines) - exactly what oneline() hands tg-send.sh.
+MSG17='agent finished — ## Results here run ``make build`` and see ``other_cmd`` then read [the guide](https://ex.com/g) done'
+PATH="$STUB17" TG_SEND_SOURCE=hook "$TTS17/tg-send.sh" "$MSG17" >/dev/null 2>&1
+SPOKEN17="$(cat "$ESPEAK_LOG17" 2>/dev/null)"
+if [[ -n "$SPOKEN17" ]] \
+    && [[ "$SPOKEN17" != *'`'* ]] \
+    && [[ "$SPOKEN17" != *'#'* ]] \
+    && [[ "$SPOKEN17" != *'make build'* ]] \
+    && [[ "$SPOKEN17" != *'other_cmd'* ]] \
+    && [[ "$SPOKEN17" != *'http'* ]] \
+    && [[ "$SPOKEN17" == *'see the text message'* ]] \
+    && [[ "$SPOKEN17" == *'Results here'* ]]; then
+    ok "flattened single-line + double-backtick: spoken text is clean, code referenced (live-test regression)"
+else
+    fail "flattened single-line + double-backtick clean" "spoken=[$SPOKEN17]"
+fi
+rm -rf "$TTS17" "$STUB17" "$LOG17" "$ESPEAK_LOG17"
 
 echo "== lib/tts.sh: tts_select_engine() unit tests (engine preference/fallback) =="
 # shellcheck disable=SC1091

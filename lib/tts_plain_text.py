@@ -16,8 +16,11 @@ Code and links are, by the maintainer's explicit choice (v0.5.2), NOT read
 aloud - reading code characters or spelling out a URL (`h-t-t-p-s-colon-
 slash-slash...`) is noise. Each is replaced with a short spoken REFERENCE
 back to the text message, so the listener knows to look at the chat bubble:
-  - a fenced OR inline code span -> the `--code-ref` phrase
-    (default "code, see the text message").
+  - a code span of ANY backtick run length -> the `--code-ref` phrase
+    (default "code, see the text message"): `x` (1 backtick), ``x`` (2 -
+    the shape the maintainer's messages use), ```lang ... ``` (3+, fenced),
+    single- or multi-line, all detected via the CommonMark rule (a run of
+    N backticks opens, the next run of N backticks closes).
   - a Markdown link `[label](url)`  -> "<label>, <link-ref>" (the link
     TEXT is kept, the URL is dropped); a bare URL -> "link, <link-ref>"
     (`--link-ref` default "see the text message"). The URL characters are
@@ -52,20 +55,21 @@ def strip_formatting(
     normal string input (the CLI wrapper adds the belt-and-suspenders
     echo-on-error guard on top)."""
 
-    # 1. Fenced code blocks (``` or ~~~), possibly multi-line. The closing
-    #    fence must repeat the SAME marker run (backreference). speak_code
-    #    keeps the body; otherwise the whole block becomes one reference.
+    # NB: the live TTS input is often a SINGLE flattened line (the Claude
+    # Code adapter runs the hook message through `oneline` before it reaches
+    # tg-send.sh, so newlines are already spaces). Every rule below therefore
+    # works WITHOUT relying on line structure - code fences, headers and
+    # blockquote markers are matched inline, not only at a line start.
+
+    # 1. Multi-line TILDE fences (~~~), for a direct/multi-line send. Backtick
+    #    fences of any length are handled by the general code-span rule (3).
     def _fence(m: "re.Match[str]") -> str:
         return m.group("body") if speak_code else code_ref
 
     text = re.sub(
-        r"(?s)(?P<f>`{3,}|~{3,})[^\n]*\n(?P<body>.*?)(?P=f)",
-        _fence,
-        text,
+        r"(?s)(?P<f>~{3,})[^\n]*\n(?P<body>.*?)(?P=f)", _fence, text
     )
-    # Any dangling fence marker (an unclosed block) -> reference / removed,
-    # so a stray ``` is never spelled out as "backtick backtick backtick".
-    text = re.sub(r"`{3,}|~{3,}", "" if speak_code else code_ref, text)
+    text = re.sub(r"~{3,}", "" if speak_code else code_ref, text)
 
     # 2. HTML <pre>...</pre> code boxes (what lib/format.sh emits), multi-
     #    line. Defensive: the live TTS input is the raw markdown, but a
@@ -83,12 +87,20 @@ def strip_formatting(
 
     text = re.sub(r"(?is)<code\b[^>]*>(?P<body>.*?)</code>", _htmlcode, text)
 
-    # 3. Markdown inline code `code` -> reference (or the bare word).
-    text = re.sub(
-        r"`([^`\n]+)`",
-        (lambda m: m.group(1)) if speak_code else (lambda m: code_ref),
-        text,
-    )
+    # 3. Backtick code spans of ANY run length (CommonMark: a run of N
+    #    backticks opens the span and the next run of N backticks closes it -
+    #    N may be 1, 2, 3, 4...). This single matcher covers `x` (1), ``x``
+    #    (2, the shape the maintainer's messages actually use), and
+    #    ```lang ... ``` (3+, fenced) alike, single- OR multi-line - so a
+    #    2-backtick span is never left to be read as "backtick backtick".
+    #    `.+?` is lazy so adjacent spans don't merge; `\1` forces an
+    #    equal-length closing run.
+    def _span(m: "re.Match[str]") -> str:
+        return m.group(2) if speak_code else code_ref
+
+    text = re.sub(r"(?s)(`+)(.+?)\1", _span, text)
+    # Any leftover UNBALANCED backtick run -> removed (never voiced as ticks).
+    text = re.sub(r"`+", "", text)
 
     # 4. Markdown links [label](url) -> "label, <link_ref>" (NEVER the url).
     def _link(m: "re.Match[str]") -> str:
@@ -106,13 +118,13 @@ def strip_formatting(
     # 7. Unescape HTML entities so the voice says the char, not "&lt;".
     text = html.unescape(text)
 
-    # 8. Line-start markers (headers / blockquotes / list bullets / [k/n]).
-    text = re.sub(r"(?m)^[ \t]*#{1,6}[ \t]*", "", text)          # ATX headers
-    text = re.sub(r"(?m)^[ \t]*(?:>[ \t]*)+", "", text)          # blockquotes
-    text = re.sub(r"(?m)^[ \t]*[-+*][ \t]+", "", text)           # unordered list
-    text = re.sub(r"(?m)^[ \t]*\d+[.)][ \t]+", "", text)        # ordered list
-    text = re.sub(r"(?m)^[ \t]*\[\d+/\d+\][ \t]*$", "", text)   # [k/n] page-header line
-    text = re.sub(r"(?m)^[ \t]*\[\d+/\d+\][ \t]*", "", text)    # [k/n] leading prefix
+    # 8. Markdown line-markers - matched INLINE (flattened-input-safe), at a
+    #    string/line start OR after whitespace, never mid-word:
+    text = re.sub(r"(?:(?<=\s)|^)#{1,6}[ \t]+", "", text)       # ## headers
+    text = re.sub(r"(?:(?<=\s)|^)>{1,}[ \t]+", "", text)         # > blockquotes
+    text = re.sub(r"(?m)^[ \t]*[-+*][ \t]+", "", text)          # leading list bullets
+    text = re.sub(r"(?m)^[ \t]*\d+[.)][ \t]+", "", text)       # leading ordered list
+    text = re.sub(r"\[\d+/\d+\][ \t]*", "", text)               # [k/n] page header, anywhere
 
     # 9. Emphasis markers *word* / _word_ -> word. Boundary-guarded so a
     #    snake_case identifier (my_var_name) is left intact - the classic
