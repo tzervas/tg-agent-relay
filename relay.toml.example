@@ -573,40 +573,44 @@
 #   pre-v0.5.1 shape (hook pings are effectively text-only, same as any
 #   other over-max_chars/paginated message).
 #
+# --- Spoken coverage (short default vs full-mode) -------------------------
 # spoken_mode = "short"
-#   DEFAULT "short": truncate spoken prose to spoken_max_chars (one clip).
-#   "full": entire spoken prose; split into clips of clip_max_chars (0 =
-#   one unbounded clip). TEXT pages always stay unabridged either way.
+#   DEFAULT "short": truncate spoken prose to spoken_max_chars at a word
+#   boundary and send ONE voice clip. A truncation is logged to
+#   .metrics.log ("tts hook_voice_truncated"). Use this for short chat-style
+#   notes; the TEXT bubble still goes out FULL / unabridged either way.
 # spoken_max_chars = 600
+#
+# spoken_mode = "full"
+#   Opt-in full read-through: the ENTIRE spoken prose is covered, split at
+#   word boundaries into ordered clips of clip_max_chars (0 = one unbounded
+#   clip). A multi-clip event is logged to .metrics.log
+#   ("tts hook_voice_chunked"). Voice note(s) are generated ONCE from the
+#   complete pre-pagination message and sent BEFORE the text pages.
+#
+# --- Full-mode user recipe (copy into your relay.toml to opt in) ----------
+# spoken_mode = "full"
+# clip_max_chars = 1500
+# collapse_adjacent_refs = true  # default true — keep consecutive refs tidy
+# voice_code_ref = "ref. the message for the code"
+# voice_link_ref = "ref. the message for the link"
+#
 # clip_max_chars = 1500
 # hook_voice_max_chars = 1500
 #   Legacy alias for clip_max_chars when clip_max_chars is unset.
 #   Only used when spoken_mode = "full". Counts SPOKEN chars after strip.
+#   Set to 0 for a single unbounded clip instead of chunking.
 #
-#   v0.5.3 (bugfix): this used to be a hard TRUNCATION cap - anything past
-#   it was silently dropped, so a long hook ping's voice note read only
-#   its first ~1500 characters (one part of the message, not the whole
-#   thing - the exact defect reported and fixed). It is now a CHUNK size
-#   instead: when the spoken text is longer than this, it is split at
-#   word boundaries into multiple ordered voice notes that together cover
-#   the ENTIRE message - nothing is ever dropped. A chunking event is
-#   logged to .metrics.log ("tts hook_voice_chunked") whenever a ping
-#   needs more than one clip - never silent. Set this to 0 to opt all the
-#   way out of chunking and always synthesize ONE unbounded clip for the
-#   whole message instead (a single, possibly-long voice note). The voice
-#   note(s) are generated ONCE from the complete, pre-pagination message
-#   and sent BEFORE the text pages (see lib/tts.sh's header + README's
-#   "The full message is always read" section for the ordering rationale).
-#
-# --- Clean spoken transcript (v0.5.2) -------------------------------------
+# --- Clean spoken transcript (v0.5.2+) ------------------------------------
 # Before ANY voice note is synthesized, the message is stripped to plain-
 # text PROSE (lib/tts_plain_text.py) so the engine reads WORDS, never the
 # formatting SYMBOLS: `#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ````
 # code, `<b>`/`<pre>`/`<code>` HTML tags, `&lt;`-style entities (unescaped
 # to the real char), `>` blockquotes, `[k/n]` page headers, and `-`/`*`/`N.`
-# list markers. The SENT text message keeps its FULL formatting - only the
-# voice's input is stripped. These knobs tune what the voice SAYS in place
-# of code and links (which are referenced, not read aloud):
+# list markers. Call/tool/request IDs (UUIDs, call_*, toolu_*, long hex
+# tokens, …) are stripped so the voice never spells them out. URLs and
+# code are referenced, not read aloud. The SENT text message keeps its
+# FULL formatting (and full length) - only the voice's input is stripped.
 #
 # speak_code = false
 #   Default false: a code span/block is replaced by voice_code_ref below
@@ -620,14 +624,14 @@
 #
 # voice_link_ref = "ref. the message for the link"
 #   The spoken tail for a link. A Markdown link `[label](url)` is read as
-#   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped); a
+#   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped);
+#   a bare URL is read as "link, <voice_link_ref>". The URL characters are
+#   never voiced (no "h-t-t-p-s-colon-slash-slash..." spell-out).
 #
 # collapse_adjacent_refs = true
-#   Collapse consecutive identical code/link refs so three adjacent fences
-#   voice one "ref. the message for the code", not three in a row.
-
-#   bare URL is read as "link, <voice_link_ref>". The URL characters are
-#   never voiced (no "h-t-t-p-s-colon-slash-slash..." spell-out).
+#   DEFAULT true. Collapse consecutive identical code/link refs so three
+#   adjacent fences voice one "ref. the message for the code", not three
+#   in a row.
 
 # --------------------------------------------------------------------------
 # [dashboard] - shared config for the dashboard/stats relay-handled

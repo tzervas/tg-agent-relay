@@ -532,68 +532,82 @@ routinely carry a full agent message and so are routinely over
 [tts]
 mode = "text+voice"
 hook_voice = true              # default; false restores the old hook-is-text-only shape
-hook_voice_max_chars = 1500    # per-clip length (v0.5.3: chunked, not truncated - see below)
+spoken_mode = "short"          # default: one short voice clip (see below)
+spoken_max_chars = 600         # short-mode word-boundary cap (spoken chars after strip)
 ```
 
 The **text send is never affected** — every page still goes out
 unabridged, even in `mode = "voice-only"` (a hook ping always sends text;
 voice is purely additive).
 
-### The full message is always read — chunked, never truncated (v0.5.3)
+### Spoken length: short default, full-mode recipe
 
-Fixed a real defect: v0.5.1/v0.5.2 capped the *spoken* text at
-`hook_voice_max_chars` with a hard cut (anything past the cap was
-silently dropped), so a long hook ping's voice note read only its first
-~1500 characters — one part of the message, not the whole thing.
+**Default `spoken_mode = "short"`** — after the plain-text strip, the
+spoken prose is truncated at a word boundary to `spoken_max_chars`
+(default 600) and sent as **one** voice clip. A truncation is logged to
+`.metrics.log` (`tts hook_voice_truncated`). The Telegram **text bubble
+always stays full and unabridged**; only the voice is shortened.
 
-The spoken text is now **chunked at word boundaries** into one or more
-ordered voice notes, each up to `hook_voice_max_chars`, and **every**
-chunk is sent — the full message is always read, split across multiple
-voice notes if it's long, never truncated into silence. A chunking event
-is logged to `.metrics.log` (`tts hook_voice_chunked`) whenever a ping
-needs more than one clip — never silent either way. Set
-`hook_voice_max_chars = 0` to opt all the way out of chunking and always
-synthesize a single, unbounded clip for the whole message instead.
+**Opt in to a full read-through** with `spoken_mode = "full"` — the
+entire spoken prose is covered, split at word boundaries into ordered
+clips of `clip_max_chars` (default 1500; `hook_voice_max_chars` is the
+legacy alias when `clip_max_chars` is unset). Set `clip_max_chars = 0`
+for a single unbounded clip. Multi-clip events log
+`tts hook_voice_chunked`.
 
-**Ordering:** the voice note(s) are generated once from the complete,
+#### Full-mode user recipe
+
+Copy this into your `relay.toml` when you want the whole message read
+aloud (maintainer-style personal config):
+
+```toml
+[tts]
+mode = "text+voice"
+spoken_mode = "full"
+clip_max_chars = 1500
+collapse_adjacent_refs = true                   # default true
+voice_code_ref = "ref. the message for the code"
+voice_link_ref = "ref. the message for the link"
+```
+
+**Ordering:** voice note(s) are generated once from the complete,
 pre-pagination message and sent **first**, then the (unabridged, formatted)
-text pages are sent in order — hear the full message, then see it broken
-into pages for reference/detail (code, links, exact figures). The v0.5.1
+text pages — hear the summary (or full read), then see pages for
+reference/detail (code, links, exact figures). The v0.5.1
 serialized-send guarantee (`flock` on `.tg-send.lock` +
 `[general].send_interval_ms`) still holds: one invocation's voice+pages
-always complete, in this order, before the next invocation (e.g. a burst of
-hook events) begins its own send.
+always complete, in this order, before the next invocation begins.
 
 Writing your own adapter? Tag any unattended/automated event the same way
 — see `adapters/README.md` step 6.
 
-### The voice reads clean prose, not symbols (v0.5.2)
+### The voice reads clean prose, not symbols (v0.5.2+)
 
 Before any voice note is synthesized, the message is stripped to a
 plain-text transcript (`lib/tts_plain_text.py`) so the engine reads
 **words, never formatting symbols** — no `##` headers, `*`/`_` emphasis,
 `` ` ``/```` ``` ```` code, `<b>`/`<pre>` HTML tags, `&lt;`-style entities
 (unescaped to the real character), `>` quotes, `[k/n]` page headers, or
-`-`/`*`/`N.` list markers. **The sent text message keeps its full
-formatting** — only the voice's input is stripped.
-
-Code and links are **referenced, not read aloud** (reading code
-character-by-character, or spelling out `h-t-t-p-s-colon-slash-slash…`, is
-noise):
+`-`/`*`/`N.` list markers. **Call/tool/request IDs** (UUIDs, `call_*`,
+`toolu_*`, long hex tokens, …), **URLs**, and **code/backticks** are not
+spoken — code and links become short spoken references; IDs are dropped.
+**The sent text message keeps its full formatting and full length** —
+only the voice's input is stripped.
 
 ```toml
 [tts]
 speak_code = false                              # default; a code span/block becomes a spoken reference…
-voice_code_ref = "code, see the text message"   # …this phrase (set speak_code=true to read code verbatim)
-voice_link_ref = "see the text message"         # a [label](url) → "label, <ref>"; a bare URL → "link, <ref>"
+voice_code_ref = "ref. the message for the code"  # …this phrase (set speak_code=true to read code verbatim)
+voice_link_ref = "ref. the message for the link"  # a [label](url) → "label, <ref>"; a bare URL → "link, <ref>"
+collapse_adjacent_refs = true                   # default; consecutive identical refs collapse to one
 ```
 
 So `## Deploy done` · `see *the logs* at [dashboard](https://…)` · a
 ```` ```rust … ``` ```` block reads aloud as *"Deploy done … see the logs
-at dashboard, see the text message … code, see the text message"* — clean
-prose that points you back to the chat bubble for the code and the link.
-The `hook_voice_max_chars` cap counts these *spoken* characters (applied
-after stripping).
+at dashboard, ref. the message for the link … ref. the message for the
+code"* — clean prose that points you back to the chat bubble for the code
+and the link. `spoken_max_chars` / `clip_max_chars` count these *spoken*
+characters (applied after stripping).
 
 ### Guaranteed send ordering (v0.5.1)
 
