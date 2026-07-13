@@ -1,17 +1,30 @@
+# CI — Python 3.14 (uv + ruff + offline tests) and Rust MSRV 1.96
+# Issue #38 / epic #21. Gitleaks lives in gitleaks.yml (kept separate).
 name: ci
 
 on:
   push:
-    branches: [main, master, "fix/**"]
+    branches: [main, master, "fix/**", "ci/**", "feat/**"]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   python:
-    name: uv + ruff + tests (3.14)
+    name: uv + ruff + tests (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Primary matrix: Python 3.14 (requires-python >=3.14).
+        # Optional 3.13 secondary allowed-to-fail is intentionally omitted:
+        # the package pins requires-python = ">=3.14".
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -20,11 +33,15 @@ jobs:
         with:
           version: "latest"
           enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
 
-      - name: Python 3.14 via uv
-        run: uv python install 3.14
+      - name: Python ${{ matrix.python-version }} via uv
+        run: uv python install ${{ matrix.python-version }}
 
-      - name: Sync project (dev group)
+      - name: Sync project (dev group + pygments extras)
+        # --all-groups installs [dependency-groups] dev (pytest, ruff, pygments).
         run: uv sync --all-groups
 
       - name: Ruff check
@@ -39,7 +56,7 @@ jobs:
           bash tests/run-tests.sh
 
   rust:
-    name: rust toolchain (workspace)
+    name: rust toolchain (MSRV 1.96)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,9 +71,11 @@ jobs:
 
       - name: Assert MSRV pin
         run: |
+          set -euo pipefail
           rustc --version | grep -E '^rustc 1\.96\.'
           grep -q 'rust-version = "1.96"' Cargo.toml
           grep -q 'channel = "1.96"' rust-toolchain.toml
+          echo "MSRV asserts ok: rustc $(rustc --version), Cargo.toml + rust-toolchain.toml pin 1.96"
 
       # When crates exist, enable:
       # - run: cargo fmt --all -- --check
