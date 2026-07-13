@@ -140,14 +140,16 @@ def _render_image(
     # enough to read at Telegram's inline preview width. Grows with the
     # usage panels so they stay proportioned, not squeezed.
     fig_height = 10.5 + extra_rows * 1.9
-    fig = plt.figure(figsize=(7.2, fig_height), dpi=200)
+    # Wider than the original 7.2in portrait so long model/project y-labels
+    # and bar value annotations are not clipped on Telegram's preview.
+    fig = plt.figure(figsize=(10.2, fig_height), dpi=200)
     gs = fig.add_gridspec(
         4 + extra_rows,
         1,
         height_ratios=height_ratios,
         hspace=0.6,
-        left=0.24,
-        right=0.94,
+        left=0.30,
+        right=0.96,
         top=0.98 if show_usage else 0.95,
         bottom=0.03 if show_usage else 0.06,
     )
@@ -277,6 +279,16 @@ def _render_image(
     return Path(out_path).is_file() and Path(out_path).stat().st_size > 0
 
 
+def _display_name(name: str) -> str:
+    """Prefer short model labels when usage_ingest.display_model is available."""
+    try:
+        import usage_ingest as _u  # type: ignore
+
+        return _u.display_model(name)
+    except Exception:  # noqa: BLE001
+        return name if len(name) <= 28 else name[:27] + "…"
+
+
 def _hbar(ax, counts: dict, title: str, color: str, limit: int = 8) -> None:
     import matplotlib.ticker as mticker
 
@@ -286,7 +298,7 @@ def _hbar(ax, counts: dict, title: str, color: str, limit: int = 8) -> None:
         ax.axis("off")
         return
     items = sorted(counts.items(), key=lambda kv: kv[1])[-limit:]
-    names = [n for n, _ in items]
+    names = [_display_name(n) for n, _ in items]
     values = [v for _, v in items]
     y = range(len(names))
     ax.barh(y, values, color=color, height=0.6)
@@ -438,8 +450,8 @@ def _render_usage_image(
     has_trend = len(usage_agg.get("timeline", [])) >= 2
     n_rows = 4 + (1 if has_trend else 0)
     height_ratios = [1.1, 1.8, 1.6, 1.8] + ([1.8] if has_trend else [])
-    fig = plt.figure(figsize=(7.2, 10.3 if not has_trend else 12.1), dpi=200)
-    gs = fig.add_gridspec(n_rows, 1, height_ratios=height_ratios, hspace=0.65, left=0.24, right=0.94, top=0.95, bottom=0.05)
+    fig = plt.figure(figsize=(10.2, 10.3 if not has_trend else 12.1), dpi=200)
+    gs = fig.add_gridspec(n_rows, 1, height_ratios=height_ratios, hspace=0.65, left=0.30, right=0.96, top=0.95, bottom=0.05)
 
     win_label = usage_agg.get("window", "?")
     fig.suptitle(f"Token Usage — {win_label}", fontsize=16, fontweight="bold", color=INK_PRIMARY, y=0.985)
@@ -459,8 +471,8 @@ def _render_usage_image(
             "in / out",
             True,
         ),
-        (_truncate(_top_key(usage_agg.get("by_model", {})) or "—"), "top model", False),
-        (_truncate(_top_key(usage_agg.get("by_project", {})) or "—"), "top project", False),
+        (_truncate(_display_name(_top_key(usage_agg.get("by_model", {})) or "—"), 16), "top model", False),
+        (_truncate(_top_key(usage_agg.get("by_project", {})) or "—", 16), "top project", False),
     ]
     n = len(stats)
     for i, (value, label, is_numeric) in enumerate(stats):

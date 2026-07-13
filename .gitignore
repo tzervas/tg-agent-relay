@@ -12,8 +12,10 @@
 .last-sent
 .tg-buffer
 .tg-buffer-ts
+.tg-buffer.*
 .metrics.log
 .tg-send.lock
+.chats.d/
 *.log
 # ...except a COMMITTED test fixture that happens to share the extension
 # (same reasoning/pattern as /relay.toml above, scoped by directory instead

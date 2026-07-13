@@ -1,0 +1,16 @@
+# TG Agent Relay — architecture (text fallback)
+
+Use this file ONLY when the model has no vision / does not benefit from images.
+If vision is available, load docs/assets/context/architecture.png (+ caption from
+docs/context/manifest.json) instead — do NOT also load this text.
+
+Outbound (0 model tokens):
+  agent/hook → adapter (claude-code / grok / generic) → relay-notify.sh
+  → tg-send.sh (paginate, format HTML, optional TTS) → Telegram
+
+Inbound (billed only if forwarded to agent):
+  Telegram → tg-poll.sh (allowlist ALLOWED_USER_ID)
+  → reassembly → either relay-handled command (dashboard/stats/usage/project)
+  or tagged event to agent Monitor/FIFO/cmd.
+
+Security: numeric user allowlist; bot token in local .env only.

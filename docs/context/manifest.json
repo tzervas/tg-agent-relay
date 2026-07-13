@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "description": "Hybrid agent context: each entry has a TEXT variant and an optional VISUAL variant of the SAME content. Vision-capable agents load ONLY image (+ short caption). Non-vision agents load ONLY text. Never both for the same id (no double-dip).",
+  "selection_rule": "exclusive_by_capability",
+  "entries": [
+    {
+      "id": "architecture",
+      "title": "TG Agent Relay architecture",
+      "text": "docs/context/architecture.txt",
+      "image": "docs/assets/context/architecture.png",
+      "caption": "Outbound hooks → relay-notify → tg-send; inbound tg-poll → handlers or agent. Zero model tokens on status path."
+    },
+    {
+      "id": "routing",
+      "title": "Multi-backend and project chat routing",
+      "text": "docs/context/routing.txt",
+      "image": "docs/assets/context/routing.png",
+      "caption": "Sticky project rooms (group or forum topic); backend via @prefix or room default; allowlist by user id."
+    },
+    {
+      "id": "usage-legend",
+      "title": "Token usage dashboard legend",
+      "text": "docs/context/usage-legend.txt",
+      "image": "docs/assets/usage-example.png",
+      "caption": "Local opt-in usage: by model, provider share, project; window Nd/Nm/Ny/lifetime (local retained)."
+    }
+  ]
+}

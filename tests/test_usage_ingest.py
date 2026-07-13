@@ -68,9 +68,13 @@ print("== lib/usage_ingest.py: infer_provider() ==")
 assert_eq("claude-* -> anthropic", "anthropic", u.infer_provider("claude-opus-4-8"))
 assert_eq("gpt-* -> openai", "openai", u.infer_provider("gpt-5"))
 assert_eq("gemini-* -> google", "google", u.infer_provider("gemini-3-pro"))
+assert_eq("grok-* -> xai", "xai", u.infer_provider("grok-4.5"))
 assert_eq("unrecognized -> other", "other", u.infer_provider("mystery-model-x"))
 assert_eq("empty/None -> other, never raises", "other", u.infer_provider(""))
 assert_eq("case-insensitive", "anthropic", u.infer_provider("Claude-Opus-4-8"))
+assert_eq("display_model opus", "Opus 4.8", u.display_model("claude-opus-4-8"))
+assert_eq("display_model haiku", "Haiku 4.5", u.display_model("claude-haiku-4-5-20251001"))
+assert_eq("display_model sonnet", "Sonnet 5", u.display_model("claude-sonnet-5"))
 
 print("== lib/usage_ingest.py: resolve_window() ==")
 ws, we, label = u.resolve_window("7d", now=NOW)
@@ -82,9 +86,23 @@ ws, we, label = u.resolve_window("24h", now=NOW)
 assert_eq("24h: window_start = now - 24*3600", NOW - 24 * 3600, ws)
 assert_eq("24h: label", "24h", label)
 
+ws, we, label = u.resolve_window("3m", now=NOW)
+assert_eq("3m: ~90 days", NOW - 3 * 30 * 86400, ws)
+assert_eq("3m: label", "3m", label)
+
+ws, we, label = u.resolve_window("1y", now=NOW)
+assert_eq("1y: ~365 days", NOW - 365 * 86400, ws)
+
 ws, we, label = u.resolve_window("all", now=NOW)
 assert_eq("all: window_start = 0 (unbounded)", 0, ws)
 assert_eq("all: label", "all", label)
+
+ws, we, label = u.resolve_window("lifetime", now=NOW)
+assert_eq("lifetime: window_start = 0", 0, ws)
+if "lifetime" in label and "local" in label:
+    ok("lifetime: labeled as local retained")
+else:
+    fail("lifetime: labeled as local retained", label)
 
 ws, we, label = u.resolve_window("", now=NOW)
 assert_eq("empty spec treated as 'all'", 0, ws)
@@ -132,12 +150,13 @@ assert_eq("aggregate: empty rows -> empty breakdowns", {}, empty_agg["by_provide
 print("== lib/usage_ingest.py: collect() over the synthetic fixture tree ==")
 agg = u.collect("claude-code", str(FIXTURE_DIR), WINDOW, now=NOW)
 
-# 5 in-window assistant+usage rows: 2 from -fake-project-alpha (the 200h-old
-# outlier is excluded) + 3 from -fake-project-beta.
-assert_eq("collect: total_events (window-filtered, malformed/non-assistant/no-usage/out-of-window all excluded)", 5, agg["total_events"])
-assert_eq("collect: sources_scanned (all parsed rows before window filter)", 6, agg["sources_scanned"])
-assert_eq("collect: totals.input_tokens", 100 + 200 + 150 + 90 + 10, agg["totals"]["input_tokens"])
-assert_eq("collect: totals.output_tokens", 50 + 80 + 60 + 30 + 10, agg["totals"]["output_tokens"])
+# In-window rows: original 5 shallow + 2 nested (haiku 60 + sonnet 45 under
+# alpha). 200h-old outlier still excluded. Nested subagent paths prove the
+# recursive scan (Sonnet/Haiku no longer invisible).
+assert_eq("collect: total_events (window-filtered + nested subagent rows)", 7, agg["total_events"])
+assert_eq("collect: sources_scanned (all parsed rows before window filter)", 8, agg["sources_scanned"])
+assert_eq("collect: totals.input_tokens", 100 + 200 + 150 + 90 + 10 + 40 + 30, agg["totals"]["input_tokens"])
+assert_eq("collect: totals.output_tokens", 50 + 80 + 60 + 30 + 10 + 20 + 15, agg["totals"]["output_tokens"])
 assert_eq("collect: totals.cache_read_tokens (only line 1 has any)", 10, agg["totals"]["cache_read_tokens"])
 assert_eq("collect: totals.cache_creation_tokens (only line 1 has any)", 5, agg["totals"]["cache_creation_tokens"])
 assert_eq(
@@ -145,18 +164,23 @@ assert_eq(
     {"anthropic", "openai", "google", "other"},
     set(agg["by_provider"].keys()),
 )
-assert_eq("collect: by_provider anthropic total (opus 165 + sonnet 280)", 445, agg["by_provider"]["anthropic"]["total_tokens"])
+# anthropic: opus 165 + sonnet shallow 280 + haiku 60 + sonnet nested 45 = 550
+assert_eq("collect: by_provider anthropic total (opus+sonnet+haiku nested)", 550, agg["by_provider"]["anthropic"]["total_tokens"])
 assert_eq(
     "collect: by_project breakdown (both fake projects present)",
     {"-fake-project-alpha", "-fake-project-beta"},
     set(agg["by_project"].keys()),
 )
-assert_eq("collect: by_project alpha total (opus 165 + sonnet 280)", 445, agg["by_project"]["-fake-project-alpha"]["total_tokens"])
+assert_eq("collect: by_project alpha total (opus+sonnet+nested)", 550, agg["by_project"]["-fake-project-alpha"]["total_tokens"])
 assert_eq(
     "collect: by_project beta total (gpt-5 210 + gemini 120 + mystery 20)",
     350,
     agg["by_project"]["-fake-project-beta"]["total_tokens"],
 )
+if "claude-haiku-4-5-20251001" in agg["by_model"] and "claude-sonnet-5" in agg["by_model"]:
+    ok("collect: nested sonnet+haiku models present (recursive scan)")
+else:
+    fail("collect: nested sonnet+haiku models present", sorted(agg["by_model"].keys()))
 assert_eq("collect: never raises, no 'skipped' reason for a good source", None, agg.get("skipped"))
 assert_eq("collect: echoes back the source name", "claude-code", agg["source"])
 

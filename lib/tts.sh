@@ -36,6 +36,12 @@ declare -f cfg_get >/dev/null 2>&1 || cfg_get() { printf '%s' "$2"; }  # lib mis
 # shellcheck disable=SC1091
 [[ -f "$_TTS_LIB_DIR/relay-common.sh" ]] && source "$_TTS_LIB_DIR/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+# Prefer Python 3.14 for tts_plain_text.py
+if [[ -f "$_TTS_LIB_DIR/python.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$_TTS_LIB_DIR/python.sh"
+fi
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 
 # _tts_plain_text <text>
 #
@@ -62,16 +68,20 @@ declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing ->
 # voice still speaks (unstripped) rather than being dropped, exactly like
 # the rest of lib/tts.sh's never-block-the-message contract.
 _tts_plain_text() {
-    local text="$1" speak_code code_ref link_ref out args
+    local text="$1" speak_code code_ref link_ref collapse out args
     speak_code="$(cfg_get '.tts.speak_code' 'false')"
-    code_ref="$(cfg_get '.tts.voice_code_ref' 'code, see the text message')"
-    link_ref="$(cfg_get '.tts.voice_link_ref' 'see the text message')"
+    code_ref="$(cfg_get '.tts.voice_code_ref' 'ref. the message for the code')"
+    link_ref="$(cfg_get '.tts.voice_link_ref' 'ref. the message for the link')"
+    collapse="$(cfg_get '.tts.collapse_adjacent_refs' 'true')"
     args=(--code-ref "$code_ref" --link-ref "$link_ref")
     case "$speak_code" in
         true | 1 | yes | on) args+=(--speak-code) ;;
     esac
-    if command -v python3 >/dev/null 2>&1 && [[ -f "$_TTS_LIB_DIR/tts_plain_text.py" ]]; then
-        out="$(printf '%s' "$text" | python3 "$_TTS_LIB_DIR/tts_plain_text.py" "${args[@]}" 2>/dev/null)"
+    case "$collapse" in
+        false | 0 | no | off) args+=(--no-collapse-refs) ;;
+    esac
+    if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$_TTS_LIB_DIR/tts_plain_text.py" ]]; then
+        out="$(printf '%s' "$text" | relay_python "$_TTS_LIB_DIR/tts_plain_text.py" "${args[@]}" 2>/dev/null)"
         # Never blank a message that HAD content (a strip that collapses to
         # nothing falls back to the raw text - a voice note of symbols beats
         # no voice note at all, and the text send is unaffected regardless).
@@ -81,6 +91,100 @@ _tts_plain_text() {
         fi
     fi
     printf '%s' "$text"
+}
+
+# _tts_truncate_words <text> <max_chars>
+# Word-boundary truncate for spoken_mode=short. Empty max or 0 = no truncate.
+_tts_truncate_words() {
+    local text="$1" max="$2" cut
+    if [[ ! "$max" =~ ^[0-9]+$ ]] || (( max <= 0 )) || (( ${#text} <= max )); then
+        printf '%s' "$text"
+        return 0
+    fi
+    cut="${text:0:max}"
+    # Prefer last space so we don't split mid-word.
+    if [[ "$cut" == *" "* ]]; then
+        cut="${cut% *}"
+    fi
+    printf '%s' "$cut"
+}
+
+# _tts_chunk_text <outvar> <text> <max_chars>
+#
+# v0.5.3. Splits <text> (flowing spoken prose - no line structure assumed;
+# this runs AFTER _tts_plain_text has already collapsed it to one line) into
+# an array of chunks, each <= <max_chars>, written into the caller's array
+# named <outvar> (nameref, same convention as lib/format.sh's `_qb`/`_ob` and
+# lib/code_highlight.sh's `_img_body`).
+#
+# This is the fix for the v0.5.1/v0.5.2 defect where `[tts].hook_voice_max_chars`
+# HARD-TRUNCATED the spoken text with a bash substring cut
+# (`${TEXT:0:MAX}`) - anything past the cap was silently dropped, so a long
+# hook ping's voice note read only its first ~1500 chars ("one part" of the
+# message, exactly the maintainer-reported symptom). Chunking instead
+# guarantees every character of <text> ends up in SOME chunk - the caller
+# (tg-send.sh) sends each chunk as its own ordered voice note, so the WHOLE
+# message is always read, never truncated into silence.
+#
+# <max_chars> <= 0 (or non-numeric) means "unbounded" - <text> comes back as
+# exactly one chunk, byte-identical, regardless of length. This is the
+# explicit opt-out for a single-clip-covers-everything read (set
+# `hook_voice_max_chars = 0` for that). A positive <max_chars> instead
+# bounds each individual clip's length (piper/espeak-ng on a huge string is
+# slow and not a great listen in one breath either) while still covering
+# the full text, split ONLY on whitespace so a chunk boundary never lands
+# mid-word - a spoken word cut in half is worse than a slightly-short
+# chunk. A single word longer than <max_chars> (an unbroken run with no
+# spaces) is hard-split as a last-resort fallback, mirroring tg-send.sh's
+# own PAGES single-line fallback.
+#
+# Pure/deterministic, no I/O. Empty <text> -> an empty array (0 chunks).
+_tts_chunk_text() {
+    local -n _tts_chunks_out="$1"
+    local text="$2" max="$3"
+    _tts_chunks_out=()
+
+    [[ -z "$text" ]] && return 0
+
+    if [[ ! "$max" =~ ^[0-9]+$ ]] || (( max <= 0 )) || (( ${#text} <= max )); then
+        _tts_chunks_out=("$text")
+        return 0
+    fi
+
+    local -a words
+    read -r -a words <<< "$text"  # whitespace split only - no glob expansion
+
+    local cur="" word cand rest
+    for word in "${words[@]}"; do
+        if [[ -n "$cur" ]]; then
+            cand="${cur} ${word}"
+        else
+            cand="$word"
+        fi
+
+        if (( ${#cand} <= max )); then
+            cur="$cand"
+            continue
+        fi
+
+        # cand overflowed this chunk: flush what we already had.
+        [[ -n "$cur" ]] && _tts_chunks_out+=("$cur")
+        cur=""
+
+        if (( ${#word} <= max )); then
+            cur="$word"
+        else
+            # A single word longer than max_chars: hard-split it (fallback).
+            rest="$word"
+            while (( ${#rest} > max )); do
+                _tts_chunks_out+=("${rest:0:max}")
+                rest="${rest:max}"
+            done
+            cur="$rest"
+        fi
+    done
+    [[ -n "$cur" ]] && _tts_chunks_out+=("$cur")
+    (( ${#_tts_chunks_out[@]} == 0 )) && _tts_chunks_out=("$text")
 }
 
 # _tts_pitch_filter <sample_rate>

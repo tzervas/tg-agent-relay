@@ -9,8 +9,9 @@ conversation.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![gitleaks](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
 
-Built with pure `curl` + `jq` + `python3` stdlib — no framework, no external
-services, no listening port.
+Built with pure `curl` + `jq` + **Python 3.14** (preferred; 3.13 ok; ≥3.11
+minimum via `lib/python.sh` / `RELAY_PYTHON`) stdlib — no framework, no
+external services, no listening port.
 
 > **Repo/directory note:** this repo is named `tg-agent-relay` on GitHub
 > (renamed from `claude-telegram-bridge` — GitHub auto-redirects the old
@@ -128,6 +129,11 @@ bash go-live.sh
 Full walkthrough (including optional `relay.toml` config and wiring an
 adapter): see [`SETUP.md`](SETUP.md).
 
+**Releases & local upgrade:** [`docs/RELEASING.md`](docs/RELEASING.md) —
+`scripts/release.sh vX.Y.Z` publishes a GitHub Release;  
+`scripts/deploy-local.sh [--ref vX.Y.Z]` updates `~/.claude/telegram-bridge`
+without touching `.env` / `relay.toml` / runtime state.
+
 ## In use
 
 ### (a) Wiring to Claude Code
@@ -151,7 +157,34 @@ it to `relay-notify.sh --raw`:
 events**, not just these two — see [Installing hooks](#installing-hooks-for-more-events)
 below to wire any of the rest.
 
-### (b) Wiring to ANY other agent/harness
+### (b) Wiring to Grok Build / Grok CLI (full provider)
+
+All **14 documented Grok Build hooks** are implemented as a provider
+extension ([`providers/grok`](providers/grok/), [`docs/PROVIDERS.md`](docs/PROVIDERS.md)):
+
+```bash
+# Defaults on: Stop, StopFailure, SubagentStop, Notification, PostToolUseFailure
+# Opt-in the rest via [grok.<Event>] enabled = true in relay.toml, then:
+bash install-grok-hooks.sh --dry-run
+bash install-grok-hooks.sh
+```
+
+Writes `~/.grok/hooks/tg-agent-relay.json`. Runtime:
+`hook-notify-grok.sh` → `adapters/grok.sh` → `lib/provider_hook.py grok`.
+Usage: `[usage] source = "grok"` or `"multi"`.
+
+### (c) Multi-backend + project rooms (one bot, many agents)
+
+Optional. Configure `[backends.*]` + `[[chats]]` / `/project bind` so:
+
+- **Project rooms** — forum topic *or* whole group per repo (`/project bind <slug>`)
+- **Backends** — sticky per room or via prefixes (`@claude …`, `@grok …`, `@ollama …`)
+- Replies tagged (`[claude · mycelium] …`) so you know who answered
+
+See **[`docs/ROUTING.md`](docs/ROUTING.md)**. Hybrid **agent** context (vision vs
+text, exclusive — no double-dip): [`docs/context/README.md`](docs/context/README.md).
+
+### (d) Wiring to ANY other agent/harness
 
 No adapter needed for plain text — call the generic entry point directly:
 
@@ -169,7 +202,7 @@ Claude Code's hook JSON), copy
 [`adapters/generic-example.sh`](adapters/generic-example.sh) and write a
 dedicated adapter — see [`adapters/README.md`](adapters/README.md).
 
-### (c) A status ping arriving on the phone
+### (e) A status ping arriving on the phone
 
 A `SubagentStop` hook firing produces a DM like:
 
@@ -499,14 +532,38 @@ routinely carry a full agent message and so are routinely over
 [tts]
 mode = "text+voice"
 hook_voice = true              # default; false restores the old hook-is-text-only shape
-hook_voice_max_chars = 1500    # how much of a long ping is actually SPOKEN
+hook_voice_max_chars = 1500    # per-clip length (v0.5.3: chunked, not truncated - see below)
 ```
 
 The **text send is never affected** — every page still goes out
 unabridged, even in `mode = "voice-only"` (a hook ping always sends text;
-voice is purely additive). Only the *spoken* text is capped at
-`hook_voice_max_chars` — a sensible read-through, not the whole report; a
-truncation is logged to `.metrics.log` (`tts hook_voice_truncated`).
+voice is purely additive).
+
+### The full message is always read — chunked, never truncated (v0.5.3)
+
+Fixed a real defect: v0.5.1/v0.5.2 capped the *spoken* text at
+`hook_voice_max_chars` with a hard cut (anything past the cap was
+silently dropped), so a long hook ping's voice note read only its first
+~1500 characters — one part of the message, not the whole thing.
+
+The spoken text is now **chunked at word boundaries** into one or more
+ordered voice notes, each up to `hook_voice_max_chars`, and **every**
+chunk is sent — the full message is always read, split across multiple
+voice notes if it's long, never truncated into silence. A chunking event
+is logged to `.metrics.log` (`tts hook_voice_chunked`) whenever a ping
+needs more than one clip — never silent either way. Set
+`hook_voice_max_chars = 0` to opt all the way out of chunking and always
+synthesize a single, unbounded clip for the whole message instead.
+
+**Ordering:** the voice note(s) are generated once from the complete,
+pre-pagination message and sent **first**, then the (unabridged, formatted)
+text pages are sent in order — hear the full message, then see it broken
+into pages for reference/detail (code, links, exact figures). The v0.5.1
+serialized-send guarantee (`flock` on `.tg-send.lock` +
+`[general].send_interval_ms`) still holds: one invocation's voice+pages
+always complete, in this order, before the next invocation (e.g. a burst of
+hook events) begins its own send.
+
 Writing your own adapter? Tag any unattended/automated event the same way
 — see `adapters/README.md` step 6.
 
@@ -626,7 +683,10 @@ define your own.
 | `lib/toml_to_json.py` | `relay.toml` → JSON (Python stdlib `tomllib`; the only TOML-parsing code in the repo). |
 | `lib/metrics_agg.py` | Pure/stdlib metrics aggregation over `.metrics.log` (used by the dashboard/stats/uptime handlers, unit-tested independently of matplotlib). |
 | `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. Also renders the opt-in token-usage panels/image. |
-| `lib/usage_ingest.py` | **Opt-in** (`[usage].enabled`), pure/stdlib token-usage aggregation by provider/model/project over a harness's local session-transcript logs — source-adapter abstraction, one adapter ships today (Claude Code). See `docs/USAGE.md`'s "Token usage dashboard" section. |
+| `lib/usage_ingest.py` | **Opt-in** (`[usage].enabled`), pure/stdlib token-usage aggregation by provider/model/project — adapters: `claude-code` (recursive project JSONL), `grok` (context-peak proxy), `multi`/`auto`. Windows: `today`/`all`/`lifetime`/`Nd|h|w|m|y`. |
+| `lib/routing.sh` | Multi-backend route resolve (sticky chat, prefix, default) + outbound tags. |
+| `adapters/grok.sh` / `install-grok-hooks.sh` | Grok Build hook adapter + installer (`~/.grok/hooks/tg-agent-relay.json`). |
+| `docs/ROUTING.md` | Multi-backend / multi-chat / project-isolation guide. |
 | `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` — `dashboard.sh`, `stats.sh`, `uptime.sh`, `help.sh`, `usage.sh` ship today; see [`docs/COMMANDS.md`](docs/COMMANDS.md) and [`handlers/README.md`](handlers/README.md). |
 | `.metrics.log` | **Local-only, gitignored, auto-created** — a TSV event log (`emit_metric`) that the dashboard/stats/uptime commands read. |
 | `.usage/` | **Local-only, gitignored, auto-created, opt-in** — the token-usage aggregate cache `handlers/usage.sh`/`dashboard.sh` write when `[usage].enabled = true`. Never committed; see the privacy note in `docs/USAGE.md`. |

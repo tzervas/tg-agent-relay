@@ -6,6 +6,14 @@ harness — see the repo [README](README.md)). Everything lives under
 `~/.claude/telegram-bridge/` (mode 0700, kept at this path deliberately —
 see the README's repo/directory note) — no other repo is touched.
 
+### Python version
+
+**Preferred: Python 3.14.** Acceptable: 3.13 when 3.14 is not installed.
+Minimum for stdlib `tomllib`: **3.11+**. The relay resolves the interpreter
+via [`lib/python.sh`](lib/python.sh) in this order: `python3.14` →
+`python3.13` → `python3` (first that is ≥ 3.11). Override with
+`RELAY_PYTHON=/path/to/python` if needed.
+
 ## How it stays token-frugal
 
 - **Outbound status pings (phone <- agent) cost ZERO model tokens.** They
@@ -86,6 +94,11 @@ events), enable them in `relay.toml`'s `[claude_code.<Event>]` tables and
 run `~/.claude/telegram-bridge/install-hooks.sh` to sync
 `~/.claude/settings.json` to match — see the
 [README's "Installing hooks" section](README.md#installing-hooks-for-more-events).
+
+**Grok Build / Grok CLI:** run
+`bash install-grok-hooks.sh` after optionally tuning `[grok.*]` in
+`relay.toml`. See [`docs/ROUTING.md`](docs/ROUTING.md) if you also want
+multi-backend chat isolation.
 
 **Any other agent/harness:** either call
 [`relay-notify.sh`](relay-notify.sh) directly wherever you want a status
@@ -231,10 +244,14 @@ hook_voice = true       # v0.5.1+, default true. A ping tagged
                         # voice even when long/paginated, where max_chars
                         # above would otherwise skip it — this is what
                         # actually fixes "hook pings never get voice".
-hook_voice_max_chars = 1500  # how much of a long hook ping is SPOKEN —
-                        # a sensible read-through, not the whole report.
-                        # The TEXT send always carries the full message
-                        # regardless; only the voice note is capped.
+hook_voice_max_chars = 1500  # v0.5.3: a per-CLIP length, not a cap on
+                        # what's spoken — a long ping is CHUNKED at word
+                        # boundaries into multiple ordered voice notes
+                        # that together cover the WHOLE message (never
+                        # truncated/dropped past this length like
+                        # v0.5.1/v0.5.2 did). Set to 0 for one unbounded
+                        # clip instead of chunking. The TEXT send always
+                        # carries the full message regardless.
 # --- clean spoken transcript (v0.5.2) ---
 speak_code = false      # a code span/block is REFERENCED in the voice, not
                         # read char-by-char; true reads the code verbatim.

@@ -6,11 +6,20 @@ payload, a webhook body, a log line, whatever) into a call to
 actually formats, caps, and sends the message via
 [`tg-send.sh`](../tg-send.sh).
 
-TG Agent Relay ships one adapter today:
+TG Agent Relay ships these adapters today:
 
 | Adapter | Harness | Wired via |
 |---|---|---|
-| [`claude-code.sh`](claude-code.sh) | Claude Code | `~/.claude/settings.json` hooks -> `hook-notify.sh` (thin shim) -> this adapter |
+| [`claude-code.sh`](claude-code.sh) | Claude Code | `~/.claude/settings.json` hooks -> `hook-notify.sh` → this adapter |
+| [`grok.sh`](grok.sh) | Grok Build (full 14-event provider) | `install-grok-hooks.sh` → `hook-notify-grok.sh` → this adapter → `lib/provider_hook.py` |
+| [`backend-fifo-reader.sh`](backend-fifo-reader.sh) | Any (reader) | Backend FIFO for multi-backend `delivery = "fifo"` |
+
+**Provider extensions** (hooks + usage + model labels) live under
+[`providers/`](../providers/) — see [`docs/PROVIDERS.md`](../PROVIDERS.md).
+Grok is fully implemented there; Claude usage/catalog is registered;
+message formatting for Claude remains in `claude-code.sh` for now.
+
+Multi-backend + project rooms: [`docs/ROUTING.md`](../docs/ROUTING.md).
 
 If you use a different agent/harness, you don't need an adapter at all in
 the simple case - call [`relay-notify.sh`](../relay-notify.sh) or

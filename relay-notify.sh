@@ -70,8 +70,14 @@ MAX_CHARS=$(( PAGE_SIZE * MAX_PAGES ))
 
 RAW_MODE=0
 LABEL=""
+# Optional multi-backend routing (Phase 2). Env vars also accepted so
+# adapters can export RELAY_BACKEND / RELAY_PROJECT without new flags.
+NOTIFY_BACKEND="${RELAY_BACKEND:-}"
+NOTIFY_PROJECT="${RELAY_PROJECT:-}"
+NOTIFY_CHAT_ID="${RELAY_CHAT_ID:-}"
+NOTIFY_THREAD_ID="${RELAY_THREAD_ID:-}"
 
-# Parse leading flags (--raw, --label <value>) before the positional text.
+# Parse leading flags (--raw, --label <value>, routing flags) before text.
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --raw)
@@ -80,6 +86,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --label)
             LABEL="${2:-}"
+            shift 2
+            ;;
+        --backend)
+            NOTIFY_BACKEND="${2:-}"
+            shift 2
+            ;;
+        --project)
+            NOTIFY_PROJECT="${2:-}"
+            shift 2
+            ;;
+        --chat-id)
+            NOTIFY_CHAT_ID="${2:-}"
+            shift 2
+            ;;
+        --thread-id)
+            NOTIFY_THREAD_ID="${2:-}"
             shift 2
             ;;
         --)
@@ -139,6 +161,38 @@ fi
 MSG="$(cap_if_huge "$MSG" "$MAX_CHARS" "$PAGE_SIZE")"
 
 [[ -z "$MSG" ]] && exit 0
-emit_metric "relay-notify" "generic_send" "$([[ $RAW_MODE -eq 1 ]] && echo raw || echo structured)"
+
+# Multi-backend outbound tag + chat targeting — only when [backends]/[[chats]]
+# routing is configured. Without it, behavior stays byte-identical (no tag).
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/routing.sh" ]] && source "$BRIDGE_DIR/lib/routing.sh"
+if declare -f route_has_routing_config >/dev/null 2>&1 \
+    && route_has_routing_config \
+    && [[ -n "$NOTIFY_BACKEND" ]]; then
+    if declare -f route_format_tag >/dev/null 2>&1; then
+        ROUTE_TAG="$(route_format_tag "$NOTIFY_BACKEND" "$NOTIFY_PROJECT")"
+        if [[ -n "$ROUTE_TAG" && "$MSG" != "$ROUTE_TAG"* ]]; then
+            MSG="${ROUTE_TAG} ${MSG}"
+        fi
+    fi
+    # Reverse-lookup destination chat when not explicitly provided.
+    if [[ -z "$NOTIFY_CHAT_ID" ]] && declare -f route_lookup_chat >/dev/null 2>&1; then
+        LOOKUP="$(route_lookup_chat "$NOTIFY_BACKEND" "$NOTIFY_PROJECT")"
+        if [[ -n "$LOOKUP" ]]; then
+            NOTIFY_CHAT_ID="${LOOKUP%%|*}"
+            thr="${LOOKUP#*|}"
+            [[ -n "$thr" && -z "$NOTIFY_THREAD_ID" ]] && NOTIFY_THREAD_ID="$thr"
+        fi
+    fi
+fi
+
+emit_metric "relay-notify" "generic_send" "$([[ $RAW_MODE -eq 1 ]] && echo raw || echo structured)${NOTIFY_BACKEND:+ backend=$NOTIFY_BACKEND}"
+
+# Pass routing env through to tg-send (chat override + thread).
+export RELAY_BACKEND="${NOTIFY_BACKEND}"
+export RELAY_PROJECT="${NOTIFY_PROJECT}"
+[[ -n "$NOTIFY_CHAT_ID" ]] && export RELAY_CHAT_ID="$NOTIFY_CHAT_ID"
+[[ -n "$NOTIFY_THREAD_ID" ]] && export RELAY_THREAD_ID="$NOTIFY_THREAD_ID"
+
 "$BRIDGE_DIR/tg-send.sh" "$MSG" >/dev/null 2>&1
 exit 0

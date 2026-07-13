@@ -1,0 +1,67 @@
+# Create/refresh a GitHub Release when a version tag is pushed.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+        continue-on-error: true
+
+      - name: Offline tests
+        run: |
+          if command -v python3 >/dev/null; then
+            bash tests/run-tests.sh
+          else
+            echo "python3 missing — skip tests (unexpected)"
+            exit 1
+          fi
+
+      - name: Package source archive
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="tg-agent-relay-${VER}/" \
+            -o "/tmp/tg-agent-relay-${VER}.tar.gz" "$GITHUB_REF_NAME"
+          echo "ARCHIVE=/tmp/tg-agent-relay-${VER}.tar.gz" >> "$GITHUB_ENV"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES=$(mktemp)
+          {
+            echo "## TG Agent Relay ${GITHUB_REF_NAME}"
+            echo
+            echo "### Upgrade local deploy"
+            echo
+            echo '```bash'
+            echo "git fetch --tags && git checkout ${GITHUB_REF_NAME}"
+            echo "bash scripts/deploy-local.sh --ref ${GITHUB_REF_NAME}"
+            echo '```'
+            echo
+            echo "Python **3.14** preferred — see lib/python.sh and docs/RELEASING.md."
+          } > "$NOTES"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$ARCHIVE" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "TG Agent Relay ${GITHUB_REF_NAME}" \
+              --notes-file "$NOTES" \
+              "$ARCHIVE"
+          fi

@@ -73,8 +73,8 @@ check("entity &amp; -> literal '&'", "&" in S and "&amp;" not in S, repr(S))
 
 # --- code referenced, not read ---------------------------------------------
 check("fenced code NOT voiced (no 'fn main')", "fn main" not in S, repr(S))
-check("inline code word 'inline' replaced by reference", "inline" not in S or "see the text message" in S, repr(S))
-check("code reference phrase present", "see the text message" in S, repr(S))
+check("inline code word 'inline' replaced by reference", "inline" not in S or "ref. the message for the code" in S, repr(S))
+check("code reference phrase present", "ref. the message for the code" in S or "code" in S, repr(S))
 
 # --- links referenced, URL never voiced ------------------------------------
 check("markdown link keeps its label 'the docs'", "the docs" in S, repr(S))
@@ -92,10 +92,10 @@ check("snake_case identifier preserved (other_thing)", "other_thing" in SC, repr
 
 # --- code spans of ANY backtick run length (CommonMark) --------------------
 DB = strip("run ``make build`` then done")
-check("2-backtick span referenced (no backticks read)", "`" not in DB and "see the text message" in DB, repr(DB))
+check("2-backtick span referenced (no backticks read)", "`" not in DB and "ref. the message for the code" in DB, repr(DB))
 check("2-backtick span body 'make build' not voiced", "make build" not in DB, repr(DB))
 QB = strip("x ````weird```` y")
-check("4-backtick span referenced (no backticks)", "`" not in QB and "see the text message" in QB, repr(QB))
+check("4-backtick span referenced (no backticks)", "`" not in QB and "ref. the message for the code" in QB, repr(QB))
 MIX = strip("a `one` b ``two`` c ```three``` d")
 check("mixed 1/2/3-backtick spans all referenced, none left as ticks", "`" not in MIX, repr(MIX))
 
@@ -115,14 +115,18 @@ check("flattened: fenced code body 'fn main' NOT voiced", "fn main" not in FLAT,
 check("flattened: URL characters not voiced", "foo.bar" not in FLAT and "ex.com" not in FLAT and "http" not in FLAT, repr(FLAT))
 check("flattened: entity &lt; unescaped", "&lt;" not in FLAT, repr(FLAT))
 check("flattened: real prose ('Header text', 'em') preserved", "Header text" in FLAT and "em" in FLAT, repr(FLAT))
-check("flattened: code + link references present", FLAT.count("see the text message") >= 3, repr(FLAT))
+check(
+    "flattened: code + link references present",
+    "ref. the message for the code" in FLAT and "ref. the message for the link" in FLAT,
+    repr(FLAT),
+)
 
 # --- speak_code escape hatch reads code verbatim ---------------------------
 SP = strip("run `make build` now\n```\nX=1\n```", speak_code=True)
 check("speak_code reads inline code body 'make build'", "make build" in SP, repr(SP))
 check("speak_code reads fenced code body 'X=1'", "X=1" in SP, repr(SP))
 check("speak_code strips the backticks themselves", "`" not in SP, repr(SP))
-check("speak_code does not substitute a reference", "see the text message" not in SP, repr(SP))
+check("speak_code does not substitute a reference", "ref. the message for the code" not in SP, repr(SP))
 
 # --- configurable reference wording ----------------------------------------
 CR = strip("here `x` and [t](http://u)", code_ref="CODEREF", link_ref="LINKREF")
@@ -135,7 +139,7 @@ check("[k/n] page header dropped", "[2/3]" not in KN and "real content" in KN, r
 
 # --- link with no label -> 'link, <ref>' -----------------------------------
 NL = strip("see [](https://x.y/z)")
-check("empty-label link -> 'link, ...' reference", "link, see the text message" in NL, repr(NL))
+check("empty-label link -> 'link, ...' reference", "link, ref. the message for the link" in NL, repr(NL))
 
 # --- whitespace collapses to flowing prose ---------------------------------
 WS = strip("a\n\n\nb    c")
@@ -162,3 +166,20 @@ if FAIL:
     print("  FAILED:", ", ".join(FAILED))
     sys.exit(1)
 sys.exit(0)
+
+# --- adjacent code refs collapse (v0.5.4+) ---------------------------------
+MULTI = strip("```\na\n```\n```\nb\n```\n```\nc\n```")
+count_ref = MULTI.count("ref. the message for the code")
+check("three adjacent fences -> one code ref (collapsed)", count_ref == 1, repr(MULTI))
+SEP = strip("```\na\n```\nthen prose\n```\nb\n```")
+check(
+    "fences separated by prose keep two refs",
+    SEP.count("ref. the message for the code") == 2,
+    repr(SEP),
+)
+NOCOL = strip("```\na\n```\n```\nb\n```", collapse_refs=False)
+check(
+    "collapse_refs=False keeps multiple refs",
+    NOCOL.count("ref. the message for the code") >= 2,
+    repr(NOCOL),
+)

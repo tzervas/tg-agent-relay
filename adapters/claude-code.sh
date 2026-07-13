@@ -86,13 +86,30 @@ source "$BRIDGE_DIR/lib/relay-config.sh"
 source "$BRIDGE_DIR/lib/relay-common.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/claude-code-events.sh"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/routing.sh" ]] && source "$BRIDGE_DIR/lib/routing.sh"
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
 PAYLOAD="$(cat 2>/dev/null || true)"
 [[ -z "$PAYLOAD" ]] && exit 0
 
-EVENT=$(printf '%s' "$PAYLOAD" | jq -r '.hook_event_name // "unknown"' 2>/dev/null)
+# Claude uses hook_event_name (snake). If we only see Grok's hookEventName
+# (or GROK_* env), re-dispatch to the Grok provider — never "Claude Code
+# event: unknown" for Grok payloads. (No `exec` after a pipe: it does not
+# stop this shell; always exit after re-dispatch.)
+_HE_CLAUDE="$(printf '%s' "$PAYLOAD" | jq -r '.hook_event_name // empty' 2>/dev/null)"
+_HE_GROK="$(printf '%s' "$PAYLOAD" | jq -r '.hookEventName // empty' 2>/dev/null)"
+if [[ -z "$_HE_CLAUDE" || "$_HE_CLAUDE" == "null" ]]; then
+    if [[ ( -n "$_HE_GROK" && "$_HE_GROK" != "null" ) || -n "${GROK_HOOK_EVENT:-}" ]]; then
+        if [[ -f "$BRIDGE_DIR/adapters/grok.sh" ]]; then
+            printf '%s' "$PAYLOAD" | bash "$BRIDGE_DIR/adapters/grok.sh"
+            exit 0
+        fi
+    fi
+fi
+EVENT="${_HE_CLAUDE:-unknown}"
+[[ -z "$EVENT" || "$EVENT" == "null" ]] && EVENT="unknown"
 
 # pf <jq-filter> - read one field off $PAYLOAD, "" on any parse failure.
 pf() {
@@ -366,6 +383,15 @@ esac
 # tg-send.sh with no extra plumbing on either script's part. tg-send.sh
 # uses it to give hook pings a voice read-through even when long/
 # paginated (see its header's "Hook audio" section, relay.toml [tts]).
+# RELAY_BACKEND / RELAY_PROJECT for multi-chat reverse-lookup (harmless when
+# routing is unset — relay-notify only tags when routing is configured).
+export RELAY_BACKEND="${RELAY_BACKEND:-claude}"
+if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1; then
+    _cc_cwd="$(pf '.cwd // empty')"
+    [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
+    [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
+fi
 [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
 
 exit 0

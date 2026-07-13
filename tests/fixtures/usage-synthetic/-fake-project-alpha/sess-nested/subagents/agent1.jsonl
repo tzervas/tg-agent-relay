@@ -1,0 +1,2 @@
+{"type": "assistant", "timestamp": "2023-11-14T19:00:00.000Z", "message": {"model": "claude-haiku-4-5-20251001", "usage": {"input_tokens": 40, "output_tokens": 20}}}
+{"type": "assistant", "timestamp": "2023-11-14T18:30:00.000Z", "message": {"model": "claude-sonnet-5", "usage": {"input_tokens": 30, "output_tokens": 15}}}

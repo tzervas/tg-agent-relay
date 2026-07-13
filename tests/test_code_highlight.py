@@ -156,41 +156,49 @@ finally:
         sys.modules.pop("pygments", None)
 
 print("== lib/code_highlight.py: MyceliumLexer token coverage (Declared, lexical approximation) ==")
-for alias in ("myc", "mycelium", "MYC"):
-    lexer = ch._get_lexer(alias)
-    assert_eq(f"_get_lexer({alias!r}) resolves to MyceliumLexer", "Mycelium", lexer.name)
+try:
+    import pygments  # noqa: F401
+    _HAS_PYGMENTS = True
+except ImportError:
+    _HAS_PYGMENTS = False
+    print("SKIP  pygments not installed for this interpreter — lexer coverage skipped (optional dep)")
 
-myc_lexer = ch._get_lexer("myc")
-tokens = [(str(kind), text) for kind, text in myc_lexer.get_tokens(MYC_SAMPLE) if text.strip()]
-kind_by_text = {}
-for kind, text in tokens:
-    kind_by_text.setdefault(text, kind)
+if _HAS_PYGMENTS:
+    for alias in ("myc", "mycelium", "MYC"):
+        lexer = ch._get_lexer(alias)
+        assert_eq(f"_get_lexer({alias!r}) resolves to MyceliumLexer", "Mycelium", lexer.name)
 
-assert_true("MyceliumLexer: 'nodule' tokenized as a Keyword", kind_by_text.get("nodule", "").startswith("Token.Keyword"), str(kind_by_text.get("nodule")))
-assert_true("MyceliumLexer: 'fn' tokenized as a Keyword", kind_by_text.get("fn", "").startswith("Token.Keyword"), str(kind_by_text.get("fn")))
-assert_true("MyceliumLexer: 'swap' tokenized as a Keyword", kind_by_text.get("swap", "").startswith("Token.Keyword"), str(kind_by_text.get("swap")))
-assert_true("MyceliumLexer: 'let' tokenized as a Keyword", kind_by_text.get("let", "").startswith("Token.Keyword"), str(kind_by_text.get("let")))
-assert_true("MyceliumLexer: 'if'/'else'/'return'/'match' tokenized as Keywords", all(kind_by_text.get(k, "").startswith("Token.Keyword") for k in ("if", "else", "return", "match")))
-assert_true("MyceliumLexer: 'Value'/'Result'/'Option' tokenized as Keyword.Type", all(kind_by_text.get(t, "").startswith("Token.Keyword.Type") for t in ("Value", "Result", "Option")))
-assert_true(
-    "MyceliumLexer: the '// nodule:' header line is a Comment.Special token (distinct from an ordinary '//' comment)",
-    any(kind == "Token.Comment.Special" and text.startswith("// nodule:") for kind, text in tokens),
-    str([t for t in tokens if "nodule:" in t[1]]),
-)
-assert_true(
-    "MyceliumLexer: an ordinary '//' comment is a plain Comment.Single token",
-    any(kind == "Token.Comment.Single" for kind, _ in tokens),
-)
+    myc_lexer = ch._get_lexer("myc")
+    tokens = [(str(kind), text) for kind, text in myc_lexer.get_tokens(MYC_SAMPLE) if text.strip()]
+    kind_by_text = {}
+    for kind, text in tokens:
+        kind_by_text.setdefault(text, kind)
 
-# A genuinely unrecognized fence tag falls back to pygments' own TextLexer -
-# still a valid lexer (never a crash), just uncolored.
-unknown_lexer = ch._get_lexer("totallymadeupxyz")
-assert_eq("_get_lexer(unknown tag) falls back to TextLexer", "Text only", unknown_lexer.name)
+    assert_true("MyceliumLexer: 'nodule' tokenized as a Keyword", kind_by_text.get("nodule", "").startswith("Token.Keyword"), str(kind_by_text.get("nodule")))
+    assert_true("MyceliumLexer: 'fn' tokenized as a Keyword", kind_by_text.get("fn", "").startswith("Token.Keyword"), str(kind_by_text.get("fn")))
+    assert_true("MyceliumLexer: 'swap' tokenized as a Keyword", kind_by_text.get("swap", "").startswith("Token.Keyword"), str(kind_by_text.get("swap")))
+    assert_true("MyceliumLexer: 'let' tokenized as a Keyword", kind_by_text.get("let", "").startswith("Token.Keyword"), str(kind_by_text.get("let")))
+    assert_true("MyceliumLexer: 'if'/'else'/'return'/'match' tokenized as Keywords", all(kind_by_text.get(k, "").startswith("Token.Keyword") for k in ("if", "else", "return", "match")))
+    assert_true("MyceliumLexer: 'Value'/'Result'/'Option' tokenized as Keyword.Type", all(kind_by_text.get(t, "").startswith("Token.Keyword.Type") for t in ("Value", "Result", "Option")))
+    assert_true(
+        "MyceliumLexer: the '// nodule:' header line is a Comment.Special token (distinct from an ordinary '//' comment)",
+        any(kind == "Token.Comment.Special" and text.startswith("// nodule:") for kind, text in tokens),
+        str([t for t in tokens if "nodule:" in t[1]]),
+    )
+    assert_true(
+        "MyceliumLexer: an ordinary '//' comment is a plain Comment.Single token",
+        any(kind == "Token.Comment.Single" for kind, _ in tokens),
+    )
 
-empty_lexer = ch._get_lexer("")
-assert_eq("_get_lexer('') (no fence tag) falls back to TextLexer", "Text only", empty_lexer.name)
+    # A genuinely unrecognized fence tag falls back to pygments' own TextLexer -
+    # still a valid lexer (never a crash), just uncolored.
+    unknown_lexer = ch._get_lexer("totallymadeupxyz")
+    assert_eq("_get_lexer(unknown tag) falls back to TextLexer", "Text only", unknown_lexer.name)
 
-if HAS_PYGMENTS:
+    empty_lexer = ch._get_lexer("")
+    assert_eq("_get_lexer('') (no fence tag) falls back to TextLexer", "Text only", empty_lexer.name)
+
+if _HAS_PYGMENTS:
     print("      (pygments importable in this interpreter - exercising the real HTML-document path)")
 
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -573,15 +573,30 @@
 #   pre-v0.5.1 shape (hook pings are effectively text-only, same as any
 #   other over-max_chars/paginated message).
 #
+# spoken_mode = "short"
+#   DEFAULT "short": truncate spoken prose to spoken_max_chars (one clip).
+#   "full": entire spoken prose; split into clips of clip_max_chars (0 =
+#   one unbounded clip). TEXT pages always stay unabridged either way.
+# spoken_max_chars = 600
+# clip_max_chars = 1500
 # hook_voice_max_chars = 1500
-#   How much of a long/paginated hook ping is actually SPOKEN - a sensible
-#   read-through, not the whole report (piper/espeak-ng on a huge string
-#   is slow and not a good listen anyway). Only bounds what's passed to
-#   the TTS engine; irrelevant when hook_voice = false. A truncation is
-#   logged to .metrics.log ("tts hook_voice_truncated") - never silent.
-#   v0.5.2: the cap counts SPOKEN chars - it is applied AFTER the message
-#   is stripped to plain prose (below), so a message that is long in markup
-#   but short in spoken words is not needlessly truncated.
+#   Legacy alias for clip_max_chars when clip_max_chars is unset.
+#   Only used when spoken_mode = "full". Counts SPOKEN chars after strip.
+#
+#   v0.5.3 (bugfix): this used to be a hard TRUNCATION cap - anything past
+#   it was silently dropped, so a long hook ping's voice note read only
+#   its first ~1500 characters (one part of the message, not the whole
+#   thing - the exact defect reported and fixed). It is now a CHUNK size
+#   instead: when the spoken text is longer than this, it is split at
+#   word boundaries into multiple ordered voice notes that together cover
+#   the ENTIRE message - nothing is ever dropped. A chunking event is
+#   logged to .metrics.log ("tts hook_voice_chunked") whenever a ping
+#   needs more than one clip - never silent. Set this to 0 to opt all the
+#   way out of chunking and always synthesize ONE unbounded clip for the
+#   whole message instead (a single, possibly-long voice note). The voice
+#   note(s) are generated ONCE from the complete, pre-pagination message
+#   and sent BEFORE the text pages (see lib/tts.sh's header + README's
+#   "The full message is always read" section for the ordering rationale).
 #
 # --- Clean spoken transcript (v0.5.2) -------------------------------------
 # Before ANY voice note is synthesized, the message is stripped to plain-
@@ -599,13 +614,18 @@
 #   character-by-character). Set true to read the code body verbatim (the
 #   surrounding markdown is still stripped either way).
 #
-# voice_code_ref = "code, see the text message"
+# voice_code_ref = "ref. the message for the code"
 #   What the voice says in place of a fenced OR inline code span (unless
 #   speak_code = true). Keep it short + natural so the read flows.
 #
-# voice_link_ref = "see the text message"
+# voice_link_ref = "ref. the message for the link"
 #   The spoken tail for a link. A Markdown link `[label](url)` is read as
 #   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped); a
+#
+# collapse_adjacent_refs = true
+#   Collapse consecutive identical code/link refs so three adjacent fences
+#   voice one "ref. the message for the code", not three in a row.
+
 #   bare URL is read as "link, <voice_link_ref>". The URL characters are
 #   never voiced (no "h-t-t-p-s-colon-slash-slash..." spell-out).
 
@@ -644,7 +664,7 @@
 
 # source = "claude-code"
 #   Which adapter reads `projects_dir` below. Only "claude-code" ships
-#   today (see lib/usage_ingest.py's module docstring for the
+#   today; also "grok", "multi"/"auto" (see lib/usage_ingest.py's module docstring for the
 #   source-adapter contract) - an unrecognized value skip-gracefully
 #   disables collection (never fabricates numbers) rather than erroring.
 
@@ -658,8 +678,8 @@
 #   track usage from somewhere other than this machine's default.
 
 # window = "7d"
-#   How far back to aggregate: "today" (since local midnight), "all"
-#   (everything the source has), or "<N>d" / "<N>h" (e.g. "30d", "12h").
+#   How far back: "today", "all"/"lifetime" (local retained), or
+#   "<N>h|d|w|m|y" (e.g. "30d", "3m", "1y", "12h"). source also accepts
 #   An unrecognized value is never silently treated as "all" (which could
 #   balloon the read) - it clearly labels itself "(unrecognized -
 #   defaulted to 7d)" in the rendered output instead. `/usage` and
@@ -724,3 +744,147 @@
 # # replies that usage tracking is disabled rather than sending nothing.
 # # Optional trailing window override: "/usage 30d", "/usage today",
 # # "/usage all".
+#
+# [commands.project]
+# keyword = "project"
+# slash = "/project"
+# mode = "relay"
+# handler = "handlers/project.sh"
+# # Project-room binds: /project list · here · bind <slug> · unbind
+# # Writes gitignored .chats.d/bindings.json (merged over [[chats]]).
+# # See docs/ROUTING.md — forum topics OR one group per repo.
+
+# --------------------------------------------------------------------------
+# Grok Build provider — full hook catalog (providers/grok).
+# Install: bash install-grok-hooks.sh
+# Adapter: adapters/grok.sh → lib/provider_hook.py grok
+# Usage source: [usage] source = "grok" (or "multi")
+#
+# --- [grok.*] full event tables (providers/grok catalog) ---
+# [grok.SessionStart]
+# enabled = false  # Session starts
+# prefix = "🟢"
+# # placeholders: {prefix} {event} {cwd} {session_id} {detail_suffix}
+#
+# [grok.UserPromptSubmit]
+# enabled = false  # User submits a prompt
+# prefix = "⌨️"
+# # placeholders: {prefix} {event} {prompt} {message} {detail_suffix}
+#
+# [grok.PreToolUse]
+# enabled = false  # Tool about to run (blocking capable; we notify only)
+# prefix = "🔧"
+# # placeholders: {prefix} {event} {tool} {verb} {tool_input}
+#
+# [grok.PostToolUse]
+# enabled = false  # Tool completed successfully
+# prefix = "🔧"
+# # placeholders: {prefix} {event} {tool} {verb} {tool_input}
+#
+# [grok.PostToolUseFailure]
+# enabled = true  # Tool failed
+# prefix = "⚠️"
+# # placeholders: {prefix} {event} {tool} {message} {detail_suffix}
+#
+# [grok.PermissionDenied]
+# enabled = false  # Permission system denied a tool
+# prefix = "🚫"
+# # placeholders: {prefix} {event} {tool}
+#
+# [grok.Stop]
+# enabled = true  # Agent turn ended
+# prefix = "🏁"
+# # placeholders: {prefix} {event} {message} {detail_suffix} {stop_reason}
+#
+# [grok.StopFailure]
+# enabled = true  # Turn ended due to API error
+# prefix = "🛑"
+# # placeholders: {prefix} {event} {error_type}
+#
+# [grok.Notification]
+# enabled = true  # Agent notification
+# prefix = "🔔"
+# # placeholders: {prefix} {event} {notification_type} {message} {detail_suffix}
+#
+# [grok.SubagentStart]
+# enabled = false  # Subagent started
+# prefix = "🚀"
+# # placeholders: {prefix} {event} {agent} {agent_id}
+#
+# [grok.SubagentStop]
+# enabled = true  # Subagent finished
+# prefix = "✅"
+# # placeholders: {prefix} {event} {agent} {message} {detail_suffix}
+#
+# [grok.PreCompact]
+# enabled = false  # Compaction about to run
+# prefix = "🗜️"
+# # placeholders: {prefix} {event} {trigger}
+#
+# [grok.PostCompact]
+# enabled = false  # Compaction finished
+# prefix = "📦"
+# # placeholders: {prefix} {event} {trigger}
+#
+# [grok.SessionEnd]
+# enabled = false  # Session ended
+# prefix = "🔴"
+# # placeholders: {prefix} {event} {reason}
+#
+
+# --------------------------------------------------------------------------
+# Multi-backend routing (docs/ROUTING.md) — optional. With no [backends] /
+# [[chats]], inbound/outbound stay single-chat legacy behavior.
+# [routing]
+# default_backend = "claude"
+# require_prefix = false
+# tag_style = "bracket"   # "[claude · proj] …" | "bare" | "none"
+#
+# [backends.claude]
+# type = "claude-code"
+# delivery = "stdout"     # stdout | fifo | cmd
+# tag = "claude"
+# prefixes = ["@claude", "/claude", "claude:"]
+# project = "mycelium"
+#
+# [backends.grok]
+# type = "grok"
+# delivery = "fifo"
+# fifo = "~/.grok/telegram-bridge/in.fifo"
+# tag = "grok"
+# prefixes = ["@grok", "/grok", "grok:"]
+# project = "mycelium"
+#
+# [backends.ollama]
+# type = "ollama"
+# delivery = "cmd"
+# model = "llama3.2"
+# cmd = ["bash", "-lc", "ollama run \"$RELAY_MODEL\" \"$RELAY_TEXT\""]
+# tag = "ollama"
+# prefixes = ["@ollama", "/ollama", "ollama:"]
+# project = "mycelium"
+#
+# [backends.llamacpp]
+# type = "llamacpp"
+# delivery = "cmd"
+# tag = "llamacpp"
+# prefixes = ["@llama", "/llama", "llamacpp:"]
+#
+# [[chats]]
+# chat_id = -1001111111111
+# backend = "claude"
+# project = "mycelium"
+# label = "claude/mycelium"
+#
+# [[chats]]
+# chat_id = -1002222222222
+# backend = "grok"
+# project = "mycelium"
+#
+# [projects.mycelium]
+# root = "~/work/mycelium"
+# allow_shared_worktree = false
+# [projects.mycelium.worktrees]
+# claude = "~/work/mycelium"
+# grok = "~/work/mycelium-wt-grok"
+# ollama = "~/work/mycelium-wt-ollama"

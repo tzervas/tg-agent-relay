@@ -40,12 +40,12 @@
 # export/pass through TG_SEND_SOURCE=hook) get a voice read-through even
 # when long or paginated, where an ordinary direct send would stay
 # text-only - long reports are exactly the case a hook ping usually is.
-# The SPOKEN text is capped at `[tts].hook_voice_max_chars` (default 1500,
-# higher than the ordinary `max_chars`) - a sensible read-through, not the
-# whole report; the TEXT send always carries the full, unabridged message
-# regardless (voice is strictly additive - never-silent: text is never
-# skipped for a hook ping, even in `mode = "voice-only"`). Set
-# `hook_voice = false` to restore the pre-v0.5.1 hook-is-text-only shape.
+# The voice is generated ONCE from the COMPLETE pre-pagination message (see
+# "clean spoken transcript" below) - never per-page, never a fragment. The
+# TEXT send always carries the full, unabridged message regardless (voice
+# is strictly additive - never-silent: text is never skipped for a hook
+# ping, even in `mode = "voice-only"`). Set `hook_voice = false` to restore
+# the pre-v0.5.1 hook-is-text-only shape.
 #
 # Clean spoken transcript (v0.5.2, lib/tts.sh `_tts_plain_text` ->
 # lib/tts_plain_text.py): before ANY voice note is synthesized, the message
@@ -55,10 +55,34 @@
 # headers, list markers). Code and links are referenced, not read aloud:
 # a code span/block -> `[tts].voice_code_ref` (default "code, see the text
 # message"), a link -> "<label>, `[tts].voice_link_ref`" (default "see the
-# text message"), never the URL characters. The hook cap above is applied
-# AFTER stripping, so it counts SPOKEN chars. The TEXT send is untouched -
+# text message"), never the URL characters. The TEXT send is untouched -
 # it always uses the original, fully-formatted $MSG; only the voice's input
 # is the stripped prose.
+#
+# Full-message voice, never a silent truncation (v0.5.3 - lib/tts.sh
+# `_tts_chunk_text`): v0.5.1/v0.5.2 capped the SPOKEN text at
+# `[tts].hook_voice_max_chars` (default 1500) with a hard bash-substring
+# cut (`${TEXT:0:MAX}`) - any spoken prose past the cap was silently
+# dropped, so a long hook ping's voice note read only its first ~1500
+# chars ("one part" of the message, not the whole thing). Fixed: the
+# stripped spoken text is now CHUNKED at word boundaries into one or more
+# ordered voice notes, each <= `hook_voice_max_chars`, and EVERY chunk is
+# sent - the full message is always read, split across multiple voice
+# notes if it's long, never truncated into silence. A truncation-turned-
+# chunking event is logged (`tts hook_voice_chunked`, never silent) when a
+# ping needs more than one clip. Set `hook_voice_max_chars = 0` to opt out
+# of chunking entirely and always synthesize ONE unbounded clip for the
+# whole message instead (a single, possibly-long voice note).
+#
+# Ordering (v0.5.3): the voice note(s) are generated and sent FIRST, then
+# the (formatted, unabridged) text pages are paginated and sent in order -
+# the maintainer's preferred shape ("hear the full message, then see it
+# broken into pages for reference/detail"). This holds for every mode/
+# source; see the "Voice note(s)" block below tg-send.sh's TTS eligibility
+# section. The v0.5.1 ordering guarantee (flock on `.tg-send.lock` +
+# `send_interval_ms`, see below) still serializes concurrent hook bursts so
+# one invocation's voice+pages always complete, in this order, before the
+# next invocation's send begins.
 #
 # Serialized send queue + ordering (`[general].send_interval_ms`, default
 # 350): every send (dedup check through the final metric write) runs under
@@ -120,6 +144,7 @@ declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing ->
 [[ -f "$BRIDGE_DIR/lib/tts.sh" ]] && source "$BRIDGE_DIR/lib/tts.sh"
 declare -f tts_send_voice >/dev/null 2>&1 || tts_send_voice() { return 1; }  # lib missing -> unavailable shim
 declare -f _tts_plain_text >/dev/null 2>&1 || _tts_plain_text() { printf '%s' "$1"; }  # lib missing -> passthrough (raw text)
+declare -f _tts_chunk_text >/dev/null 2>&1 || _tts_chunk_text() { local -n _o="$1"; _o=(); [[ -n "$2" ]] && _o=("$2"); }  # lib missing -> single unbounded chunk
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/format.sh" ]] && source "$BRIDGE_DIR/lib/format.sh"
 declare -f format_message >/dev/null 2>&1 || format_message() { FMT_TEXT="$1"; FMT_PARSE_MODE=""; }  # lib missing -> passthrough shim
@@ -157,7 +182,12 @@ source "$CONFIG_FILE"
 
 # No token yet -> silent no-op (this is the "harmless before setup" contract).
 [[ -z "${BOT_TOKEN:-}" ]] && exit 0
-[[ -z "${ALLOWED_CHAT_ID:-}" ]] && exit 0
+
+# Destination chat: explicit multi-backend override (RELAY_CHAT_ID from
+# relay-notify / handlers) wins over the legacy single ALLOWED_CHAT_ID.
+SEND_CHAT_ID="${RELAY_CHAT_ID:-${ALLOWED_CHAT_ID:-}}"
+SEND_THREAD_ID="${RELAY_THREAD_ID:-}"
+[[ -z "$SEND_CHAT_ID" ]] && exit 0
 
 # --- Serialized send queue (guaranteed ordering) ----------------------------
 # Concurrent tg-send.sh invocations (e.g. several SubagentStop hooks firing
@@ -276,14 +306,26 @@ case "$HOOK_VOICE" in
     true | 1 | yes | on) HOOK_VOICE=1 ;;
     *) HOOK_VOICE=0 ;;
 esac
-# Cap on how much of a long/paginated hook message is actually SPOKEN - a
-# "sensible read-through" (the maintainer's phrasing), not the full report.
-# Higher than [tts].max_chars (which still gates ordinary direct sends)
-# because a hook ping is exactly the case that needed relaxing. The TEXT
-# send is completely unaffected either way - this only bounds what goes
-# into tts_send_voice.
-HOOK_VOICE_MAX_CHARS="$(cfg_get '.tts.hook_voice_max_chars' 1500)"
-[[ "$HOOK_VOICE_MAX_CHARS" =~ ^[0-9]+$ ]] || HOOK_VOICE_MAX_CHARS=1500
+# Spoken coverage (v0.5.4+):
+#   spoken_mode = "short" (DEFAULT) — truncate spoken prose to spoken_max_chars
+#     (word-boundary); one voice clip. Text pages still go out full.
+#   spoken_mode = "full" — entire spoken prose; clip_max_chars (or legacy
+#     hook_voice_max_chars) sizes each clip; 0 = one unbounded clip.
+SPOKEN_MODE="$(cfg_get '.tts.spoken_mode' 'short')"
+case "$SPOKEN_MODE" in
+    full | chunk | complete) SPOKEN_MODE="full" ;;
+    *) SPOKEN_MODE="short" ;;
+esac
+SPOKEN_MAX_CHARS="$(cfg_get '.tts.spoken_max_chars' 600)"
+[[ "$SPOKEN_MAX_CHARS" =~ ^[0-9]+$ ]] || SPOKEN_MAX_CHARS=600
+# full-mode clip size: prefer clip_max_chars, fall back to hook_voice_max_chars
+CLIP_MAX_CHARS="$(cfg_get '.tts.clip_max_chars' "")"
+if [[ -z "$CLIP_MAX_CHARS" ]]; then
+    CLIP_MAX_CHARS="$(cfg_get '.tts.hook_voice_max_chars' 1500)"
+fi
+[[ "$CLIP_MAX_CHARS" =~ ^[0-9]+$ ]] || CLIP_MAX_CHARS=1500
+# Alias kept for metrics/docs that still say hook_voice_max_chars.
+: "${CLIP_MAX_CHARS:=1500}"
 
 TTS_MAX_CHARS="$(cfg_get '.tts.max_chars' 600)"
 [[ "$TTS_MAX_CHARS" =~ ^[0-9]+$ ]] || TTS_MAX_CHARS=600
@@ -293,18 +335,17 @@ TTS_VOICE_TEXT="$MSG"
 if [[ "$TTS_MODE" != "off" ]]; then
     if (( IS_HOOK == 1 && HOOK_VOICE == 1 )); then
         # Hook ping: eligible regardless of pagination/length - never
-        # silently skip voice just because the ping was long. Only the
-        # SPOKEN text is capped; every text page still goes out unabridged.
+        # silently skip voice just because the ping was long. Spoken
+        # coverage is then short-truncate or full-chunk (spoken_mode).
         if (( ${#MSG} > 0 )); then
             TTS_ELIGIBLE=1
-            # v0.5.2: strip markdown/HTML to clean spoken prose FIRST, then
-            # apply the hook cap so it counts SPOKEN chars, not raw markup
-            # (the maintainer's explicit ordering). The text send is
-            # unaffected - it always uses the original, fully-formatted $MSG.
             TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
-            if (( ${#TTS_VOICE_TEXT} > HOOK_VOICE_MAX_CHARS )); then
-                emit_metric "tts" "hook_voice_truncated" "spoken_chars=${#TTS_VOICE_TEXT} max=${HOOK_VOICE_MAX_CHARS}"
-                TTS_VOICE_TEXT="${TTS_VOICE_TEXT:0:HOOK_VOICE_MAX_CHARS}"
+            if [[ "$SPOKEN_MODE" == "short" ]]; then
+                _pre_len=${#TTS_VOICE_TEXT}
+                TTS_VOICE_TEXT="$(_tts_truncate_words "$TTS_VOICE_TEXT" "$SPOKEN_MAX_CHARS")"
+                if (( _pre_len > ${#TTS_VOICE_TEXT} )); then
+                    emit_metric "tts" "hook_voice_truncated" "spoken_chars=${_pre_len} max=${SPOKEN_MAX_CHARS} mode=short"
+                fi
             fi
         fi
     elif [[ "$TOTAL" -eq 1 ]]; then
@@ -319,20 +360,28 @@ if [[ "$TTS_MODE" != "off" ]]; then
     fi
 fi
 
-# "voice-only": try the voice note FIRST; only skip the text loop below on
-# an actual successful send. Unavailable engine / conversion failure /
-# send failure / ineligible (off, too long, paginated) all fall through
-# to the ordinary text send - a message is never sent as nothing.
+# --- Voice note(s) - generated ONCE from the complete, pre-pagination
+# --- message and sent BEFORE the text pages. spoken_mode=short -> one clip
+# --- (already truncated). spoken_mode=full -> chunk at clip_max_chars.
 #
-# Hook pings NEVER take this early/skip-text path, even in "voice-only"
-# mode: the never-silent contract for an automated ping is stronger than
-# usual - text ALWAYS sends, voice is purely additive (see the final
-# text+voice/hook block below the send loop). A direct/manual "voice-only"
-# send keeps its exact original shape (skip text on a successful voice
-# send).
+# Hook pings NEVER let a successful voice send skip the text loop, in ANY
+# mode: text ALWAYS sends, voice is purely additive.
 VOICE_SENT=0
-if [[ "$TTS_MODE" == "voice-only" && "$TTS_ELIGIBLE" -eq 1 && "$IS_HOOK" -eq 0 ]]; then
-    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$TTS_VOICE_TEXT" && VOICE_SENT=1
+if [[ "$TTS_MODE" != "off" && "$TTS_ELIGIBLE" -eq 1 ]]; then
+    _TTS_CHUNK_MAX=0
+    if (( IS_HOOK == 1 && HOOK_VOICE == 1 )) && [[ "$SPOKEN_MODE" == "full" ]]; then
+        _TTS_CHUNK_MAX="$CLIP_MAX_CHARS"
+    fi
+    declare -a TTS_VOICE_CHUNKS
+    _tts_chunk_text TTS_VOICE_CHUNKS "$TTS_VOICE_TEXT" "$_TTS_CHUNK_MAX"
+    if (( ${#TTS_VOICE_CHUNKS[@]} > 1 )); then
+        emit_metric "tts" "hook_voice_chunked" "chunks=${#TTS_VOICE_CHUNKS[@]} spoken_chars=${#TTS_VOICE_TEXT} chunk_max=${_TTS_CHUNK_MAX}"
+    fi
+    _TTS_ANY_SENT=0
+    for _TTS_CHUNK in "${TTS_VOICE_CHUNKS[@]}"; do
+        tts_send_voice "$BOT_TOKEN" "$SEND_CHAT_ID" "$_TTS_CHUNK" && _TTS_ANY_SENT=1
+    done
+    (( _TTS_ANY_SENT == 1 )) && VOICE_SENT=1
 fi
 
 # _tg_post_send_message <text> <parse_mode> - one sendMessage POST.
@@ -342,22 +391,19 @@ fi
 # trip happened, not that Telegram accepted the message).
 _tg_post_send_message() {
     local text="$1" parse_mode="$2" resp
-    if [[ -n "$parse_mode" ]]; then
-        resp="$(curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
-            --data-urlencode "text=${text}" \
-            --data-urlencode "parse_mode=${parse_mode}" \
-            2>/dev/null)"
-    else
-        resp="$(curl -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${ALLOWED_CHAT_ID}" \
-            --data-urlencode "text=${text}" \
-            2>/dev/null)"
-    fi
+    local -a curl_args=(
+        -s -m 10 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+        --data-urlencode "chat_id=${SEND_CHAT_ID}"
+        --data-urlencode "text=${text}"
+    )
+    [[ -n "$parse_mode" ]] && curl_args+=(--data-urlencode "parse_mode=${parse_mode}")
+    # Forum-topic isolation: optional message_thread_id (multi-backend rooms).
+    [[ -n "${SEND_THREAD_ID:-}" ]] && curl_args+=(--data-urlencode "message_thread_id=${SEND_THREAD_ID}")
+    resp="$(curl "${curl_args[@]}" 2>/dev/null)"
     [[ "$resp" == *'"ok":true'* ]]
 }
 
-if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
+if [[ "$IS_HOOK" -eq 1 || "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
     IDX=0
     for PAGE in "${PAGES[@]}"; do
         IDX=$((IDX + 1))
@@ -410,22 +456,10 @@ if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
         # v0.3.0 inline code box - has gone out). A no-op (returns
         # immediately) whenever [code_highlight] mode != "html-doc" or no
         # fence was found/rendered.
-        img_send_pending "$BOT_TOKEN" "$ALLOWED_CHAT_ID"
+        img_send_pending "$BOT_TOKEN" "$SEND_CHAT_ID"
 
         (( IDX < TOTAL )) && sleep "$PAGE_DELAY"
     done
-fi
-
-# Additive voice note: text has already sent above (unchanged path); now
-# send the voice note too, best-effort (never blocks/reverts the
-# already-sent text on a TTS failure). Fires for "text+voice" (any
-# source, as before) OR any eligible hook ping that hasn't already sent
-# its voice note (hooks never take the voice-only pre-send path above -
-# see VOICE_SENT's guard - so this is where a hook's voice note actually
-# goes out, in EVERY tts mode except "off").
-if [[ "$TTS_ELIGIBLE" -eq 1 && "$VOICE_SENT" -eq 0 ]] \
-    && { [[ "$TTS_MODE" == "text+voice" ]] || [[ "$IS_HOOK" -eq 1 ]]; }; then
-    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$TTS_VOICE_TEXT" || true
 fi
 
 printf '%s|%s\n' "$NOW" "$MSG" > "$LAST_MSG_FILE" 2>/dev/null || true

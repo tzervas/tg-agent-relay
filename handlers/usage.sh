@@ -29,6 +29,9 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 CONFIG_FILE="$BRIDGE_DIR/.env"
 
 # shellcheck disable=SC1091
@@ -65,10 +68,9 @@ WINDOW="$(cfg_get '.usage.window' "7d")"
 SHOW_PROVIDERS="$(cfg_get '.usage.providers' "true")"
 SHOW_MODELS="$(cfg_get '.usage.models' "true")"
 
-# Optional trailing window override in the command text - "today"/"all"/
-# "<N>d"/"<N>h" (matches lib/usage_ingest.py's resolve_window() grammar).
-# A bare "/usage" leaves the configured default untouched.
-if [[ "$TEXT" =~ (today|all|[0-9]+[dh])[[:space:]]*$ ]]; then
+# Optional trailing window override - today/all/lifetime/<N>h|d|w|m|y
+# (matches lib/usage_ingest.py's resolve_window() grammar).
+if [[ "$TEXT" =~ (today|all|lifetime|[0-9]+[hdwmy])[[:space:]]*$ ]]; then
     WINDOW="${BASH_REMATCH[1]}"
 fi
 
@@ -76,8 +78,8 @@ CACHE_DIR="$BRIDGE_DIR/.usage"
 mkdir -p "$CACHE_DIR" 2>/dev/null
 CACHE_JSON="$CACHE_DIR/usage-summary.json"
 
-if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
-    python3 "$BRIDGE_DIR/lib/usage_ingest.py" "$SOURCE" "$PROJECTS_DIR" "$WINDOW" "$CACHE_JSON" >/dev/null 2>&1
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
+    relay_python "$BRIDGE_DIR/lib/usage_ingest.py" "$SOURCE" "$PROJECTS_DIR" "$WINDOW" "$CACHE_JSON" >/dev/null 2>&1
 fi
 
 DISPLAY_FLAGS=()
@@ -92,8 +94,8 @@ DISPLAY_FLAGS=()
 OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-usage-XXXXXX.png")"
 
 RENDER_OUT=""
-if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
-    RENDER_OUT="$(python3 "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
+    RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
 fi
 
 # Never fail to send SOMETHING, even with no python3 at all (same
@@ -121,11 +123,13 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
         # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     fi
+    # Prefer originating chat from tg-poll (multi-room) over legacy default.
+    SEND_CHAT="${RELAY_CHAT_ID:-${ALLOWED_CHAT_ID:-}}"
 
-    if [[ -n "${BOT_TOKEN:-}" && -n "${ALLOWED_CHAT_ID:-}" ]]; then
+    if [[ -n "${BOT_TOKEN:-}" && -n "${SEND_CHAT:-}" ]]; then
         CAPTION="Token Usage — ${WINDOW}"
         curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${ALLOWED_CHAT_ID}" \
+            -F "chat_id=${SEND_CHAT}" \
             -F "photo=@${OUT_PNG}" \
             --form-string "caption=${CAPTION}" \
             >/dev/null 2>&1

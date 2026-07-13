@@ -45,11 +45,41 @@ import re
 import sys
 
 
+def collapse_adjacent_refs(text: str, *phrases: str) -> str:
+    """Collapse consecutive identical reference phrases (code/link refs)
+    separated only by whitespace or light punctuation into one utterance,
+    so three adjacent code blocks do not become
+    'ref… ref… ref…' back-to-back."""
+    if not text or not phrases:
+        return text
+    # Longest phrases first so a longer ref isn't partially matched.
+    ordered = sorted({p for p in phrases if p}, key=len, reverse=True)
+    if not ordered:
+        return text
+    # Build alternation of escaped phrases.
+    alt = "|".join(re.escape(p) for p in ordered)
+    # phrase (,|.)? + whitespace + same phrase  -> keep one phrase
+    pattern = re.compile(
+        rf"(?P<p>{alt})(?:\s*[,;.…]?\s+)(?P=p)(?:\s*[,;.…]?\s*(?P=p))*",
+        re.IGNORECASE,
+    )
+    prev = None
+    out = text
+    # Iterate until stable (handles A A A A chains).
+    while prev != out:
+        prev = out
+        out = pattern.sub(lambda m: m.group("p"), out)
+    # Also collapse "label, <link_ref>" repeated with only punctuation between
+    # when the whole "…, link_ref" form repeats.
+    return re.sub(r"[ \t]+", " ", out).strip()
+
+
 def strip_formatting(
     text: str,
-    code_ref: str = "code, see the text message",
-    link_ref: str = "see the text message",
+    code_ref: str = "ref. the message for the code",
+    link_ref: str = "ref. the message for the link",
     speak_code: bool = False,
+    collapse_refs: bool = True,
 ) -> str:
     """Return `text` as clean spoken prose. Pure function, never raises for
     normal string input (the CLI wrapper adds the belt-and-suspenders
@@ -138,14 +168,25 @@ def strip_formatting(
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", " ", text)
     text = re.sub(r"\s{2,}", " ", text)
-    return text.strip()
+    text = text.strip()
+
+    # 11. Collapse adjacent identical code/link reference phrases so a run of
+    #     fences does not voice "see the code" three times in a row.
+    if collapse_refs and not speak_code:
+        text = collapse_adjacent_refs(text, code_ref, link_ref, f"link, {link_ref}")
+    return text
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(add_help=True, description=__doc__)
-    parser.add_argument("--code-ref", default="code, see the text message")
-    parser.add_argument("--link-ref", default="see the text message")
+    parser.add_argument("--code-ref", default="ref. the message for the code")
+    parser.add_argument("--link-ref", default="ref. the message for the link")
     parser.add_argument("--speak-code", action="store_true")
+    parser.add_argument(
+        "--no-collapse-refs",
+        action="store_true",
+        help="Do not collapse consecutive identical code/link reference phrases",
+    )
     args = parser.parse_args()
 
     raw = ""
@@ -156,6 +197,7 @@ def main() -> int:
             code_ref=args.code_ref,
             link_ref=args.link_ref,
             speak_code=args.speak_code,
+            collapse_refs=not args.no_collapse_refs,
         )
     except Exception:
         # Never-fatal: echo stdin unchanged so the voice still speaks.

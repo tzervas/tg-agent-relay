@@ -32,6 +32,9 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 CONFIG_FILE="$BRIDGE_DIR/.env"
 
 # shellcheck disable=SC1091
@@ -66,7 +69,7 @@ TEST_MARK="${RELAY_DASHBOARD_TEST_MARK:-}"
 USAGE_JSON_ARG=""
 USAGE_DISPLAY_FLAGS=()
 if [[ "$(cfg_get '.usage.enabled' "false")" == "true" ]] \
-    && command -v python3 >/dev/null 2>&1 \
+    && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 \
     && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
     USAGE_SOURCE="$(cfg_get '.usage.source' "claude-code")"
     USAGE_PROJECTS_DIR="$(cfg_get '.usage.projects_dir' "$HOME/.claude/projects")"
@@ -74,7 +77,7 @@ if [[ "$(cfg_get '.usage.enabled' "false")" == "true" ]] \
     USAGE_CACHE_DIR="$BRIDGE_DIR/.usage"
     mkdir -p "$USAGE_CACHE_DIR" 2>/dev/null
     USAGE_JSON="$USAGE_CACHE_DIR/usage-summary.json"
-    python3 "$BRIDGE_DIR/lib/usage_ingest.py" "$USAGE_SOURCE" "$USAGE_PROJECTS_DIR" "$USAGE_WINDOW" "$USAGE_JSON" >/dev/null 2>&1
+    relay_python "$BRIDGE_DIR/lib/usage_ingest.py" "$USAGE_SOURCE" "$USAGE_PROJECTS_DIR" "$USAGE_WINDOW" "$USAGE_JSON" >/dev/null 2>&1
     [[ -s "$USAGE_JSON" ]] && USAGE_JSON_ARG="$USAGE_JSON"
     [[ "$(cfg_get '.usage.providers' "true")" == "false" ]] && USAGE_DISPLAY_FLAGS+=("--no-providers")
     [[ "$(cfg_get '.usage.models' "true")" == "false" ]] && USAGE_DISPLAY_FLAGS+=("--no-models")
@@ -88,13 +91,13 @@ fi
 OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-dashboard-XXXXXX.png")"
 
 RENDER_OUT=""
-if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
-    RENDER_OUT="$(python3 "$BRIDGE_DIR/lib/dashboard_render.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" "$OUT_PNG" ${USAGE_JSON_ARG:+"$USAGE_JSON_ARG"} "${USAGE_DISPLAY_FLAGS[@]}" 2>/dev/null)"
-elif command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/metrics_agg.py" ]]; then
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
+    RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" "$OUT_PNG" ${USAGE_JSON_ARG:+"$USAGE_JSON_ARG"} "${USAGE_DISPLAY_FLAGS[@]}" 2>/dev/null)"
+elif command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/metrics_agg.py" ]]; then
     # dashboard_render.py missing but metrics_agg.py present (shouldn't
     # happen in a normal checkout) - still get a real text dashboard.
     RENDER_OUT="TEXT
-$(python3 "$BRIDGE_DIR/lib/metrics_agg.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" dashboard 2>/dev/null)"
+$(relay_python "$BRIDGE_DIR/lib/metrics_agg.py" "$BRIDGE_DIR/.metrics.log" "$WINDOW_HOURS" dashboard 2>/dev/null)"
 fi
 
 # Ultra-minimal bash-native fallback if python3 itself is unavailable -
@@ -126,12 +129,13 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
         # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     fi
+    SEND_CHAT="${RELAY_CHAT_ID:-${ALLOWED_CHAT_ID:-}}"
 
-    if [[ -n "${BOT_TOKEN:-}" && -n "${ALLOWED_CHAT_ID:-}" ]]; then
+    if [[ -n "${BOT_TOKEN:-}" && -n "${SEND_CHAT:-}" ]]; then
         CAPTION="Relay Dashboard — last ${WINDOW_HOURS}h"
         [[ -n "$TEST_MARK" ]] && CAPTION="🔧 dashboard test: ${CAPTION}"
         curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${ALLOWED_CHAT_ID}" \
+            -F "chat_id=${SEND_CHAT}" \
             -F "photo=@${OUT_PNG}" \
             --form-string "caption=${CAPTION}" \
             >/dev/null 2>&1
