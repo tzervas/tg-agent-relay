@@ -227,13 +227,27 @@ guessed at.
 Copy [`relay.toml.example`](relay.toml.example) to `relay.toml` to
 configure page size/delay, the reassemble window, which Claude Code hook
 events are enabled + their prefix + their message format, the `[generic]`
-prefix/format, in-chat commands, and the dashboard window. **Every script
-falls back to its pre-existing env-var/hardcoded default with no
-`relay.toml` present** — this is the backward-compat guarantee: an
-existing bridge with no `relay.toml` behaves byte-for-byte as it always
-has. See the example file's comments for the full schema, and
-[`docs/USAGE.md`](docs/USAGE.md) / [`docs/COMMANDS.md`](docs/COMMANDS.md)
-for how to use it.
+prefix/format, in-chat commands, the dashboard window, and optional local
+TTS voice notes. **Every script falls back to its pre-existing
+env-var/hardcoded default with no `relay.toml` present** — this is the
+backward-compat guarantee: an existing bridge with no `relay.toml`
+behaves byte-for-byte as it always has. See the example file's comments
+for the full schema, and [`docs/USAGE.md`](docs/USAGE.md) /
+[`docs/COMMANDS.md`](docs/COMMANDS.md) for how to use it.
+
+### Voice messages (TTS) — self-hosted, off by default
+
+`tg-send.sh` can also generate a **voice note** locally from a message's
+text and send it via Telegram's `sendVoice` — **no external TTS API**;
+piper or espeak-ng run entirely on this machine. Opt in via `relay.toml`'s
+`[tts]` table (`mode = "text+voice"` sends text then voice; `"voice-only"`
+sends only voice, falling back to text if TTS is unavailable — a message
+is never dropped). Default `mode = "off"` means the feature is inert with
+no `relay.toml`, or an existing one that doesn't set it — identical
+behavior to before TTS existed. See `relay.toml.example`'s `[tts]`
+comments for the full schema and
+[`SETUP.md`](SETUP.md#voice-messages-tts-optional) for installing piper
+or espeak-ng.
 
 ### Per-event message templates
 
@@ -281,7 +295,8 @@ and how to define your own.
 | `.env` | **Local-only, gitignored, 0600** — holds the live bot token. Never committed. |
 | `relay.toml.example` | Non-secret config template (committed). Copy to `relay.toml` to customize. |
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
-| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars. |
+| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; optional local TTS voice note (`[tts]`, default off). |
+| `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
 | `relay-notify.sh` | **Generic, harness-agnostic entry point** — any agent/script can send a status update through it directly. |
 | `adapters/claude-code.sh` | Claude Code hook-JSON adapter — parses the payload, formats a per-event summary, calls `relay-notify.sh --raw`. |
