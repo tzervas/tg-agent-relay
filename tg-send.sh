@@ -47,6 +47,19 @@
 # skipped for a hook ping, even in `mode = "voice-only"`). Set
 # `hook_voice = false` to restore the pre-v0.5.1 hook-is-text-only shape.
 #
+# Clean spoken transcript (v0.5.2, lib/tts.sh `_tts_plain_text` ->
+# lib/tts_plain_text.py): before ANY voice note is synthesized, the message
+# is stripped to plain-text prose so the engine reads WORDS, never the
+# formatting symbols (`#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ````
+# code, `<b>`/`<pre>` tags, `&lt;` entities, `>` quotes, `[k/n]` page
+# headers, list markers). Code and links are referenced, not read aloud:
+# a code span/block -> `[tts].voice_code_ref` (default "code, see the text
+# message"), a link -> "<label>, `[tts].voice_link_ref`" (default "see the
+# text message"), never the URL characters. The hook cap above is applied
+# AFTER stripping, so it counts SPOKEN chars. The TEXT send is untouched -
+# it always uses the original, fully-formatted $MSG; only the voice's input
+# is the stripped prose.
+#
 # Serialized send queue + ordering (`[general].send_interval_ms`, default
 # 350): every send (dedup check through the final metric write) runs under
 # an exclusive `flock` on `.tg-send.lock`, so concurrent invocations (a
@@ -106,6 +119,7 @@ declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing ->
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/tts.sh" ]] && source "$BRIDGE_DIR/lib/tts.sh"
 declare -f tts_send_voice >/dev/null 2>&1 || tts_send_voice() { return 1; }  # lib missing -> unavailable shim
+declare -f _tts_plain_text >/dev/null 2>&1 || _tts_plain_text() { printf '%s' "$1"; }  # lib missing -> passthrough (raw text)
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/format.sh" ]] && source "$BRIDGE_DIR/lib/format.sh"
 declare -f format_message >/dev/null 2>&1 || format_message() { FMT_TEXT="$1"; FMT_PARSE_MODE=""; }  # lib missing -> passthrough shim
@@ -283,15 +297,25 @@ if [[ "$TTS_MODE" != "off" ]]; then
         # SPOKEN text is capped; every text page still goes out unabridged.
         if (( ${#MSG} > 0 )); then
             TTS_ELIGIBLE=1
-            if (( ${#MSG} > HOOK_VOICE_MAX_CHARS )); then
-                TTS_VOICE_TEXT="${MSG:0:HOOK_VOICE_MAX_CHARS}"
-                emit_metric "tts" "hook_voice_truncated" "chars=${#MSG} max=${HOOK_VOICE_MAX_CHARS}"
+            # v0.5.2: strip markdown/HTML to clean spoken prose FIRST, then
+            # apply the hook cap so it counts SPOKEN chars, not raw markup
+            # (the maintainer's explicit ordering). The text send is
+            # unaffected - it always uses the original, fully-formatted $MSG.
+            TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+            if (( ${#TTS_VOICE_TEXT} > HOOK_VOICE_MAX_CHARS )); then
+                emit_metric "tts" "hook_voice_truncated" "spoken_chars=${#TTS_VOICE_TEXT} max=${HOOK_VOICE_MAX_CHARS}"
+                TTS_VOICE_TEXT="${TTS_VOICE_TEXT:0:HOOK_VOICE_MAX_CHARS}"
             fi
         fi
     elif [[ "$TOTAL" -eq 1 ]]; then
         # Direct/manual send (or a hook with hook_voice disabled): the
-        # original, unrelaxed rule - single page, within max_chars.
-        (( ${#MSG} <= TTS_MAX_CHARS )) && TTS_ELIGIBLE=1
+        # original, unrelaxed eligibility rule - single page, within
+        # max_chars (checked on the raw text). The SPOKEN text is still the
+        # stripped prose (v0.5.2) - direct sends read clean too.
+        if (( ${#MSG} <= TTS_MAX_CHARS )); then
+            TTS_ELIGIBLE=1
+            TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+        fi
     fi
 fi
 

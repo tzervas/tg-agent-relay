@@ -13,6 +13,7 @@
 .tg-buffer
 .tg-buffer-ts
 .metrics.log
+.tg-send.lock
 *.log
 # ...except a COMMITTED test fixture that happens to share the extension
 # (same reasoning/pattern as /relay.toml above, scoped by directory instead

@@ -237,6 +237,36 @@ with ANY agent using ANY harness, maximum portability + usability.
   are fully backward-compatible: a direct/manual send (no
   `TG_SEND_SOURCE`) keeps the original TTS-eligibility rule unchanged,
   and `send_interval_ms = 0` (or no `flock`) reduces to today's behavior.
+- **Clean spoken transcript — the voice reads prose, not symbols (v0.5.2,
+  live-defect fix).** With v0.5.1 wiring voice onto hook pings, the TTS was
+  reading the FORMATTING SYMBOLS aloud — `##` headers, `*`/`` ` ``/```` ``` ````
+  markers, `<b>`/`<pre>`/`<code>` HTML tags, `&lt;`-style entities ("ampersand
+  l t"), `>` quotes, `[k/n]` page headers, list bullets — because the spoken
+  input was the same marked-up text as the message. Fixed with a
+  strip-to-plain-prose step (`lib/tts.sh`'s `_tts_plain_text` →
+  `lib/tts_plain_text.py`, stdlib-only, unit-tested) applied to the voice's
+  input BEFORE piper/espeak sees it: it removes markdown + HTML markup and
+  unescapes entities so the engine reads words. Per the maintainer's
+  decision, **code and URLs are referenced, not read aloud** — a fenced or
+  inline code span becomes a short spoken reference (`[tts].voice_code_ref`,
+  default "code, see the text message"; `speak_code = true` opts back into
+  reading code verbatim), a Markdown `[label](url)` reads as "label,
+  `[tts].voice_link_ref`" (default "see the text message") and a bare URL as
+  "link, <ref>", so the voice never spells out `h-t-t-p-s-colon-slash-slash…`.
+  **The SENT text message keeps its full formatting** — only the voice's
+  input is stripped; the text send is byte-for-byte unchanged. The v0.5.1
+  `hook_voice_max_chars` cap now counts SPOKEN chars (applied after
+  stripping). Skip-graceful: if the stripper is unavailable it falls back to
+  the raw text (voice still speaks) rather than dropping the note. Hardened
+  from live testing: **code spans of any backtick run length** are detected
+  (CommonMark — `` `x` `` / `` ``x`` `` / ```` ```x``` ````, since the
+  maintainer's messages use 2-backtick spans), the strips work on the
+  **single flattened line** the Claude Code adapter produces (`oneline()`
+  runs before `tg-send.sh`, so `##`/`>`/fenced markers appear mid-line), and
+  a **bash-5.2 `render_template` corruption** (an unescaped `&` in a
+  `${var//pat/repl}` replacement is treated as the matched text, turning
+  `&lt;` into `{detail_suffix}lt;`) was fixed — that one also cleaned the
+  **sent** text, not just the voice.
 
 ## Next
 
