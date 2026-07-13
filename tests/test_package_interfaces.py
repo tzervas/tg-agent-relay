@@ -182,6 +182,37 @@ true(
     repr(spoken),
 )
 
+# --- tts short/full helpers (issue #28) ------------------------------------
+true("truncate_words callable", callable(tts.truncate_words))
+true("chunk_text callable", callable(tts.chunk_text))
+true("prepare_spoken callable", callable(tts.prepare_spoken))
+eq("normalize_spoken_mode full", "full", tts.normalize_spoken_mode("full"))
+eq("normalize_spoken_mode default short", "short", tts.normalize_spoken_mode("nope"))
+eq("truncate_words word boundary", "one two", tts.truncate_words("one two three", 8))
+eq("chunk_text empty", [], tts.chunk_text("", 10))
+eq("chunk_text under max", ["hi there"], tts.chunk_text("hi there", 100))
+chunks = tts.chunk_text("alpha bravo charlie delta", 12)
+true("chunk_text multi when over max", len(chunks) > 1, repr(chunks))
+true("chunk_text full coverage", " ".join(chunks) == "alpha bravo charlie delta", repr(chunks))
+
+clips_short = tts.prepare_spoken(
+    "hello world from the package", spoken_mode="short", spoken_max_chars=11, strip=False
+)
+eq("prepare_spoken short mode", "short", clips_short.spoken_mode)
+true("prepare_spoken short one clip", len(clips_short.clips) == 1, repr(clips_short.clips))
+true("prepare_spoken short truncated", clips_short.truncated, repr(clips_short))
+
+long_prose = " ".join(f"w{i}" for i in range(30))
+clips_full = tts.prepare_spoken(long_prose, spoken_mode="full", clip_max_chars=20, strip=False)
+eq("prepare_spoken full mode", "full", clips_full.spoken_mode)
+true("prepare_spoken full multi clips", len(clips_full.clips) > 1, repr(clips_full.clips))
+true("prepare_spoken full chunked flag", clips_full.chunked)
+true(
+    "prepare_spoken full coverage",
+    " ".join(clips_full.clips) == long_prose,
+    repr(clips_full.clips),
+)
+
 print()
 print(f"Total: {PASS + FAIL}   Pass: {PASS}   Fail: {FAIL}")
 raise SystemExit(0 if FAIL == 0 else 1)
