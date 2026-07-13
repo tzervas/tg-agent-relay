@@ -15,6 +15,7 @@ Run standalone: `python3 tests/test_usage_ingest.py`
 Called by tests/run-tests.sh (same PASS/FAIL summary style as
 test_metrics_agg.py - the pytest-less pattern this repo already uses).
 """
+
 from __future__ import annotations
 
 import sys
@@ -24,7 +25,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "lib"))
 
-import usage_ingest as u  # noqa: E402
+import usage_ingest as u
 
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "usage-synthetic"
 
@@ -118,7 +119,9 @@ ws, we, label = u.resolve_window("bogus-spec", now=NOW)
 if "unrecognized" in label and (we - ws) == 7 * 24 * 3600:
     ok("unrecognized window spec: honestly-labeled 7d fallback, never silent/'all'")
 else:
-    fail("unrecognized window spec: honestly-labeled 7d fallback", f"label={label!r} span={we - ws}")
+    fail(
+        "unrecognized window spec: honestly-labeled 7d fallback", f"label={label!r} span={we - ws}"
+    )
 
 print("== lib/usage_ingest.py: filter_rows() ==")
 rows = [
@@ -137,7 +140,9 @@ agg = u.aggregate(synth_rows, NOW - 7 * 86400, NOW, "7d")
 assert_eq("aggregate: total_events", 2, agg["total_events"])
 assert_eq("aggregate: totals.total_tokens", 165 + 210, agg["totals"]["total_tokens"])
 assert_eq("aggregate: by_provider keys", {"anthropic", "openai"}, set(agg["by_provider"].keys()))
-assert_eq("aggregate: by_provider anthropic total", 165, agg["by_provider"]["anthropic"]["total_tokens"])
+assert_eq(
+    "aggregate: by_provider anthropic total", 165, agg["by_provider"]["anthropic"]["total_tokens"]
+)
 assert_eq("aggregate: by_model keys", {"claude-opus-4-8", "gpt-5"}, set(agg["by_model"].keys()))
 assert_eq("aggregate: by_project keys", {"proj-a", "proj-b"}, set(agg["by_project"].keys()))
 assert_eq("aggregate: window label carried through", "7d", agg["window"])
@@ -154,24 +159,50 @@ agg = u.collect("claude-code", str(FIXTURE_DIR), WINDOW, now=NOW)
 # alpha). 200h-old outlier still excluded. Nested subagent paths prove the
 # recursive scan (Sonnet/Haiku no longer invisible).
 assert_eq("collect: total_events (window-filtered + nested subagent rows)", 7, agg["total_events"])
-assert_eq("collect: sources_scanned (all parsed rows before window filter)", 8, agg["sources_scanned"])
-assert_eq("collect: totals.input_tokens", 100 + 200 + 150 + 90 + 10 + 40 + 30, agg["totals"]["input_tokens"])
-assert_eq("collect: totals.output_tokens", 50 + 80 + 60 + 30 + 10 + 20 + 15, agg["totals"]["output_tokens"])
-assert_eq("collect: totals.cache_read_tokens (only line 1 has any)", 10, agg["totals"]["cache_read_tokens"])
-assert_eq("collect: totals.cache_creation_tokens (only line 1 has any)", 5, agg["totals"]["cache_creation_tokens"])
+assert_eq(
+    "collect: sources_scanned (all parsed rows before window filter)", 8, agg["sources_scanned"]
+)
+assert_eq(
+    "collect: totals.input_tokens",
+    100 + 200 + 150 + 90 + 10 + 40 + 30,
+    agg["totals"]["input_tokens"],
+)
+assert_eq(
+    "collect: totals.output_tokens",
+    50 + 80 + 60 + 30 + 10 + 20 + 15,
+    agg["totals"]["output_tokens"],
+)
+assert_eq(
+    "collect: totals.cache_read_tokens (only line 1 has any)",
+    10,
+    agg["totals"]["cache_read_tokens"],
+)
+assert_eq(
+    "collect: totals.cache_creation_tokens (only line 1 has any)",
+    5,
+    agg["totals"]["cache_creation_tokens"],
+)
 assert_eq(
     "collect: by_provider breakdown (anthropic/openai/google/other all present)",
     {"anthropic", "openai", "google", "other"},
     set(agg["by_provider"].keys()),
 )
 # anthropic: opus 165 + sonnet shallow 280 + haiku 60 + sonnet nested 45 = 550
-assert_eq("collect: by_provider anthropic total (opus+sonnet+haiku nested)", 550, agg["by_provider"]["anthropic"]["total_tokens"])
+assert_eq(
+    "collect: by_provider anthropic total (opus+sonnet+haiku nested)",
+    550,
+    agg["by_provider"]["anthropic"]["total_tokens"],
+)
 assert_eq(
     "collect: by_project breakdown (both fake projects present)",
     {"-fake-project-alpha", "-fake-project-beta"},
     set(agg["by_project"].keys()),
 )
-assert_eq("collect: by_project alpha total (opus+sonnet+nested)", 550, agg["by_project"]["-fake-project-alpha"]["total_tokens"])
+assert_eq(
+    "collect: by_project alpha total (opus+sonnet+nested)",
+    550,
+    agg["by_project"]["-fake-project-alpha"]["total_tokens"],
+)
 assert_eq(
     "collect: by_project beta total (gpt-5 210 + gemini 120 + mystery 20)",
     350,
@@ -184,13 +215,17 @@ else:
 assert_eq("collect: never raises, no 'skipped' reason for a good source", None, agg.get("skipped"))
 assert_eq("collect: echoes back the source name", "claude-code", agg["source"])
 
-print("== lib/usage_ingest.py: collect() is skip-graceful (opt-in, best-effort, never fabricates) ==")
+print(
+    "== lib/usage_ingest.py: collect() is skip-graceful (opt-in, best-effort, never fabricates) =="
+)
 unknown_agg = u.collect("not-a-real-adapter", str(FIXTURE_DIR), WINDOW, now=NOW)
 if unknown_agg.get("skipped") and "unknown usage source adapter" in unknown_agg["skipped"]:
     ok("collect: unknown source adapter -> honest 'skipped' reason, not a raise")
 else:
     fail("collect: unknown source adapter -> honest 'skipped' reason", unknown_agg)
-assert_eq("collect: unknown adapter -> total_events 0 (never fabricated)", 0, unknown_agg["total_events"])
+assert_eq(
+    "collect: unknown adapter -> total_events 0 (never fabricated)", 0, unknown_agg["total_events"]
+)
 
 with tempfile.TemporaryDirectory() as tmpdir:
     missing_agg = u.collect("claude-code", str(Path(tmpdir) / "does-not-exist"), WINDOW, now=NOW)
@@ -201,9 +236,8 @@ else:
 assert_eq("collect: absent projects_dir -> total_events 0", 0, missing_agg["total_events"])
 
 print("== lib/usage_ingest.py: CLI (writes the gitignored JSON cache) ==")
-import json  # noqa: E402
-import subprocess  # noqa: E402
-
+import json
+import subprocess
 
 # The CLI has no `now` override (by design - production always uses the
 # real clock), so a "7d" window would be relative to the REAL wall clock,
@@ -216,7 +250,14 @@ all_agg = u.collect("claude-code", str(FIXTURE_DIR), "all")
 with tempfile.TemporaryDirectory() as tmpdir:
     out_json = str(Path(tmpdir) / "usage-summary.json")
     cli = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "lib" / "usage_ingest.py"), "claude-code", str(FIXTURE_DIR), "all", out_json],
+        [
+            sys.executable,
+            str(REPO_ROOT / "lib" / "usage_ingest.py"),
+            "claude-code",
+            str(FIXTURE_DIR),
+            "all",
+            out_json,
+        ],
         capture_output=True,
         text=True,
         timeout=10,
@@ -229,18 +270,31 @@ with tempfile.TemporaryDirectory() as tmpdir:
     if Path(out_json).is_file():
         with open(out_json) as f:
             cached = json.load(f)
-        assert_eq("CLI-written cache has the expected total_tokens", all_agg["totals"]["total_tokens"], cached["totals"]["total_tokens"])
+        assert_eq(
+            "CLI-written cache has the expected total_tokens",
+            all_agg["totals"]["total_tokens"],
+            cached["totals"]["total_tokens"],
+        )
     else:
         fail("CLI writes the output JSON cache file", "file not created")
 
     out_json2 = str(Path(tmpdir) / "usage-summary-skip.json")
     cli2 = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "lib" / "usage_ingest.py"), "claude-code", str(Path(tmpdir) / "nope"), WINDOW, out_json2],
+        [
+            sys.executable,
+            str(REPO_ROOT / "lib" / "usage_ingest.py"),
+            "claude-code",
+            str(Path(tmpdir) / "nope"),
+            WINDOW,
+            out_json2,
+        ],
         capture_output=True,
         text=True,
         timeout=10,
     )
-    assert_eq("CLI exits 0 even when the source is absent (never a hard failure)", 0, cli2.returncode)
+    assert_eq(
+        "CLI exits 0 even when the source is absent (never a hard failure)", 0, cli2.returncode
+    )
     if cli2.stdout.startswith("SKIP:"):
         ok("CLI prints SKIP:<reason> when the source is absent")
     else:
@@ -256,10 +310,16 @@ cli_bad_args = subprocess.run(
     text=True,
     timeout=10,
 )
-assert_eq("CLI exits non-zero ONLY for a genuine bad invocation (wrong arg count)", 2, cli_bad_args.returncode)
+assert_eq(
+    "CLI exits non-zero ONLY for a genuine bad invocation (wrong arg count)",
+    2,
+    cli_bad_args.returncode,
+)
 
-print("== lib/dashboard_render.py: usage panels + text fallback (import-level, no matplotlib required) ==")
-import dashboard_render as dr  # noqa: E402
+print(
+    "== lib/dashboard_render.py: usage panels + text fallback (import-level, no matplotlib required) =="
+)
+import dashboard_render as dr
 
 disabled_text = dr._render_usage_text(None)
 if "unavailable" in disabled_text:
@@ -272,7 +332,11 @@ populated_text = dr._render_usage_text(agg)
 # shared bar-list renderer (same behavior/limit as the relay dashboard's
 # hook/command breakdowns) - check the truncated-but-still-identifying
 # prefix, not the full fixture name.
-if "claude-opus-4-8" in populated_text and "gpt-5" in populated_text and "-fake-project-al" in populated_text:
+if (
+    "claude-opus-4-8" in populated_text
+    and "gpt-5" in populated_text
+    and "-fake-project-al" in populated_text
+):
     ok("_render_usage_text(agg) includes provider/model/project breakdowns")
 else:
     fail("_render_usage_text(agg) includes provider/model/project breakdowns", populated_text)
@@ -295,7 +359,9 @@ assert_eq(
     dr._top_key({"a": {"total_tokens": 5}, "b": {"total_tokens": 50}}),
 )
 
-print("== lib/dashboard_render.py: usage image path when matplotlib IS available, else graceful TEXT ==")
+print(
+    "== lib/dashboard_render.py: usage image path when matplotlib IS available, else graceful TEXT =="
+)
 try:
     import matplotlib  # noqa: F401
 
@@ -309,7 +375,9 @@ with tempfile.TemporaryDirectory() as tmpdir:
         json.dump(agg, f)
     out_png = str(Path(tmpdir) / "usage.png")
     rc = dr.main(["dashboard_render.py", "--usage-only", usage_cache, out_png])
-    assert_eq("dashboard_render.py --usage-only never exits non-zero for a data/render condition", 0, rc)
+    assert_eq(
+        "dashboard_render.py --usage-only never exits non-zero for a data/render condition", 0, rc
+    )
 
 if HAS_MPL:
     print("      (matplotlib present in this interpreter - exercising the usage IMAGE paths)")
@@ -325,9 +393,13 @@ if HAS_MPL:
         out_png = str(Path(tmpdir) / "toggled.png")
         rendered = dr._render_usage_image(agg, out_png, show_providers=False, show_models=False)
         if rendered and Path(out_png).is_file() and Path(out_png).stat().st_size > 0:
-            ok("_render_usage_image() with providers/models disabled still writes a non-empty PNG (placeholder panels)")
+            ok(
+                "_render_usage_image() with providers/models disabled still writes a non-empty PNG (placeholder panels)"
+            )
         else:
-            fail("_render_usage_image() with providers/models disabled still writes a non-empty PNG")
+            fail(
+                "_render_usage_image() with providers/models disabled still writes a non-empty PNG"
+            )
 
     # Extending the RELAY dashboard with usage panels appended - the
     # /dashboard-with-usage-enabled path, using the real metrics fixture
@@ -343,19 +415,29 @@ if HAS_MPL:
         out_png = str(Path(tmpdir) / "combined.png")
         rendered = dr._render_image(m_agg, out_png, usage_agg=agg)
         if rendered and Path(out_png).is_file() and Path(out_png).stat().st_size > 0:
-            ok("_render_image() with usage_agg appends usage panels and still writes a non-empty PNG")
+            ok(
+                "_render_image() with usage_agg appends usage panels and still writes a non-empty PNG"
+            )
         else:
-            fail("_render_image() with usage_agg appends usage panels and still writes a non-empty PNG")
+            fail(
+                "_render_image() with usage_agg appends usage panels and still writes a non-empty PNG"
+            )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out_png = str(Path(tmpdir) / "no-usage.png")
         rendered = dr._render_image(m_agg, out_png, usage_agg=None)
         if rendered and Path(out_png).is_file() and Path(out_png).stat().st_size > 0:
-            ok("_render_image() with usage_agg=None (disabled) renders the relay dashboard unchanged")
+            ok(
+                "_render_image() with usage_agg=None (disabled) renders the relay dashboard unchanged"
+            )
         else:
-            fail("_render_image() with usage_agg=None (disabled) renders the relay dashboard unchanged")
+            fail(
+                "_render_image() with usage_agg=None (disabled) renders the relay dashboard unchanged"
+            )
 else:
-    print("SKIP  matplotlib not installed in this interpreter - usage IMAGE paths not exercised here")
+    print(
+        "SKIP  matplotlib not installed in this interpreter - usage IMAGE paths not exercised here"
+    )
     print("      (never-silent: this line IS the record; the TEXT fallback above IS covered)")
 
 # ============================================================================

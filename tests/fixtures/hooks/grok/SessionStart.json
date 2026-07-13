@@ -1,0 +1,6 @@
+{
+  "hookEventName": "session_start",
+  "sessionId": "sess_grok_start_001",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj"
+}

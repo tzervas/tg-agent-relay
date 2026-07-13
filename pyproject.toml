@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tg-agent-relay"
+version = "0.6.1.dev0"
+description = "Harness-agnostic Telegram relay for agent status + inbound commands"
+readme = "README.md"
+# Prefer 3.14 (see .python-version + lib/python.sh). 3.13 only if hard-required.
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [{ name = "tg-agent-relay contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+highlight = ["pygments>=2.17"]
+dashboard = ["matplotlib>=3.8"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+tg-relay-send = "tg_agent_relay.cli:main_send"
+tg-relay-poll = "tg_agent_relay.cli:main_poll"
+tg-relay-hook = "tg_agent_relay.cli:main_hook"
+tg-relay = "tg_agent_relay.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "pygments>=2.17",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tg_agent_relay", "providers"]
+
+[tool.uv]
+# Package is installable editable; agents use: uv sync && uv run …
+package = true
+
+[tool.uv.pip]
+python-version = "3.14"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["tg_agent_relay", "providers", "lib", "tests"]
+extend-exclude = [
+    ".git",
+    ".venv",
+    "voices",
+    "docs/assets",
+    "**/__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # bugbear
+    "UP",     # pyupgrade
+    "SIM",    # simplify
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",   # line length — formatter handles soft wrap; long shell-adjacent strings OK
+    "B008",   # function calls in defaults (argparse-style OK)
+    "RUF001", # emoji status prefixes (ℹ️ ✅) are intentional Telegram copy
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]
+"lib/**" = ["E402", "SIM102", "SIM105", "RUF012"]
+"providers/**/usage.py" = ["E402"]
+"providers/**/hooks.py" = ["RUF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tg_agent_relay", "providers"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "lib"]
+addopts = "-q"

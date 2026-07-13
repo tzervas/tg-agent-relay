@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "error_message": "command exited with code 1",
+  "cwd": "/tmp/proj"
+}

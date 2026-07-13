@@ -73,6 +73,7 @@ for this renderer). An unknown/unrecognized tag - or no tag at all - falls
 back to pygments' own plain-text lexer: the document still renders
 cleanly, just without color, never a crash.
 """
+
 from __future__ import annotations
 
 import html
@@ -111,10 +112,36 @@ def _mycelium_lexer_cls():
         # reserved-not-yet-active or ratified-not-yet-lexed - highlighted
         # the same either way, since this is a lexer, not a validator).
         _keywords = (
-            "nodule", "phylum", "colony", "hypha", "fn", "swap", "fuse",
-            "let", "mut", "const", "match", "if", "else", "return", "for",
-            "while", "loop", "break", "continue", "struct", "enum", "trait",
-            "impl", "use", "pub", "as", "in", "true", "false", "self",
+            "nodule",
+            "phylum",
+            "colony",
+            "hypha",
+            "fn",
+            "swap",
+            "fuse",
+            "let",
+            "mut",
+            "const",
+            "match",
+            "if",
+            "else",
+            "return",
+            "for",
+            "while",
+            "loop",
+            "break",
+            "continue",
+            "struct",
+            "enum",
+            "trait",
+            "impl",
+            "use",
+            "pub",
+            "as",
+            "in",
+            "true",
+            "false",
+            "self",
         )
         _types = ("Value", "Result", "Option", "Dense", "Ternary", "Binary", "VSA")
 
@@ -228,7 +255,7 @@ def render_code_html(
         # BYTES (also fixing the document's own <meta charset> from a bare
         # "None" to a real value) - written directly, no text-mode guessing.
         html_bytes = highlight(code, lexer, formatter)
-    except Exception as exc:  # noqa: BLE001 - ANY highlighting/render failure degrades gracefully (main message already carries the text code box)
+    except Exception as exc:
         return False, f"render failed: {exc}"
 
     if not html_bytes:
@@ -257,10 +284,10 @@ def _parse_args(argv: list[str]) -> dict | None:
         if a == "--line-numbers":
             opts["line_numbers"] = True
         elif a.startswith("--theme="):
-            opts["theme"] = a[len("--theme="):]
+            opts["theme"] = a[len("--theme=") :]
         elif a.startswith("--max-lines="):
             try:
-                opts["max_lines"] = int(a[len("--max-lines="):])
+                opts["max_lines"] = int(a[len("--max-lines=") :])
             except ValueError:
                 pass
         elif not a.startswith("--"):

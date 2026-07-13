@@ -1,4 +1,5 @@
 """Generic provider — free-text / label path via relay-notify (no hooks)."""
+
 from __future__ import annotations
 
 from providers.base import Provider, register

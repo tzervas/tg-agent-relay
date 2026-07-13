@@ -6,17 +6,15 @@ usage panels + handlers/usage.sh's `/usage` command).
 
 SOURCE-ADAPTER ABSTRACTION: `ADAPTERS` maps a `source` name (from
 relay.toml's `[usage].source`) to a function that enumerates + parses one
-harness's usage records into a flat list[UsageRow]. One adapter ships
-today: "claude-code" - it walks `<projects_dir>/*/*.jsonl` (Claude Code's
-own session-transcript format; default `projects_dir` is
-`~/.claude/projects`, matching the real on-disk layout) and reads each
-assistant message's `usage` object (`input_tokens`, `output_tokens`,
-`cache_read_input_tokens`, `cache_creation_input_tokens`) + its `model`
-id. A future harness adds its own adapter function + registers it here -
-no caller (usage.sh, dashboard.sh, dashboard_render.py) needs to change.
-`[usage].projects_dir` is the configurable "source path" - point it at any
-directory holding that adapter's transcripts (e.g. a different machine's
-synced Claude Code projects dir).
+harness's usage records into a flat list[UsageRow]. Adapters are filled
+primarily from the providers registry (`providers/*` `usage_source` +
+`usage_collect`); local `_collect_*` helpers remain as thin backward-compat
+fallbacks for "claude-code" and "grok". A new harness registers a
+Provider with `usage_collect` - no caller (usage.sh, dashboard.sh,
+dashboard_render.py) needs to change. `[usage].projects_dir` is the
+configurable "source path" - point it at any directory holding that
+adapter's transcripts (e.g. a different machine's synced Claude Code
+projects dir).
 
 OPT-IN + BEST-EFFORT, NEVER FABRICATED (G2/VR-5 style - see this repo's
 CLAUDE.md house rules, which this feature deliberately mirrors even though
@@ -49,6 +47,7 @@ CLI (also what handlers/usage.sh and handlers/dashboard.sh shell out to):
     fabricated one). Never raises; never exits non-zero for a data
     condition (only a malformed CLI invocation does).
 """
+
 from __future__ import annotations
 
 import datetime
@@ -56,8 +55,9 @@ import json
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 
 
 class UsageRow(NamedTuple):
@@ -93,7 +93,7 @@ def infer_provider(model_id: str) -> str:
         label = infer_provider_label(model_id or "")
         if label:
             return label
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if m.startswith("claude"):
         return "anthropic"
@@ -158,9 +158,7 @@ def resolve_window(spec: str, now: int | None = None) -> tuple[int, int, str]:
 
     if spec_norm == "today":
         local = time.localtime(now)
-        midnight = int(
-            time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1))
-        )
+        midnight = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)))
         return midnight, now, "today"
 
     match = _WINDOW_RE.match(spec_norm)
@@ -202,14 +200,14 @@ def _parse_iso8601(raw: object) -> int | None:
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         return int(datetime.datetime.fromisoformat(s).timestamp())
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
 
 
 def _int_field(v: object) -> int:
     try:
         return int(v)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
 
 
@@ -266,7 +264,9 @@ def _collect_claude_code(base: Path) -> list[UsageRow]:
                             input_tokens=_int_field(usage.get("input_tokens", 0)),
                             output_tokens=_int_field(usage.get("output_tokens", 0)),
                             cache_read_tokens=_int_field(usage.get("cache_read_input_tokens", 0)),
-                            cache_creation_tokens=_int_field(usage.get("cache_creation_input_tokens", 0)),
+                            cache_creation_tokens=_int_field(
+                                usage.get("cache_creation_input_tokens", 0)
+                            ),
                         )
                     )
         except OSError:
@@ -319,7 +319,7 @@ def _collect_grok(base: Path) -> list[UsageRow]:
                             if t is not None:
                                 ts = t
                                 break
-                except (OSError, ValueError, TypeError):
+                except OSError, ValueError, TypeError:
                     pass
             signals_path = sess / "signals.json"
             if signals_path.is_file():
@@ -330,7 +330,7 @@ def _collect_grok(base: Path) -> list[UsageRow]:
                         models_used = signals.get("modelsUsed")
                         if isinstance(models_used, list) and models_used and model == "grok":
                             model = str(models_used[0])
-                except (OSError, ValueError, TypeError):
+                except OSError, ValueError, TypeError:
                     pass
 
             peak = 0
@@ -373,14 +373,21 @@ def _collect_multi(base: Path) -> list[UsageRow]:
     return []
 
 
-ADAPTERS: dict[str, Callable[[Path], list[UsageRow]]] = {
-    "claude-code": _collect_claude_code,
-    "grok": _collect_grok,
-}
+# Populated primarily by _register_provider_usage_adapters() from
+# providers/* (usage_source + usage_collect). Local _collect_* functions
+# remain as thin backward-compat fallbacks when the registry is unavailable
+# or a source has no collector yet. Keys "claude-code" and "grok" stay stable.
+ADAPTERS: dict[str, Callable[[Path], list[UsageRow]]] = {}
 
 
 def _register_provider_usage_adapters() -> None:
-    """Merge usage collectors from providers/* extensions (idempotent)."""
+    """Fill ADAPTERS from providers/* first; then local fallbacks.
+
+    Prefer each Provider.usage_collect when present so new harnesses register
+    only under providers/ — no hard-coded ADAPTERS entries required. Local
+    _collect_claude_code / _collect_grok remain as fallbacks for the classic
+    source names when the providers package cannot be imported.
+    """
     try:
         repo = Path(__file__).resolve().parents[1]
         import sys
@@ -391,10 +398,17 @@ def _register_provider_usage_adapters() -> None:
         from providers.base import list_providers
 
         for p in list_providers():
-            if p.usage_source and p.usage_collect and p.usage_source not in ADAPTERS:
+            if p.usage_source and p.usage_collect:
+                # Registry wins over any prior local entry for that source.
                 ADAPTERS[p.usage_source] = p.usage_collect  # type: ignore[assignment]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
+
+    # Thin backward-compat wrappers for the two historical source names.
+    if "claude-code" not in ADAPTERS:
+        ADAPTERS["claude-code"] = _collect_claude_code
+    if "grok" not in ADAPTERS:
+        ADAPTERS["grok"] = _collect_grok
 
 
 _register_provider_usage_adapters()
@@ -430,9 +444,7 @@ def _bucket_size_seconds(window_start: int, window_end: int) -> int:
     return 3600 if span_hours <= 48 else 86400
 
 
-def aggregate(
-    rows: list[UsageRow], window_start: int, window_end: int, window_label: str
-) -> dict:
+def aggregate(rows: list[UsageRow], window_start: int, window_end: int, window_label: str) -> dict:
     """Compute the full usage summary from an already-window-filtered row
     list. Pure function - no I/O, fully unit-testable with a synthetic row
     list (mirrors metrics_agg.aggregate's pure/testable shape)."""
@@ -516,7 +528,7 @@ def collect(source: str, projects_dir: str, window: str, now: int | None = None)
             rows.extend(part)
             if src_name == "grok" and part:
                 notes.append("grok: token_basis=context_peak_proxy (not API billing)")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             notes.append(f"{src_name}: collection error: {e.__class__.__name__}")
 
     if not rows and notes:

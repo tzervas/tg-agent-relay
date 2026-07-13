@@ -16,6 +16,7 @@ Prints one JSON object to stdout: {"mode": "visual"|"text", "items": [...]}
 Never raises for missing optional images — those entries fall back to text
 with a "fallback": "text_missing_image" note (still exclusive, never both).
 """
+
 from __future__ import annotations
 
 import argparse

@@ -3,6 +3,7 @@
 Canonical event set from ~/.grok/docs/user-guide/10-hooks.md (all 14).
 Also accepts Cursor camelCase aliases and snake_case GROK_HOOK_EVENT values.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,17 +13,75 @@ from typing import Any
 from providers.base import HookEvent
 
 EVENTS: list[HookEvent] = [
-    HookEvent("SessionStart", False, "🟢", "Session starts", ("prefix", "event", "cwd", "session_id", "detail_suffix")),
-    HookEvent("UserPromptSubmit", False, "⌨️", "User submits a prompt", ("prefix", "event", "prompt", "message", "detail_suffix")),
-    HookEvent("PreToolUse", False, "🔧", "Tool about to run (blocking capable; we notify only)", ("prefix", "event", "tool", "verb", "tool_input")),
-    HookEvent("PostToolUse", False, "🔧", "Tool completed successfully", ("prefix", "event", "tool", "verb", "tool_input")),
-    HookEvent("PostToolUseFailure", True, "⚠️", "Tool failed", ("prefix", "event", "tool", "message", "detail_suffix")),
-    HookEvent("PermissionDenied", False, "🚫", "Permission system denied a tool", ("prefix", "event", "tool")),
-    HookEvent("Stop", True, "🏁", "Agent turn ended", ("prefix", "event", "message", "detail_suffix", "stop_reason")),
-    HookEvent("StopFailure", True, "🛑", "Turn ended due to API error", ("prefix", "event", "error_type")),
-    HookEvent("Notification", True, "🔔", "Agent notification", ("prefix", "event", "notification_type", "message", "detail_suffix")),
-    HookEvent("SubagentStart", False, "🚀", "Subagent started", ("prefix", "event", "agent", "agent_id")),
-    HookEvent("SubagentStop", True, "✅", "Subagent finished", ("prefix", "event", "agent", "message", "detail_suffix")),
+    HookEvent(
+        "SessionStart",
+        False,
+        "🟢",
+        "Session starts",
+        ("prefix", "event", "cwd", "session_id", "detail_suffix"),
+    ),
+    HookEvent(
+        "UserPromptSubmit",
+        False,
+        "⌨️",
+        "User submits a prompt",
+        ("prefix", "event", "prompt", "message", "detail_suffix"),
+    ),
+    HookEvent(
+        "PreToolUse",
+        False,
+        "🔧",
+        "Tool about to run (blocking capable; we notify only)",
+        ("prefix", "event", "tool", "verb", "tool_input"),
+    ),
+    HookEvent(
+        "PostToolUse",
+        False,
+        "🔧",
+        "Tool completed successfully",
+        ("prefix", "event", "tool", "verb", "tool_input"),
+    ),
+    HookEvent(
+        "PostToolUseFailure",
+        True,
+        "⚠️",
+        "Tool failed",
+        ("prefix", "event", "tool", "message", "detail_suffix"),
+    ),
+    HookEvent(
+        "PermissionDenied",
+        False,
+        "🚫",
+        "Permission system denied a tool",
+        ("prefix", "event", "tool"),
+    ),
+    HookEvent(
+        "Stop",
+        True,
+        "🏁",
+        "Agent turn ended",
+        ("prefix", "event", "message", "detail_suffix", "stop_reason"),
+    ),
+    HookEvent(
+        "StopFailure", True, "🛑", "Turn ended due to API error", ("prefix", "event", "error_type")
+    ),
+    HookEvent(
+        "Notification",
+        True,
+        "🔔",
+        "Agent notification",
+        ("prefix", "event", "notification_type", "message", "detail_suffix"),
+    ),
+    HookEvent(
+        "SubagentStart", False, "🚀", "Subagent started", ("prefix", "event", "agent", "agent_id")
+    ),
+    HookEvent(
+        "SubagentStop",
+        True,
+        "✅",
+        "Subagent finished",
+        ("prefix", "event", "agent", "message", "detail_suffix"),
+    ),
     HookEvent("PreCompact", False, "🗜️", "Compaction about to run", ("prefix", "event", "trigger")),
     HookEvent("PostCompact", False, "📦", "Compaction finished", ("prefix", "event", "trigger")),
     HookEvent("SessionEnd", False, "🔴", "Session ended", ("prefix", "event", "reason")),
@@ -98,7 +157,7 @@ def _g(payload: dict[str, Any], *keys: str, default: str = "") -> str:
             if isinstance(v, (dict, list)):
                 try:
                     s = json.dumps(v, ensure_ascii=False)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     s = str(v)
             else:
                 s = str(v)
@@ -193,13 +252,29 @@ def format_hook(payload: dict[str, Any], event: str, opts: dict[str, str]) -> st
         return _render(tmpl, **base_kw, notification_type=ntype, message=msg, detail_suffix=detail)
 
     if event == "SubagentStart":
-        agent = _g(payload, "agent_type", "agentType", "subagent_type", "subagentType", "name", default="subagent")
+        agent = _g(
+            payload,
+            "agent_type",
+            "agentType",
+            "subagent_type",
+            "subagentType",
+            "name",
+            default="subagent",
+        )
         agent_id = _g(payload, "agent_id", "agentId", "id")
         tmpl = custom or "{prefix} {agent} started"
         return _render(tmpl, **base_kw, agent=agent, agent_id=agent_id)
 
     if event == "SubagentStop":
-        agent = _g(payload, "agent_type", "agentType", "subagent_type", "subagentType", "name", default="subagent")
+        agent = _g(
+            payload,
+            "agent_type",
+            "agentType",
+            "subagent_type",
+            "subagentType",
+            "name",
+            default="subagent",
+        )
         msg = _oneline(_g(payload, "last_assistant_message", "message"), 300)
         detail = f" — {msg}" if msg else ""
         tmpl = custom or "{prefix} {agent} finished{detail_suffix}"

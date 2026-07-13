@@ -17,7 +17,7 @@ Each extension can contribute:
 | id | Platform | Hooks | Usage source | Config namespace |
 |---|---|---|---|---|
 | `grok` | Grok Build / Grok CLI | **14/14** documented | `grok` | `[grok.*]` |
-| `claude` | Claude Code | 30 cataloged (format still in shell adapter) | `claude-code` | `[claude_code.*]` |
+| `claude` | Claude Code | **30/30** documented (`providers/claude/hooks.py`; shell adapter still default) | `claude-code` | `[claude_code.*]` |
 | `ollama` | Ollama | (delivery via backends; hooks N/A) | — | `[ollama]` / backends |
 | `generic` | Free-text / label | via `relay-notify` | — | `[generic]` |
 

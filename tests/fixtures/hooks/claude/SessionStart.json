@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-sonnet-4",
+  "session_title": "offline fixture session",
+  "agent_type": "main",
+  "cwd": "/tmp/proj"
+}

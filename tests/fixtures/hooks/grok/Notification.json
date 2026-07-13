@@ -1,0 +1,9 @@
+{
+  "hookEventName": "notification",
+  "sessionId": "sess_grok_notif_009",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "notification_type": "idle_prompt",
+  "notificationType": "idle_prompt",
+  "message": "Waiting for your input"
+}

@@ -1,0 +1,6 @@
+{
+  "hookEventName": "stop",
+  "message": "all green",
+  "sessionId": "abc",
+  "cwd": "/tmp/proj"
+}

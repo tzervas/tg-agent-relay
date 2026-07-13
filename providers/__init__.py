@@ -8,19 +8,19 @@ that can supply:
 
 Shell adapters remain thin entry points that call into this package.
 """
-from __future__ import annotations
 
-from providers.base import Provider, HookEvent, get_provider, list_providers, register
+from __future__ import annotations
 
 # Import concrete providers for side-effect registration.
 from providers import claude as _claude  # noqa: F401
+from providers import generic as _generic  # noqa: F401
 from providers import grok as _grok  # noqa: F401
 from providers import ollama as _ollama  # noqa: F401
-from providers import generic as _generic  # noqa: F401
+from providers.base import HookEvent, Provider, get_provider, list_providers, register
 
 __all__ = [
-    "Provider",
     "HookEvent",
+    "Provider",
     "get_provider",
     "list_providers",
     "register",

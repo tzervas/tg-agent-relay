@@ -2347,6 +2347,19 @@ else
     printf 'SKIP  python3 not installed - skipping usage-ingest unit tests (never-silent: this line IS the record)\n'
 fi
 
+echo "== usage registry (ADAPTERS from providers/*, issue #31) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_usage_registry.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_usage_registry.py"
+    else
+        fail "relay_python tests/test_usage_registry.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping usage-registry unit tests (never-silent: this line IS the record)\n'
+fi
+
 echo "== lib/code_highlight.py: Python unit tests (pygments render + native MyceliumLexer) =="
 if command -v python3 >/dev/null 2>&1; then
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_code_highlight.py" 2>&1)"
@@ -2373,7 +2386,7 @@ else
     printf 'SKIP  python3 not installed - skipping tts-plain-text unit tests (never-silent: this line IS the record)\n'
 fi
 
-echo "== providers/grok (Python unit tests) =="
+echo "== providers/grok + providers/claude (Python unit tests) =="
 if command -v python3 >/dev/null 2>&1; then
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_grok.py" 2>&1)"
     PY_RC=$?
@@ -2382,8 +2395,35 @@ if command -v python3 >/dev/null 2>&1; then
     else
         fail "relay_python tests/test_providers_grok.py" "$PY_OUT"
     fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_claude.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_providers_claude.py"
+    else
+        fail "relay_python tests/test_providers_claude.py" "$PY_OUT"
+    fi
 else
     printf 'SKIP  python3 not installed - skipping provider unit tests\n'
+fi
+
+echo "== tg_agent_relay package interfaces (Python unit tests) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_package_interfaces.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_package_interfaces.py"
+    else
+        fail "relay_python tests/test_package_interfaces.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_routing_tables.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_routing_tables.py"
+    else
+        fail "relay_python tests/test_routing_tables.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping package interface unit tests\n'
 fi
 
 echo "== adapters/grok.sh + lib/grok-events.sh + lib/routing.sh =="

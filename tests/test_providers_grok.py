@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """tests/test_providers_grok.py - Grok provider extension unit tests."""
+
 from __future__ import annotations
 
 import json
@@ -10,9 +11,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-import providers  # noqa: E402, F401
-from providers.base import get_provider, list_providers  # noqa: E402
-from providers.grok.hooks import format_hook, normalize_event  # noqa: E402
+import providers  # noqa: F401
+from providers.base import get_provider, list_providers
+from providers.grok.hooks import format_hook, normalize_event
 
 PASS = FAIL = 0
 
@@ -66,7 +67,9 @@ for raw, want in [
 
 # Format each event produces non-empty summary
 for e in g.hook_events:
-    summary = format_hook({"toolName": "run_terminal_command", "message": "hi"}, e.name, {"prefix": e.default_prefix})
+    summary = format_hook(
+        {"toolName": "run_terminal_command", "message": "hi"}, e.name, {"prefix": e.default_prefix}
+    )
     if summary and e.default_prefix in summary:
         ok(f"format {e.name}")
     else:

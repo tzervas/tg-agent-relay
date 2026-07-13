@@ -1,0 +1,10 @@
+{
+  "hookEventName": "subagent_stop",
+  "sessionId": "sess_grok_substop_011",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "agent_type": "explore",
+  "agentType": "explore",
+  "last_assistant_message": "Found 3 matching files. Done.",
+  "message": "Found 3 matching files. Done."
+}

@@ -1,0 +1,12 @@
+{
+  "hookEventName": "post_tool_use",
+  "sessionId": "sess_grok_posttool_004",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "toolName": "run_terminal_command",
+  "toolInput": {
+    "command": "ls"
+  },
+  "toolUseId": "call_abc123xyz999",
+  "toolOutput": "README.md\npackage.json\n"
+}

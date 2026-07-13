@@ -1,4 +1,5 @@
 """Claude Code usage collector (delegates to usage_ingest recursive scan)."""
+
 from __future__ import annotations
 
 from pathlib import Path

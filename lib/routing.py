@@ -8,12 +8,12 @@ this module is unit-testable and the migration target for exclusive use later.
 CLI:
   python3 lib/routing.py resolve --config cfg.json --chat-id -1001 --text '@grok hi'
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any
 

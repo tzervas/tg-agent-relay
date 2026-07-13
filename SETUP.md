@@ -6,13 +6,24 @@ harness — see the repo [README](README.md)). Everything lives under
 `~/.claude/telegram-bridge/` (mode 0700, kept at this path deliberately —
 see the README's repo/directory note) — no other repo is touched.
 
-### Python version
+### Python version & tooling
 
-**Preferred: Python 3.14.** Acceptable: 3.13 when 3.14 is not installed.
-Minimum for stdlib `tomllib`: **3.11+**. The relay resolves the interpreter
-via [`lib/python.sh`](lib/python.sh) in this order: `python3.14` →
-`python3.13` → `python3` (first that is ≥ 3.11). Override with
-`RELAY_PYTHON=/path/to/python` if needed.
+**Preferred: Python 3.14** (see `.python-version`). Use **uv** for the
+project env and **ruff** for lint/format:
+
+```bash
+# install uv: https://docs.astral.sh/uv/
+bash scripts/dev.sh sync     # uv sync → .venv on 3.14 + ruff/pytest
+bash scripts/dev.sh check    # ruff + offline tests
+```
+
+Runtime scripts resolve Python via [`lib/python.sh`](lib/python.sh):
+project `.venv` → `python3.14` → `python3.13` → `python3` (≥3.11 for
+tomllib). Override with `RELAY_PYTHON=…`. Full notes: [`docs/TOOLING.md`](docs/TOOLING.md).
+
+**Rust** (optional crates later): **MSRV 1.96** — `rust-toolchain.toml` +
+`Cargo.toml` `rust-version = "1.96"`, with rustfmt, clippy, rust-src,
+rust-analyzer (`bash scripts/dev.sh rust-check`).
 
 ## How it stays token-frugal
 

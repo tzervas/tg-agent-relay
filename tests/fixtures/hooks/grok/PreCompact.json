@@ -1,0 +1,7 @@
+{
+  "hookEventName": "pre_compact",
+  "sessionId": "sess_grok_precompact_012",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "trigger": "auto"
+}

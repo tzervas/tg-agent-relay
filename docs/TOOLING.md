@@ -1,0 +1,79 @@
+# Tooling — UV, Ruff, Rust
+
+## Python (UV + Ruff)
+
+| Tool | Role |
+|---|---|
+| **[uv](https://docs.astral.sh/uv/)** | Python 3.14 env, lockfile, `uv run` for scripts/tests |
+| **[ruff](https://docs.astral.sh/ruff/)** | Lint + format (`target-version = "py314"`) |
+
+### Setup
+
+```bash
+# Install uv if needed: https://docs.astral.sh/uv/getting-started/installation/
+cd /path/to/tg-agent-relay
+bash scripts/dev.sh sync          # creates .venv on Python 3.14
+```
+
+### Daily
+
+```bash
+bash scripts/dev.sh lint          # ruff check
+bash scripts/dev.sh format        # ruff format + autofix imports
+bash scripts/dev.sh test          # offline tests with RELAY_PYTHON=.venv/bin/python
+bash scripts/dev.sh check         # lint + test
+
+# Or direct:
+uv run ruff check tg_agent_relay providers lib tests
+uv run python -m tg_agent_relay.cli version
+uv run pytest                     # when pytest suite is primary
+```
+
+### Version pin
+
+- `.python-version` → `3.14`
+- `requires-python = ">=3.14"` in `pyproject.toml`
+- Runtime scripts still use `lib/python.sh` (prefers `.venv`, then `python3.14`)
+
+Override: `RELAY_PYTHON=/path/to/python` or `uv run --python 3.14 …`.
+
+### Agent note
+
+Swarm agents should:
+
+```bash
+uv sync --all-groups
+uv run ruff check --fix path/to/changed.py
+uv run ruff format path/to/changed.py
+```
+
+Do not invent alternate linters (flake8/black) — Ruff only.
+
+## Rust (full toolchain)
+
+| Pin | File |
+|---|---|
+| **MSRV** | **1.96** (`Cargo.toml` → `workspace.package.rust-version = "1.96"`) |
+| Channel + components | `rust-toolchain.toml` (`1.96` + rustfmt, clippy, rust-src, rust-analyzer) |
+| Workspace | `Cargo.toml` (members empty until epic #22) |
+
+```bash
+rustup show                    # respects rust-toolchain.toml → 1.96.x
+bash scripts/dev.sh rust-check # fmt + clippy when crates exist
+```
+
+Install/update full toolchain:
+
+```bash
+rustup toolchain install 1.96
+rustup component add --toolchain 1.96 rustfmt clippy rust-src rust-analyzer
+# or: rustup show  # auto-installs from rust-toolchain.toml
+```
+
+Optional crates land under `crates/` and are added to `[workspace].members` only after benchmarks (epic #22).
+Do not raise the MSRV without updating `rust-toolchain.toml`, `Cargo.toml`, CI, and this doc together.
+
+## CI
+
+- `.github/workflows/ci.yml` — uv sync, ruff check/format, offline tests on 3.14; rust metadata job
+- `.github/workflows/release.yml` — tag releases

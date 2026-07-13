@@ -28,6 +28,7 @@ Called by tests/run-tests.sh (same PASS/FAIL summary style as
 test_metrics_agg.py/test_usage_ingest.py - this repo's pytest-less
 pattern: plain asserts, an explicit runner, exit 0 iff everything passed).
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -38,7 +39,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "lib"))
 
-import code_highlight as ch  # noqa: E402
+import code_highlight as ch
 
 PASS = 0
 FAIL = 0
@@ -75,8 +76,8 @@ def assert_true(name: str, cond: bool, detail: str = "") -> None:
 
 
 try:
-    import pygments  # noqa: F401
-    import pygments.formatters  # noqa: F401
+    import pygments
+    import pygments.formatters
 
     HAS_PYGMENTS = True
 except ImportError:
@@ -99,16 +100,25 @@ fn swap(v: Value) -> Result<Value, SwapError> {
 """
 
 print("== lib/code_highlight.py: _parse_args (CLI arg parsing) ==")
-assert_eq("_parse_args: too few positional args -> None (usage error)", None, ch._parse_args(["prog", "myc"]))
+assert_eq(
+    "_parse_args: too few positional args -> None (usage error)",
+    None,
+    ch._parse_args(["prog", "myc"]),
+)
 assert_eq("_parse_args: no args at all -> None", None, ch._parse_args(["prog"]))
 
 opts = ch._parse_args(["prog", "myc", "/tmp/out.html"])
-assert_true("_parse_args: minimal call resolves lang/out_path", opts is not None and opts["lang"] == "myc" and opts["out_path"] == "/tmp/out.html")
+assert_true(
+    "_parse_args: minimal call resolves lang/out_path",
+    opts is not None and opts["lang"] == "myc" and opts["out_path"] == "/tmp/out.html",
+)
 assert_eq("_parse_args: theme defaults to monokai", "monokai", opts["theme"])
 assert_eq("_parse_args: line_numbers defaults to False", False, opts["line_numbers"])
 assert_eq("_parse_args: max_lines defaults to 60", 60, opts["max_lines"])
 
-opts2 = ch._parse_args(["prog", "rust", "/tmp/out2.html", "--theme=dracula", "--line-numbers", "--max-lines=10"])
+opts2 = ch._parse_args(
+    ["prog", "rust", "/tmp/out2.html", "--theme=dracula", "--line-numbers", "--max-lines=10"]
+)
 assert_eq("_parse_args: --theme= is honored", "dracula", opts2["theme"])
 assert_eq("_parse_args: --line-numbers sets True", True, opts2["line_numbers"])
 assert_eq("_parse_args: --max-lines= is honored", 10, opts2["max_lines"])
@@ -147,8 +157,12 @@ try:
     with tempfile.TemporaryDirectory() as tmpdir:
         out = str(Path(tmpdir) / "nopygments.html")
         ok_, reason = ch.render_code_html("print(1)", "python", out)
-        assert_eq("pygments unavailable (mocked ImportError) -> graceful skip, never a crash", False, ok_)
-        assert_true("unavailable-dependency skip reason is descriptive", "unavailable" in reason, reason)
+        assert_eq(
+            "pygments unavailable (mocked ImportError) -> graceful skip, never a crash", False, ok_
+        )
+        assert_true(
+            "unavailable-dependency skip reason is descriptive", "unavailable" in reason, reason
+        )
 finally:
     if _saved_pygments is not None:
         sys.modules["pygments"] = _saved_pygments
@@ -158,10 +172,13 @@ finally:
 print("== lib/code_highlight.py: MyceliumLexer token coverage (Declared, lexical approximation) ==")
 try:
     import pygments  # noqa: F401
+
     _HAS_PYGMENTS = True
 except ImportError:
     _HAS_PYGMENTS = False
-    print("SKIP  pygments not installed for this interpreter — lexer coverage skipped (optional dep)")
+    print(
+        "SKIP  pygments not installed for this interpreter — lexer coverage skipped (optional dep)"
+    )
 
 if _HAS_PYGMENTS:
     for alias in ("myc", "mycelium", "MYC"):
@@ -174,15 +191,46 @@ if _HAS_PYGMENTS:
     for kind, text in tokens:
         kind_by_text.setdefault(text, kind)
 
-    assert_true("MyceliumLexer: 'nodule' tokenized as a Keyword", kind_by_text.get("nodule", "").startswith("Token.Keyword"), str(kind_by_text.get("nodule")))
-    assert_true("MyceliumLexer: 'fn' tokenized as a Keyword", kind_by_text.get("fn", "").startswith("Token.Keyword"), str(kind_by_text.get("fn")))
-    assert_true("MyceliumLexer: 'swap' tokenized as a Keyword", kind_by_text.get("swap", "").startswith("Token.Keyword"), str(kind_by_text.get("swap")))
-    assert_true("MyceliumLexer: 'let' tokenized as a Keyword", kind_by_text.get("let", "").startswith("Token.Keyword"), str(kind_by_text.get("let")))
-    assert_true("MyceliumLexer: 'if'/'else'/'return'/'match' tokenized as Keywords", all(kind_by_text.get(k, "").startswith("Token.Keyword") for k in ("if", "else", "return", "match")))
-    assert_true("MyceliumLexer: 'Value'/'Result'/'Option' tokenized as Keyword.Type", all(kind_by_text.get(t, "").startswith("Token.Keyword.Type") for t in ("Value", "Result", "Option")))
+    assert_true(
+        "MyceliumLexer: 'nodule' tokenized as a Keyword",
+        kind_by_text.get("nodule", "").startswith("Token.Keyword"),
+        str(kind_by_text.get("nodule")),
+    )
+    assert_true(
+        "MyceliumLexer: 'fn' tokenized as a Keyword",
+        kind_by_text.get("fn", "").startswith("Token.Keyword"),
+        str(kind_by_text.get("fn")),
+    )
+    assert_true(
+        "MyceliumLexer: 'swap' tokenized as a Keyword",
+        kind_by_text.get("swap", "").startswith("Token.Keyword"),
+        str(kind_by_text.get("swap")),
+    )
+    assert_true(
+        "MyceliumLexer: 'let' tokenized as a Keyword",
+        kind_by_text.get("let", "").startswith("Token.Keyword"),
+        str(kind_by_text.get("let")),
+    )
+    assert_true(
+        "MyceliumLexer: 'if'/'else'/'return'/'match' tokenized as Keywords",
+        all(
+            kind_by_text.get(k, "").startswith("Token.Keyword")
+            for k in ("if", "else", "return", "match")
+        ),
+    )
+    assert_true(
+        "MyceliumLexer: 'Value'/'Result'/'Option' tokenized as Keyword.Type",
+        all(
+            kind_by_text.get(t, "").startswith("Token.Keyword.Type")
+            for t in ("Value", "Result", "Option")
+        ),
+    )
     assert_true(
         "MyceliumLexer: the '// nodule:' header line is a Comment.Special token (distinct from an ordinary '//' comment)",
-        any(kind == "Token.Comment.Special" and text.startswith("// nodule:") for kind, text in tokens),
+        any(
+            kind == "Token.Comment.Special" and text.startswith("// nodule:")
+            for kind, text in tokens
+        ),
         str([t for t in tokens if "nodule:" in t[1]]),
     )
     assert_true(
@@ -196,21 +244,40 @@ if _HAS_PYGMENTS:
     assert_eq("_get_lexer(unknown tag) falls back to TextLexer", "Text only", unknown_lexer.name)
 
     empty_lexer = ch._get_lexer("")
-    assert_eq("_get_lexer('') (no fence tag) falls back to TextLexer", "Text only", empty_lexer.name)
+    assert_eq(
+        "_get_lexer('') (no fence tag) falls back to TextLexer", "Text only", empty_lexer.name
+    )
 
 if _HAS_PYGMENTS:
-    print("      (pygments importable in this interpreter - exercising the real HTML-document path)")
+    print(
+        "      (pygments importable in this interpreter - exercising the real HTML-document path)"
+    )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out = str(Path(tmpdir) / "myc.html")
         ok_, reason = ch.render_code_html(MYC_SAMPLE, "myc", out)
         assert_eq("myc block renders successfully", True, ok_)
-        assert_true("myc render: HTML file written, non-empty", Path(out).is_file() and Path(out).stat().st_size > 0, reason)
+        assert_true(
+            "myc render: HTML file written, non-empty",
+            Path(out).is_file() and Path(out).stat().st_size > 0,
+            reason,
+        )
         doc = Path(out).read_text(encoding="utf-8")
-        assert_true("myc render: a real, complete HTML document (DOCTYPE + </html>)", doc.startswith("<!DOCTYPE") and doc.rstrip().endswith("</html>"))
-        assert_true("myc render: CSS is INLINED (noclasses=True) - a color: value present, no external stylesheet <link>", "color:#" in doc or "color: #" in doc)
-        assert_true("myc render: self-contained - no external stylesheet reference", "<link" not in doc)
-        assert_true("myc render: the actual source text is present in the document", "nodule" in doc and "example" in doc)
+        assert_true(
+            "myc render: a real, complete HTML document (DOCTYPE + </html>)",
+            doc.startswith("<!DOCTYPE") and doc.rstrip().endswith("</html>"),
+        )
+        assert_true(
+            "myc render: CSS is INLINED (noclasses=True) - a color: value present, no external stylesheet <link>",
+            "color:#" in doc or "color: #" in doc,
+        )
+        assert_true(
+            "myc render: self-contained - no external stylesheet reference", "<link" not in doc
+        )
+        assert_true(
+            "myc render: the actual source text is present in the document",
+            "nodule" in doc and "example" in doc,
+        )
 
     # --- XSS/HTML-injection regression guard (Finding 2 class): the CODE
     # --- CONTENT is already escaped by pygments today, but this is the
@@ -224,8 +291,16 @@ if _HAS_PYGMENTS:
         ok_, reason = ch.render_code_html(adversarial_code, "python", out)
         assert_eq("adversarial code block still renders successfully", True, ok_)
         adv_doc = Path(out).read_text(encoding="utf-8")
-        assert_true("adversarial content: raw <script> tag is NOT present verbatim", "<script>alert(1)</script>" not in adv_doc, adv_doc[:2000])
-        assert_true("adversarial content: the payload is present only in an escaped form (&lt;script&gt;)", "&lt;script&gt;" in adv_doc, adv_doc[:2000])
+        assert_true(
+            "adversarial content: raw <script> tag is NOT present verbatim",
+            "<script>alert(1)</script>" not in adv_doc,
+            adv_doc[:2000],
+        )
+        assert_true(
+            "adversarial content: the payload is present only in an escaped form (&lt;script&gt;)",
+            "&lt;script&gt;" in adv_doc,
+            adv_doc[:2000],
+        )
 
     # --- title-escaping regression guard (Finding 2): HtmlFormatter(title=)
     # --- does NOT html-escape its argument, so this module must escape
@@ -237,10 +312,20 @@ if _HAS_PYGMENTS:
     with tempfile.TemporaryDirectory() as tmpdir:
         out = str(Path(tmpdir) / "title_xss.html")
         ok_, reason = ch.render_code_html("print(1)", "<script>alert(1)</script>", out)
-        assert_eq("adversarial lang/title still renders successfully (never-raise contract)", True, ok_)
+        assert_eq(
+            "adversarial lang/title still renders successfully (never-raise contract)", True, ok_
+        )
         title_doc = Path(out).read_text(encoding="utf-8")
-        assert_true("title escaping: raw <script> tag is NOT present verbatim (defense-in-depth XSS guard)", "<script>alert(1)</script>" not in title_doc, title_doc[:2000])
-        assert_true("title escaping: the lang payload is present only in an escaped form (&lt;script&gt;)", "&lt;script&gt;" in title_doc, title_doc[:2000])
+        assert_true(
+            "title escaping: raw <script> tag is NOT present verbatim (defense-in-depth XSS guard)",
+            "<script>alert(1)</script>" not in title_doc,
+            title_doc[:2000],
+        )
+        assert_true(
+            "title escaping: the lang payload is present only in an escaped form (&lt;script&gt;)",
+            "&lt;script&gt;" in title_doc,
+            title_doc[:2000],
+        )
 
     for lang, code in (
         ("rust", 'fn main() {\n    println!("hi");\n}\n'),
@@ -251,25 +336,45 @@ if _HAS_PYGMENTS:
             out = str(Path(tmpdir) / f"{lang}.html")
             ok_, reason = ch.render_code_html(code, lang, out)
             assert_eq(f"{lang} block renders successfully", True, ok_)
-            assert_true(f"{lang} render: HTML file written, non-empty", Path(out).is_file() and Path(out).stat().st_size > 0, reason)
+            assert_true(
+                f"{lang} render: HTML file written, non-empty",
+                Path(out).is_file() and Path(out).stat().st_size > 0,
+                reason,
+            )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out = str(Path(tmpdir) / "unknown.html")
-        ok_, reason = ch.render_code_html("some random text with no known language", "totallymadeupxyz", out)
-        assert_eq("unknown-language block still renders (plain-text lexer, still a document)", True, ok_)
-        assert_true("unknown-language render: content present", "some random text" in Path(out).read_text(encoding="utf-8"))
+        ok_, reason = ch.render_code_html(
+            "some random text with no known language", "totallymadeupxyz", out
+        )
+        assert_eq(
+            "unknown-language block still renders (plain-text lexer, still a document)", True, ok_
+        )
+        assert_true(
+            "unknown-language render: content present",
+            "some random text" in Path(out).read_text(encoding="utf-8"),
+        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         out_ln = str(Path(tmpdir) / "linenos.html")
         ok_, reason = ch.render_code_html("a = 1\nb = 2\n", "python", out_ln, line_numbers=True)
         assert_eq("line_numbers=True renders successfully", True, ok_)
-        assert_true("line_numbers=True: a line-number gutter is present", "linenos" in Path(out_ln).read_text(encoding="utf-8"))
+        assert_true(
+            "line_numbers=True: a line-number gutter is present",
+            "linenos" in Path(out_ln).read_text(encoding="utf-8"),
+        )
 
     print("== lib/code_highlight.py: real CLI subprocess (stdin -> stdout contract) ==")
     with tempfile.TemporaryDirectory() as tmpdir:
         out = str(Path(tmpdir) / "cli.html")
         proc = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "lib" / "code_highlight.py"), "myc", out, "--theme=dracula"],
+            [
+                sys.executable,
+                str(REPO_ROOT / "lib" / "code_highlight.py"),
+                "myc",
+                out,
+                "--theme=dracula",
+            ],
             input=MYC_SAMPLE,
             capture_output=True,
             text=True,
@@ -277,7 +382,10 @@ if _HAS_PYGMENTS:
         )
         assert_eq("CLI: exit code 0 on a successful render", 0, proc.returncode)
         assert_eq("CLI: stdout is exactly DOC:<path>", f"DOC:{out}\n", proc.stdout)
-        assert_true("CLI: a real HTML document was written", Path(out).read_text(encoding="utf-8").startswith("<!DOCTYPE"))
+        assert_true(
+            "CLI: a real HTML document was written",
+            Path(out).read_text(encoding="utf-8").startswith("<!DOCTYPE"),
+        )
 
     proc_bad = subprocess.run(
         [sys.executable, str(REPO_ROOT / "lib" / "code_highlight.py")],
@@ -286,10 +394,18 @@ if _HAS_PYGMENTS:
         text=True,
         timeout=30,
     )
-    assert_eq("CLI: bad usage (no args) -> exit code 2 (a caller bug, not a runtime condition)", 2, proc_bad.returncode)
+    assert_eq(
+        "CLI: bad usage (no args) -> exit code 2 (a caller bug, not a runtime condition)",
+        2,
+        proc_bad.returncode,
+    )
 else:
-    print("SKIP  pygments not importable in this interpreter - HTML-document path/CLI subprocess not exercised here")
-    print("      (never-silent: this line IS the record; the mocked-ImportError skip-graceful path above IS covered)")
+    print(
+        "SKIP  pygments not importable in this interpreter - HTML-document path/CLI subprocess not exercised here"
+    )
+    print(
+        "      (never-silent: this line IS the record; the mocked-ImportError skip-graceful path above IS covered)"
+    )
 
 # ============================================================================
 print()

@@ -111,6 +111,48 @@ fi
 EVENT="${_HE_CLAUDE:-unknown}"
 [[ -z "$EVENT" || "$EVENT" == "null" ]] && EVENT="unknown"
 
+# Optional: format via providers/claude (Python) when CLAUDE_USE_PROVIDER_HOOK=1
+# or PROVIDER_HOOK=1. Shell case statement remains the default path so existing
+# tests stay stable.
+if [[ "${CLAUDE_USE_PROVIDER_HOOK:-${PROVIDER_HOOK:-0}}" == "1" ]]; then
+    # shellcheck disable=SC1091
+    [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    if [[ -f "$BRIDGE_DIR/lib/provider_hook.py" ]]; then
+        _CC_CFG_JSON="$(mktemp)"
+        if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+            printf '%s' "$RELAY_CONFIG_JSON" | jq -c '{claude_code: (.claude_code // {})}' \
+                >"$_CC_CFG_JSON" 2>/dev/null || printf '%s\n' '{}' >"$_CC_CFG_JSON"
+        else
+            printf '%s\n' '{}' >"$_CC_CFG_JSON"
+        fi
+        _CC_OUT="$(printf '%s' "$PAYLOAD" | relay_python "$BRIDGE_DIR/lib/provider_hook.py" claude \
+            --config-json "$_CC_CFG_JSON" 2>/dev/null)" || _CC_OUT=""
+        rm -f "$_CC_CFG_JSON"
+        _CC_LINE1="$(printf '%s\n' "$_CC_OUT" | head -1)"
+        case "$_CC_LINE1" in
+            SKIP:*)
+                emit_metric "hook" "${EVENT}_skip" "${_CC_LINE1#SKIP:}"
+                exit 0
+                ;;
+            OK:*)
+                SUMMARY="${_CC_LINE1#OK:}"
+                emit_metric "hook" "$EVENT" "provider"
+                export RELAY_BACKEND="${RELAY_BACKEND:-claude}"
+                if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1; then
+                    _cc_cwd="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)"
+                    [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+                    RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
+                    [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
+                fi
+                [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                exit 0
+                ;;
+        esac
+        # Fall through to shell formatting if provider path failed.
+    fi
+fi
+
 # pf <jq-filter> - read one field off $PAYLOAD, "" on any parse failure.
 pf() {
     printf '%s' "$PAYLOAD" | jq -r "$1" 2>/dev/null

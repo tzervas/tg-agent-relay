@@ -1,0 +1,13 @@
+{
+  "hookEventName": "post_tool_use_failure",
+  "sessionId": "sess_grok_fail_005",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "toolName": "run_terminal_command",
+  "toolInput": {
+    "command": "false"
+  },
+  "toolUseId": "call_def456uvw000",
+  "error": "command exited with code 1",
+  "message": "command exited with code 1"
+}

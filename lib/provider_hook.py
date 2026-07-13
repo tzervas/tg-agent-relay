@@ -18,6 +18,7 @@ Config overrides (enabled/prefix/format) come from optional JSON file:
   { "grok": { "Stop": { "enabled": true, "prefix": "🏁", "format": "…" } } }
 Shell adapters build this from relay.toml via jq when available.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,7 @@ def _merge_env_payload(payload: dict) -> dict:
 
 
 def _event_opts(config: dict, namespace: str, event: str, provider) -> dict[str, str]:
-    block = ((config.get(namespace) or {}).get(event) or {})
+    block = (config.get(namespace) or {}).get(event) or {}
     if not isinstance(block, dict):
         block = {}
     enabled = block.get("enabled")
@@ -125,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.config_json and Path(args.config_json).is_file():
         try:
             config = json.loads(Path(args.config_json).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             config = {}
 
     opts = _event_opts(config, provider.config_namespace, norm, provider)

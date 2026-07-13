@@ -14,6 +14,7 @@ one Python process for the whole file - the pytest-less pattern this repo
 already uses: plain asserts, an explicit runner, exit 0 iff everything
 passed).
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "lib"))
 
-import metrics_agg as m  # noqa: E402
+import metrics_agg as m
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "metrics-synthetic.log"
 
@@ -85,7 +86,9 @@ print("== lib/metrics_agg.py: aggregate (synthetic fixture, pinned now) ==")
 agg, _, _ = _load_fixture_agg()
 
 assert_eq("total_events (window-filtered)", 13, agg["total_events"])
-assert_eq("messages_in = 2x message_flushed + 1x forwarded + 1x relay-handled", 4, agg["messages_in"])
+assert_eq(
+    "messages_in = 2x message_flushed + 1x forwarded + 1x relay-handled", 4, agg["messages_in"]
+)
 assert_eq("messages_out = count of tg-send:send events", 3, agg["messages_out"])
 assert_eq("pages_sent = sum of pages=N across sends (1+2+1)", 4, agg["pages_sent"])
 assert_eq("commands_by_name", {"helpme": 1, "dashboard": 1}, agg["commands_by_name"])
@@ -127,7 +130,7 @@ else:
     fail("render_text_dashboard is honest about an empty window", empty_dash_text)
 
 print("== lib/metrics_agg.py: CLI (stats + dashboard modes) ==")
-import subprocess  # noqa: E402
+import subprocess
 
 cli_stats = subprocess.run(
     [sys.executable, str(REPO_ROOT / "lib" / "metrics_agg.py"), str(FIXTURE), "9999999", "stats"],
@@ -145,7 +148,9 @@ if "Relay stats" in cli_stats.stdout:
 else:
     fail("CLI stats mode prints the stats header", cli_stats.stdout)
 
-print("== lib/dashboard_render.py: image path when matplotlib IS available, else graceful TEXT fallback ==")
+print(
+    "== lib/dashboard_render.py: image path when matplotlib IS available, else graceful TEXT fallback =="
+)
 try:
     import matplotlib  # noqa: F401
 
@@ -154,16 +159,18 @@ except ImportError:
     HAS_MPL = False
 
 sys.path.insert(0, str(REPO_ROOT / "lib"))
-import dashboard_render  # noqa: E402
+import dashboard_render
 
 with tempfile.TemporaryDirectory() as tmpdir:
     out_png = str(Path(tmpdir) / "dashboard.png")
-    rc = dashboard_render.main([
-        "dashboard_render.py",
-        str(FIXTURE),
-        str(WINDOW_HOURS),
-        out_png,
-    ])
+    rc = dashboard_render.main(
+        [
+            "dashboard_render.py",
+            str(FIXTURE),
+            str(WINDOW_HOURS),
+            out_png,
+        ]
+    )
     assert_eq("dashboard_render.main() never exits non-zero for a data/render condition", 0, rc)
 
 if HAS_MPL:

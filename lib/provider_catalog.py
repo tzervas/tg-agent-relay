@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Emit provider catalogs for installers / docs / shell.
 
-  provider_catalog.py list
-  provider_catalog.py events grok
-  provider_catalog.py events grok --enabled-only   # default-on events
-  provider_catalog.py usage-sources
+provider_catalog.py list
+provider_catalog.py events grok
+provider_catalog.py events grok --enabled-only   # default-on events
+provider_catalog.py usage-sources
 """
+
 from __future__ import annotations
 
 import argparse

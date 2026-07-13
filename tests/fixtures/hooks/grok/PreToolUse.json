@@ -1,0 +1,11 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "sess_grok_pretool_003",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "toolName": "run_terminal_command",
+  "toolInput": {
+    "command": "ls"
+  },
+  "toolUseId": "call_abc123xyz999"
+}

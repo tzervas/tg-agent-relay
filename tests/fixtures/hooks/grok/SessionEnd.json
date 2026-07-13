@@ -1,0 +1,7 @@
+{
+  "hookEventName": "SessionEnd",
+  "sessionId": "sess_grok_end_014",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "reason": "user_exit"
+}

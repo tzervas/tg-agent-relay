@@ -37,6 +37,7 @@ allowlisted Telegram chat). A usage summary with `total_events == 0` (or a
 `skipped` reason) renders an honest "(none)"/note rather than fabricating
 data - never-silent, same posture as every other panel in this file.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,7 +45,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import metrics_agg  # noqa: E402
+import metrics_agg
 
 # NOTE: usage panels read an already-aggregated JSON cache (written by
 # lib/usage_ingest.py's CLI) via _load_usage_agg() below - this module
@@ -54,7 +55,7 @@ import metrics_agg  # noqa: E402
 
 # Dark-mode slice of the validated palette (references/palette.md), fixed
 # categorical order - never cycled/reassigned per-render.
-BG = "#1a1a19"          # dark chart surface
+BG = "#1a1a19"  # dark chart surface
 INK_PRIMARY = "#ffffff"
 INK_SECONDARY = "#c3c2b7"
 INK_MUTED = "#898781"
@@ -82,7 +83,15 @@ def _maybe_panel(ax, enabled: bool, title: str, render_fn, *args) -> None:
         render_fn(ax, *args)
         return
     ax.set_title(title, fontsize=11, color=INK_SECONDARY, loc="left")
-    ax.text(0.5, 0.5, "(display disabled — [usage] config)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes)
+    ax.text(
+        0.5,
+        0.5,
+        "(display disabled — [usage] config)",
+        ha="center",
+        va="center",
+        color=INK_MUTED,
+        transform=ax.transAxes,
+    )
     ax.axis("off")
 
 
@@ -159,7 +168,13 @@ def _render_image(
     # text sends (which DO render emoji fine via Telegram's own font) keep
     # the emoji; the image title stays plain ASCII/unicode-punctuation only.
     win_label = metrics_agg._fmt_hours(agg["window_hours"])
-    fig.suptitle(f"Relay Dashboard — last {win_label}", fontsize=16, fontweight="bold", color=INK_PRIMARY, y=0.99 if show_usage else 0.985)
+    fig.suptitle(
+        f"Relay Dashboard — last {win_label}",
+        fontsize=16,
+        fontweight="bold",
+        color=INK_PRIMARY,
+        y=0.99 if show_usage else 0.985,
+    )
 
     # --- Panel 1: header stat row (text tiles, no chart chrome) ---
     ax0 = fig.add_subplot(gs[0])
@@ -175,8 +190,27 @@ def _render_image(
     n = len(stats)
     for i, (label, value) in enumerate(stats):
         x = (i + 0.5) / n
-        ax0.text(x, 0.62, str(value), ha="center", va="center", fontsize=17 if n <= 4 else 14, fontweight="bold", color=INK_PRIMARY, transform=ax0.transAxes)
-        ax0.text(x, 0.12, label, ha="center", va="center", fontsize=9.5, color=INK_MUTED, transform=ax0.transAxes)
+        ax0.text(
+            x,
+            0.62,
+            str(value),
+            ha="center",
+            va="center",
+            fontsize=17 if n <= 4 else 14,
+            fontweight="bold",
+            color=INK_PRIMARY,
+            transform=ax0.transAxes,
+        )
+        ax0.text(
+            x,
+            0.12,
+            label,
+            ha="center",
+            va="center",
+            fontsize=9.5,
+            color=INK_MUTED,
+            transform=ax0.transAxes,
+        )
     ax0.set_xlim(0, 1)
     ax0.set_ylim(0, 1)
 
@@ -201,7 +235,15 @@ def _render_image(
         ax1.plot(xs, outs, color=CAT["aqua"], linewidth=2, marker="o", markersize=4, label="out")
         ax1.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=INK_SECONDARY)
     else:
-        ax1.text(0.5, 0.5, "no traffic in this window", ha="center", va="center", color=INK_MUTED, transform=ax1.transAxes)
+        ax1.text(
+            0.5,
+            0.5,
+            "no traffic in this window",
+            ha="center",
+            va="center",
+            color=INK_MUTED,
+            transform=ax1.transAxes,
+        )
     locator = mdates.AutoDateLocator(maxticks=6, minticks=3)
     ax1.xaxis.set_major_locator(locator)
     ax1.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
@@ -254,7 +296,11 @@ def _render_image(
             ax_provider,
             show_providers,
             "Tokens by provider (share)",
-            lambda ax: _usage_share_bar(ax, usage_agg.get("by_provider", {}), usage_agg.get("totals", {}).get("total_tokens", 0)),
+            lambda ax: _usage_share_bar(
+                ax,
+                usage_agg.get("by_provider", {}),
+                usage_agg.get("totals", {}).get("total_tokens", 0),
+            ),
         )
 
         ax_project = fig.add_subplot(gs[row])
@@ -272,7 +318,14 @@ def _render_image(
             _usage_trend(ax_trend, usage_agg)
 
         if usage_agg.get("skipped"):
-            fig.text(0.5, 0.006, f"usage note: {usage_agg['skipped']}", ha="center", fontsize=7.5, color=INK_MUTED)
+            fig.text(
+                0.5,
+                0.006,
+                f"usage note: {usage_agg['skipped']}",
+                ha="center",
+                fontsize=7.5,
+                color=INK_MUTED,
+            )
 
     fig.savefig(out_path, format="png")
     plt.close(fig)
@@ -285,7 +338,7 @@ def _display_name(name: str) -> str:
         import usage_ingest as _u  # type: ignore
 
         return _u.display_model(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return name if len(name) <= 28 else name[:27] + "…"
 
 
@@ -294,7 +347,9 @@ def _hbar(ax, counts: dict, title: str, color: str, limit: int = 8) -> None:
 
     ax.set_title(title, fontsize=11, color=INK_SECONDARY, loc="left")
     if not counts:
-        ax.text(0.5, 0.5, "(none)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes)
+        ax.text(
+            0.5, 0.5, "(none)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes
+        )
         ax.axis("off")
         return
     items = sorted(counts.items(), key=lambda kv: kv[1])[-limit:]
@@ -324,7 +379,9 @@ def _usage_share_bar(ax, by_provider: dict, total_tokens: int, limit: int = 6) -
 
     ax.set_title("Tokens by provider (share)", fontsize=11, color=INK_SECONDARY, loc="left")
     if not by_provider or total_tokens <= 0:
-        ax.text(0.5, 0.5, "(none)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes)
+        ax.text(
+            0.5, 0.5, "(none)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes
+        )
         ax.axis("off")
         return
     items = sorted(by_provider.items(), key=lambda kv: kv[1].get("total_tokens", 0))[-limit:]
@@ -355,7 +412,12 @@ def _usage_trend(ax, usage_agg: dict) -> None:
     import matplotlib.dates as mdates
     import matplotlib.ticker as mticker
 
-    ax.set_title(f"Token usage over time (usage window: {usage_agg.get('window', '?')})", fontsize=11, color=INK_SECONDARY, loc="left")
+    ax.set_title(
+        f"Token usage over time (usage window: {usage_agg.get('window', '?')})",
+        fontsize=11,
+        color=INK_SECONDARY,
+        loc="left",
+    )
     timeline = usage_agg.get("timeline", [])
     xs = [_dt.datetime.fromtimestamp(b) for b, _ in timeline]
     ys = [v for _, v in timeline]
@@ -378,7 +440,7 @@ def _fmt_tokens(n: object) -> str:
     stat tiles, where raw digit counts get unreadable fast."""
     try:
         n = int(n)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return "0"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -414,7 +476,7 @@ def _load_usage_agg(path: str | None) -> dict | None:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return data if isinstance(data, dict) else None
 
@@ -451,10 +513,21 @@ def _render_usage_image(
     n_rows = 4 + (1 if has_trend else 0)
     height_ratios = [1.1, 1.8, 1.6, 1.8] + ([1.8] if has_trend else [])
     fig = plt.figure(figsize=(10.2, 10.3 if not has_trend else 12.1), dpi=200)
-    gs = fig.add_gridspec(n_rows, 1, height_ratios=height_ratios, hspace=0.65, left=0.30, right=0.96, top=0.95, bottom=0.05)
+    gs = fig.add_gridspec(
+        n_rows,
+        1,
+        height_ratios=height_ratios,
+        hspace=0.65,
+        left=0.30,
+        right=0.96,
+        top=0.95,
+        bottom=0.05,
+    )
 
     win_label = usage_agg.get("window", "?")
-    fig.suptitle(f"Token Usage — {win_label}", fontsize=16, fontweight="bold", color=INK_PRIMARY, y=0.985)
+    fig.suptitle(
+        f"Token Usage — {win_label}", fontsize=16, fontweight="bold", color=INK_PRIMARY, y=0.985
+    )
 
     totals = usage_agg.get("totals", {})
     ax0 = fig.add_subplot(gs[0])
@@ -471,14 +544,37 @@ def _render_usage_image(
             "in / out",
             True,
         ),
-        (_truncate(_display_name(_top_key(usage_agg.get("by_model", {})) or "—"), 16), "top model", False),
+        (
+            _truncate(_display_name(_top_key(usage_agg.get("by_model", {})) or "—"), 16),
+            "top model",
+            False,
+        ),
         (_truncate(_top_key(usage_agg.get("by_project", {})) or "—", 16), "top project", False),
     ]
     n = len(stats)
     for i, (value, label, is_numeric) in enumerate(stats):
         x = (i + 0.5) / n
-        ax0.text(x, 0.62, str(value), ha="center", va="center", fontsize=15 if is_numeric else 10.5, fontweight="bold", color=INK_PRIMARY, transform=ax0.transAxes)
-        ax0.text(x, 0.12, label, ha="center", va="center", fontsize=9.5, color=INK_MUTED, transform=ax0.transAxes)
+        ax0.text(
+            x,
+            0.62,
+            str(value),
+            ha="center",
+            va="center",
+            fontsize=15 if is_numeric else 10.5,
+            fontweight="bold",
+            color=INK_PRIMARY,
+            transform=ax0.transAxes,
+        )
+        ax0.text(
+            x,
+            0.12,
+            label,
+            ha="center",
+            va="center",
+            fontsize=9.5,
+            color=INK_MUTED,
+            transform=ax0.transAxes,
+        )
     ax0.set_xlim(0, 1)
     ax0.set_ylim(0, 1)
 
@@ -487,7 +583,12 @@ def _render_usage_image(
         ax1,
         show_models,
         "Tokens by model",
-        lambda ax: _hbar(ax, {m: d.get("total_tokens", 0) for m, d in usage_agg.get("by_model", {}).items()}, "Tokens by model", CAT["yellow"]),
+        lambda ax: _hbar(
+            ax,
+            {m: d.get("total_tokens", 0) for m, d in usage_agg.get("by_model", {}).items()},
+            "Tokens by model",
+            CAT["yellow"],
+        ),
     )
 
     ax2 = fig.add_subplot(gs[2])
@@ -495,27 +596,45 @@ def _render_usage_image(
         ax2,
         show_providers,
         "Tokens by provider (share)",
-        lambda ax: _usage_share_bar(ax, usage_agg.get("by_provider", {}), totals.get("total_tokens", 0)),
+        lambda ax: _usage_share_bar(
+            ax, usage_agg.get("by_provider", {}), totals.get("total_tokens", 0)
+        ),
     )
 
     ax3 = fig.add_subplot(gs[3])
-    _hbar(ax3, {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_project", {}).items()}, "Tokens by project", CAT["green"])
+    _hbar(
+        ax3,
+        {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_project", {}).items()},
+        "Tokens by project",
+        CAT["green"],
+    )
 
     if has_trend:
         ax4 = fig.add_subplot(gs[4])
         _usage_trend(ax4, usage_agg)
 
     if usage_agg.get("skipped"):
-        fig.text(0.5, 0.012, f"note: {usage_agg['skipped']}", ha="center", fontsize=8, color=INK_MUTED)
+        fig.text(
+            0.5, 0.012, f"note: {usage_agg['skipped']}", ha="center", fontsize=8, color=INK_MUTED
+        )
     elif usage_agg.get("total_events", 0) == 0:
-        fig.text(0.5, 0.012, "no usage data recorded yet in this window", ha="center", fontsize=8, color=INK_MUTED)
+        fig.text(
+            0.5,
+            0.012,
+            "no usage data recorded yet in this window",
+            ha="center",
+            fontsize=8,
+            color=INK_MUTED,
+        )
 
     fig.savefig(out_path, format="png")
     plt.close(fig)
     return Path(out_path).is_file() and Path(out_path).stat().st_size > 0
 
 
-def _render_usage_text(usage_agg: dict | None, show_providers: bool = True, show_models: bool = True) -> str:
+def _render_usage_text(
+    usage_agg: dict | None, show_providers: bool = True, show_models: bool = True
+) -> str:
     """The unicode/text fallback for the `/usage` command - same
     never-fails-to-answer contract as metrics_agg.render_text_dashboard.
     Reuses metrics_agg's _bar_section renderer (one source of truth for
@@ -543,20 +662,23 @@ def _render_usage_text(usage_agg: dict | None, show_providers: bool = True, show
     ]
     if show_providers:
         lines += metrics_agg._bar_section(
-            "By provider:", {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_provider", {}).items()}
+            "By provider:",
+            {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_provider", {}).items()},
         )
     else:
         lines += ["By provider:", "  (display disabled — [usage].providers = false)"]
     lines.append("")
     if show_models:
         lines += metrics_agg._bar_section(
-            "By model:", {m: d.get("total_tokens", 0) for m, d in usage_agg.get("by_model", {}).items()}
+            "By model:",
+            {m: d.get("total_tokens", 0) for m, d in usage_agg.get("by_model", {}).items()},
         )
     else:
         lines += ["By model:", "  (display disabled — [usage].models = false)"]
     lines.append("")
     lines += metrics_agg._bar_section(
-        "By project:", {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_project", {}).items()}
+        "By project:",
+        {p: d.get("total_tokens", 0) for p, d in usage_agg.get("by_project", {}).items()},
     )
     if usage_agg.get("skipped"):
         lines += ["", f"note: {usage_agg['skipped']}"]
@@ -576,7 +698,10 @@ def main(argv: list[str]) -> int:
 
     if len(argv) >= 2 and argv[1] == "--usage-only":
         if len(argv) < 4:
-            print("usage: dashboard_render.py --usage-only <usage_json_path> <out_png_path> [--no-providers] [--no-models]", file=sys.stderr)
+            print(
+                "usage: dashboard_render.py --usage-only <usage_json_path> <out_png_path> [--no-providers] [--no-models]",
+                file=sys.stderr,
+            )
             return 2
         usage_json_path, out_path = argv[2], argv[3]
         usage_agg = _load_usage_agg(usage_json_path)
@@ -584,15 +709,21 @@ def main(argv: list[str]) -> int:
         ok = False
         if usage_agg is not None:
             try:
-                ok = _render_usage_image(usage_agg, out_path, show_providers=show_providers, show_models=show_models)
-            except Exception:  # noqa: BLE001 - ANY render failure degrades to text, never crashes
+                ok = _render_usage_image(
+                    usage_agg, out_path, show_providers=show_providers, show_models=show_models
+                )
+            except Exception:
                 ok = False
 
         if ok:
             print(f"IMAGE:{out_path}")
         else:
             print("TEXT")
-            print(_render_usage_text(usage_agg, show_providers=show_providers, show_models=show_models))
+            print(
+                _render_usage_text(
+                    usage_agg, show_providers=show_providers, show_models=show_models
+                )
+            )
         return 0
 
     if len(argv) < 4:
@@ -614,8 +745,14 @@ def main(argv: list[str]) -> int:
     usage_agg = _load_usage_agg(usage_json_path)
 
     try:
-        ok = _render_image(agg, out_path, usage_agg=usage_agg, show_providers=show_providers, show_models=show_models)
-    except Exception:  # noqa: BLE001 - ANY render failure degrades to text, never crashes
+        ok = _render_image(
+            agg,
+            out_path,
+            usage_agg=usage_agg,
+            show_providers=show_providers,
+            show_models=show_models,
+        )
+    except Exception:
         ok = False
 
     if ok:

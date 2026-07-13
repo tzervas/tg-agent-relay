@@ -1,4 +1,5 @@
 """Ollama provider stub — routing/delivery via [backends.ollama]; hooks TBD."""
+
 from __future__ import annotations
 
 from providers.base import Provider, register

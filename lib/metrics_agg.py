@@ -21,6 +21,7 @@ CLI (also the fallback text-dashboard path a handler shells out to):
     Prints the rendered text to stdout. Never raises - a missing/unreadable
     log renders an honest "no data yet" dashboard rather than erroring.
 """
+
 from __future__ import annotations
 
 import sys
@@ -57,7 +58,9 @@ def parse_log(path: str) -> list[Row]:
     return rows
 
 
-def filter_window(rows: list[Row], window_hours: float, now: int | None = None) -> tuple[list[Row], int, int]:
+def filter_window(
+    rows: list[Row], window_hours: float, now: int | None = None
+) -> tuple[list[Row], int, int]:
     """Rows within the last window_hours of `now` (default: current time).
     Returns (filtered_rows, window_start_ts, window_end_ts)."""
     if now is None:
@@ -141,9 +144,7 @@ def aggregate(rows: list[Row], window_hours: float, window_start: int, window_en
     # commands are excluded - those either never fired or DID cost a turn.
     model_turns_avoided = hook_fires + relay_handled
 
-    timeline = sorted(
-        (b, counts["in"], counts["out"]) for b, counts in buckets.items()
-    )
+    timeline = sorted((b, counts["in"], counts["out"]) for b, counts in buckets.items())
 
     return {
         "window_hours": window_hours,
@@ -251,7 +252,10 @@ def render_text_dashboard(agg: dict) -> str:
 
 def _main(argv: list[str]) -> int:
     if len(argv) < 4:
-        print("usage: metrics_agg.py <log_path> <window_hours> <mode:dashboard|stats>", file=sys.stderr)
+        print(
+            "usage: metrics_agg.py <log_path> <window_hours> <mode:dashboard|stats>",
+            file=sys.stderr,
+        )
         return 2
     log_path, window_hours_raw, mode = argv[1], argv[2], argv[3]
     try:
