@@ -537,7 +537,7 @@ def _format_message_impl(
             if "wrap_width" in fmt and wrap_width == 50:
                 try:
                     wrap_width = int(fmt["wrap_width"])
-                except TypeError, ValueError:
+                except (TypeError, ValueError) as _exc:
                     wrap_width = 50
 
     if not enabled:
@@ -604,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             with open(args.config, encoding="utf-8") as f:
                 cfg = json.load(f)
-        except OSError, json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError) as _exc:
             cfg = {}
 
     raw = sys.stdin.read()
