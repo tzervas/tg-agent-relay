@@ -95,6 +95,15 @@ declare -f cfg_get >/dev/null 2>&1 || cfg_get() { printf '%s' "$2"; }  # lib mis
 [[ -f "$_FMT_LIB_DIR/relay-common.sh" ]] && source "$_FMT_LIB_DIR/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
 
+# The ONE definition of "what counts as a fence-open line" - shared with
+# lib/code_highlight.sh (v0.5.0 host-highlighted code documents), so the
+# two files can never diverge on what they each consider a fenced code
+# block. lib/code_highlight.sh extends this file's fenced-code handling
+# (ADDITIONALLY rendering a highlighted HTML document alongside - never
+# instead of - the <pre><code> box below); it reuses this exact regex
+# rather than re-detecting fences its own, possibly-drifting way.
+_FMT_FENCE_OPEN_RE='^```([A-Za-z0-9_+.-]*)[[:space:]]*$'
+
 # _fmt_escape_html <text>
 #
 # The ONLY three characters Telegram's HTML parse_mode requires escaped.
@@ -142,11 +151,50 @@ _fmt_known_lang() {
 # <pre><code class="language-X">...</code></pre>, or a plain <pre>...</pre>
 # when the tag is empty/unrecognized (still a code box, per DN: "unknown
 # language still boxes the code").
+#
+# Mycelium inline-highlighting alias (relay.toml [code_highlight].
+# myc_inline_lang, default "rust"): Telegram's CLIENT-side highlighter (the
+# one that lights up THIS inline box, independent of lib/code_highlight.sh's
+# host-rendered HTML-document path below) doesn't recognize "mycelium" - an
+# in-development language it has never heard of - so a bare
+# `language-mycelium` class renders as plain, uncolored monospace on every
+# client. Telegram's built-in RUST highlighter, by contrast, DOES color
+# Mycelium reasonably well - fn/let/match/impl/strings/comments/generic
+# types all align (Mycelium is Rust-family syntax); only Mycelium-unique
+# keywords (nodule/phylum/swap/fuse/hypha/colony) render as plain
+# identifiers under the rust grammar - harmless, never miscolored as an
+# actively wrong token class. So a myc/mycelium fence's INLINE box emits
+# `language-<myc_inline_lang>` (default "rust") instead of the literal
+# `language-mycelium` - zero-infra, good-enough client-side color on
+# every phone, today. This is the "good-enough, zero-infra" tier; the
+# host-rendered HTML document (lib/code_highlight.sh, [code_highlight]
+# mode="html-doc") is the "exact" tier - it uses the REAL MyceliumLexer,
+# coloring the unique keywords correctly too. Set
+# Set `myc_inline_lang = "mycelium"` to opt back into the literal,
+# uncolored-on-most-clients `language-mycelium` tag. (Not `""` - an
+# explicit empty-string TOML value is indistinguishable from "unset" to
+# `cfg_get`'s own `[[ -n "$val" ]]` check, a pre-existing, repo-wide
+# limitation of that helper - see lib/relay-config.sh - so it falls
+# through to this key's own default, "rust", same as leaving it unset.)
 _fmt_render_code_block() {
     local lang="$1" body="$2" esc norm
     esc="$(_fmt_escape_html "$body")"
     lang="$(printf '%s' "$lang" | tr '[:upper:]' '[:lower:]')"
     if [[ -n "$lang" ]] && norm="$(_fmt_known_lang "$lang")"; then
+        if [[ "$norm" == "mycelium" ]]; then
+            local myc_alias myc_alias_norm
+            myc_alias="$(cfg_get '.code_highlight.myc_inline_lang' 'rust')"
+            myc_alias="$(printf '%s' "$myc_alias" | tr '[:upper:]' '[:lower:]')"
+            # Fail CLOSED: an arbitrary config value must not land straight
+            # in `class="language-%s"` - validate it against the same
+            # allowlist real fence tags go through (_fmt_known_lang) before
+            # using it as the alias. An unrecognized/malformed config value
+            # falls back to the safe default already established above
+            # ("mycelium" itself), never passed through unchecked.
+            if [[ -n "$myc_alias" ]] && myc_alias_norm="$(_fmt_known_lang "$myc_alias")"; then
+                norm="$myc_alias_norm"
+            fi
+        fi
         printf '<pre><code class="language-%s">%s</code></pre>' "$norm" "$esc"
     else
         printf '<pre>%s</pre>' "$esc"
@@ -385,7 +433,7 @@ _fmt_render() {
         fi
 
         if [[ "${FMT_CODE_SPANS:-true}" == "true" \
-            && "$line" =~ ^\`\`\`([A-Za-z0-9_+.-]*)[[:space:]]*$ ]]; then
+            && "$line" =~ $_FMT_FENCE_OPEN_RE ]]; then
             if (( ${#qbuf[@]} > 0 )); then
                 _fmt_flush_quote qbuf out have_out last_blank
             fi
@@ -446,14 +494,21 @@ _fmt_render() {
 
     (( ${#qbuf[@]} > 0 )) && _fmt_flush_quote qbuf out have_out last_blank
 
-    # An unterminated fence at EOF: never drop the content - close it out.
+    # An unterminated fence at EOF - no closing ``` ever appeared - is very
+    # likely NOT a real fence (a stray ``` later in an otherwise-plain
+    # message, or a closing marker lost to truncation/pagination), so it is
+    # NEVER boxed as <pre>...</pre> (previously: it was - which produced a
+    # stray, ugly, sometimes entirely EMPTY <pre></pre> for a bare trailing
+    # ``` with no body). Never drop the content either way: the opening
+    # marker line plus any collected body lines are emitted as literal,
+    # escaped TEXT instead - visible, harmless, honest about what was
+    # actually written (found in the #12 PR review).
     if (( in_code )); then
-        local body; body="$(_fmt_join_lines "${code_lines[@]}")"
-        if [[ "${FMT_CODE_SPANS:-true}" == "true" ]]; then
-            out+=("$(_fmt_render_code_block "$code_lang" "$body")")
-        else
-            out+=("$(_fmt_escape_html "$body")")
-        fi
+        out+=("$(_fmt_escape_html "\`\`\`${code_lang}")")
+        local cl
+        for cl in "${code_lines[@]}"; do
+            out+=("$(_fmt_escape_html "$cl")")
+        done
     fi
 
     _fmt_join_lines "${out[@]}"

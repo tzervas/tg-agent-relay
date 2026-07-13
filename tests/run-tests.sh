@@ -70,6 +70,9 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
     ln -s "$REPO_ROOT/lib/usage_ingest.py" "$dir/lib/usage_ingest.py"
+    ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/handlers/example-echo.sh" "$dir/handlers/example-echo.sh"
     ln -s "$REPO_ROOT/handlers/dashboard.sh" "$dir/handlers/dashboard.sh"
     ln -s "$REPO_ROOT/handlers/stats.sh" "$dir/handlers/stats.sh"
@@ -103,7 +106,7 @@ echo "== bash -n (syntax) =="
 for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
-         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
+         lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
          handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
@@ -116,7 +119,7 @@ echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
-             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh \
+             lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
              handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
@@ -767,6 +770,8 @@ setup_tts_bridge() {
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/tts.sh" "$dir/lib/tts.sh"
     ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
@@ -781,7 +786,9 @@ ENV
 # stays the "lib missing" no-voice shim - irrelevant to these tests) and
 # with a stub `curl` pre-installed on PATH (see write_stub_curl above) so
 # every test below can inspect exactly what tg-send.sh's real HTML-format
-# pipeline POSTs, with no network call.
+# (and code-image) pipeline POSTs, with no network call. Includes the real
+# lib/code_highlight.sh + lib/code_highlight.py (not the passthrough shim) so
+# these tests exercise the actual code-image wiring too.
 setup_format_bridge() {
     local dir
     dir="$(mktemp -d)"
@@ -790,6 +797,8 @@ setup_format_bridge() {
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/format.sh" "$dir/lib/format.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
+    ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
@@ -1199,17 +1208,60 @@ format_message "\`\`\`myc
 ${MYC_LINE1}
 ${MYC_LINE2}
 \`\`\`"
-assert_eq "fenced \`\`\`myc block -> language-mycelium (Mycelium is a first-class code-fence tag), escaped verbatim" \
-    "<pre><code class=\"language-mycelium\">$(_fmt_escape_html "$MYC_LINE1")
+assert_eq "fenced \`\`\`myc block -> language-rust by DEFAULT (Telegram's client highlighter doesn't know 'mycelium' yet; rust is the closest-family alias - see [code_highlight].myc_inline_lang), escaped verbatim" \
+    "<pre><code class=\"language-rust\">$(_fmt_escape_html "$MYC_LINE1")
 $(_fmt_escape_html "$MYC_LINE2")</code></pre>" \
     "$FMT_TEXT"
 
 format_message "\`\`\`mycelium
 nodule example2
 \`\`\`"
-assert_eq "fenced \`\`\`mycelium block also normalizes to language-mycelium" \
-    '<pre><code class="language-mycelium">nodule example2</code></pre>' \
+assert_eq "fenced \`\`\`mycelium block also aliases to language-rust by default" \
+    '<pre><code class="language-rust">nodule example2</code></pre>' \
     "$FMT_TEXT"
+
+RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":"mycelium"}}'
+format_message "\`\`\`myc
+nodule example3
+\`\`\`"
+assert_eq "myc_inline_lang=\"mycelium\" opts back into the literal, unaliased language-mycelium tag" \
+    '<pre><code class="language-mycelium">nodule example3</code></pre>' \
+    "$FMT_TEXT"
+RELAY_CONFIG_JSON="{}"
+
+RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":""}}'
+format_message "\`\`\`myc
+nodule example4
+\`\`\`"
+assert_eq "myc_inline_lang=\"\" (explicitly empty) is indistinguishable from unset to cfg_get's own [[ -n ]] check (a pre-existing, repo-wide limitation - see lib/relay-config.sh) - falls through to the key's own default, language-rust, same as leaving it unset" \
+    '<pre><code class="language-rust">nodule example4</code></pre>' \
+    "$FMT_TEXT"
+RELAY_CONFIG_JSON="{}"
+
+RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":"python"}}'
+format_message "\`\`\`myc
+nodule example5
+\`\`\`"
+assert_eq "myc_inline_lang can alias to any ALLOWLISTED language, not just rust/mycelium" \
+    '<pre><code class="language-python">nodule example5</code></pre>' \
+    "$FMT_TEXT"
+RELAY_CONFIG_JSON="{}"
+
+# -- Fail-closed regression guard: myc_inline_lang crosses a trust
+# -- boundary (relay.toml is local config today, but this must not rely
+# -- on that) straight into `class="language-%s"`. An unrecognized/
+# -- malformed value must NOT be passed through verbatim - it must fall
+# -- back to the safe default already established ("mycelium" itself),
+# -- validated against the same _fmt_known_lang allowlist real fence
+# -- tags go through.
+RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":"totally-not-a-real-lang<script>"}}'
+format_message "\`\`\`myc
+nodule example6
+\`\`\`"
+assert_eq "myc_inline_lang: an unrecognized/adversarial config value fails CLOSED (falls back to language-mycelium, never passed through unchecked)" \
+    '<pre><code class="language-mycelium">nodule example6</code></pre>' \
+    "$FMT_TEXT"
+RELAY_CONFIG_JSON="{}"
 
 format_message "\`\`\`totallymadeupxyz
 some content
@@ -1229,13 +1281,50 @@ ${MIXED_CODE_LINE}
 \`\`\`"
 MIXED_LINES=$(printf '%s\n' "$FMT_TEXT" | wc -l)
 if [[ "$FMT_TEXT" == *"<b>Findings</b>"* ]] \
-    && [[ "$FMT_TEXT" == *"<pre><code class=\"language-mycelium\">$(_fmt_escape_html "$MIXED_CODE_LINE")</code></pre>"* ]] \
+    && [[ "$FMT_TEXT" == *"<pre><code class=\"language-rust\">$(_fmt_escape_html "$MIXED_CODE_LINE")</code></pre>"* ]] \
     && (( MIXED_LINES > 5 )); then
     ok "mixed message: prose is soft-wrapped AND the fenced code block is preserved verbatim, in one message"
 else
     fail "mixed message: prose wrap + verbatim code block" "$FMT_TEXT"
 fi
 _fmt_html_balanced "$FMT_TEXT" && ok "mixed message: final HTML is tag-balanced" || fail "mixed message: HTML balance check" "$FMT_TEXT"
+
+# -- unclosed fence at EOF: never a stray/empty <pre></pre> box (#12 review) -
+# -- the opening marker + any collected body falls back to literal text.
+format_message "before
+
+\`\`\`
+after this is unclosed forever"
+assert_eq "an unclosed fence with NO body at all -> literal text, never an empty <pre></pre> box" \
+    "before
+
+\`\`\`
+after this is unclosed forever" \
+    "$FMT_TEXT"
+
+format_message "\`\`\`python
+def f():
+    pass"
+assert_eq "an unclosed fence WITH a body -> the opening marker + body as literal escaped text, not a code box" \
+    "\`\`\`python
+def f():
+    pass" \
+    "$FMT_TEXT"
+
+# -- never-silent (G2): force _fmt_html_balanced to fail and confirm the
+# -- escaped-plain-text fallback actually fires (previously reasoning-
+# -- verified but untested - #12 review LOW).
+_FMT_HTML_BALANCED_ORIG="$(declare -f _fmt_html_balanced)"
+_fmt_html_balanced() { return 1; }
+BAL_FAIL_SRC="## Header
+prose with <em>literal-looking</em> markup"
+format_message "$BAL_FAIL_SRC"
+if [[ "$FMT_TEXT" == "$(_fmt_escape_html "$BAL_FAIL_SRC")" && "$FMT_PARSE_MODE" == "HTML" ]]; then
+    ok "never-silent: a forced HTML-balance failure falls back to escaped plain text (parse_mode stays HTML)"
+else
+    fail "never-silent: forced balance-check failure fallback" "FMT_TEXT=$FMT_TEXT FMT_PARSE_MODE=$FMT_PARSE_MODE"
+fi
+eval "$_FMT_HTML_BALANCED_ORIG"
 
 RELAY_CONFIG_JSON="{}"
 
@@ -1309,6 +1398,211 @@ fi
 rm -rf "$FMT4" "$STUB_FMT4" "$LOG_FMT4"
 
 # ============================================================================
+echo "== lib/code_highlight.sh + tg-send.sh: host-highlighted code-doc e2e (real pipeline, stubbed curl) =="
+
+# -- default (no relay.toml): mode="inline-only" -> the v0.3.0 inline box
+# -- still sends (myc/mycelium ALIASED to language-rust by default - see
+# -- lib/format.sh), and NO sendDocument at all - this file stays a no-op.
+STUB_IMG1="$(mktemp -d)"; tts_essential_path "$STUB_IMG1" >/dev/null
+LOG_IMG1="$(mktemp -u)"; write_stub_curl "$STUB_IMG1" "$LOG_IMG1"
+IMG1="$(setup_format_bridge)"
+PATH="$STUB_IMG1" "$IMG1/tg-send.sh" "## Findings
+
+\`\`\`myc
+nodule example
+fn f(x) -> x
+\`\`\`
+
+done"
+if grep -q 'sendMessage' "$LOG_IMG1" && grep -q 'language-rust' "$LOG_IMG1"; then
+    ok "code-highlight e2e: default mode=inline-only sends the v0.3.0 inline box (myc aliased to language-rust)"
+else
+    fail "code-highlight e2e: default inline box" "$(cat "$LOG_IMG1" 2>/dev/null)"
+fi
+if grep -q 'sendDocument' "$LOG_IMG1"; then
+    fail "code-highlight e2e: default mode=inline-only must NOT send a document" "$(cat "$LOG_IMG1" 2>/dev/null)"
+else
+    ok "code-highlight e2e: default mode=inline-only sends no sendDocument"
+fi
+rm -rf "$IMG1" "$STUB_IMG1" "$LOG_IMG1"
+
+# -- mode="html-doc", pygments present -> the v0.3.0 inline box STILL sends
+# -- (unchanged, unaffected) AND a highlighted HTML document follows via
+# -- sendDocument, paired with a <pre> caption.
+STUB_IMG2="$(mktemp -d)"; tts_essential_path "$STUB_IMG2" >/dev/null
+LOG_IMG2="$(mktemp -u)"; write_stub_curl "$STUB_IMG2" "$LOG_IMG2"
+IMG2="$(setup_format_bridge)"
+cat > "$IMG2/relay.toml" <<'TOML'
+[code_highlight]
+mode = "html-doc"
+TOML
+PATH="$STUB_IMG2" "$IMG2/tg-send.sh" '```myc
+nodule example
+fn f(x) -> x
+```'
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import pygments, pygments.formatters' >/dev/null 2>&1; then
+    if grep -q 'sendMessage' "$LOG_IMG2" && grep 'sendMessage' "$LOG_IMG2" | grep -q 'language-rust'; then
+        ok "code-highlight e2e: mode=html-doc still sends the (unchanged) v0.3.0 inline box"
+    else
+        fail "code-highlight e2e: mode=html-doc inline box unaffected" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    if grep -q 'sendDocument' "$LOG_IMG2" && grep 'sendDocument' "$LOG_IMG2" | grep -q 'document=@.*\.html;filename=snippet\.myc\.html'; then
+        ok "code-highlight e2e: mode=html-doc ALSO sends a snippet.myc.html document via sendDocument"
+    else
+        fail "code-highlight e2e: mode=html-doc sendDocument" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    if grep 'sendDocument' "$LOG_IMG2" | grep -q 'caption=.*language-rust'; then
+        ok "code-highlight e2e: default keep_text=caption pairs a copyable <pre> caption with the document"
+    else
+        fail "code-highlight e2e: document caption" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    # -- Regression guard for the curl `-F "caption=<...>" ` exit-26
+    # -- message-drop bug: the caption ALWAYS starts with the literal `<`
+    # -- (it's _fmt_render_code_block's `<pre>...` HTML), and classic
+    # -- `curl -F name=value` treats a value starting with `<`/`@` as
+    # -- "read this from a local file" and aborts before any network call.
+    # -- write_stub_curl above can't reproduce that (it isn't real curl -
+    # -- it just logs argv and always answers ok:true), so this asserts
+    # -- directly on the CONSTRUCTED argv: the caption field must be sent
+    # -- via `--form-string` (curl's documented literal-text mechanism),
+    # -- never a bare `-F caption=...`.
+    if grep 'sendDocument' "$LOG_IMG2" | grep -q -- '--form-string caption='; then
+        ok "code-highlight e2e: sendDocument caption uses --form-string (not -F, which would exit 26 on a leading '<')"
+    else
+        fail "code-highlight e2e: sendDocument caption must use --form-string" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    if grep 'sendDocument' "$LOG_IMG2" | grep -qE -- '(^|[[:space:]])-F caption='; then
+        fail "code-highlight e2e: sendDocument caption regressed to bare -F (curl exit-26 message-drop risk)" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    else
+        ok "code-highlight e2e: sendDocument caption is NOT sent via bare -F"
+    fi
+else
+    printf 'SKIP  code-highlight e2e: pygments not importable in this interpreter - skipping the html-doc happy-path checks (never-silent: this line IS the record)\n'
+fi
+rm -rf "$IMG2" "$STUB_IMG2" "$LOG_IMG2"
+
+# -- [code_highlight] mode="off" -> identical to mode="inline-only" (no
+# -- document), confirming the two non-"html-doc" values behave the same.
+STUB_IMG3="$(mktemp -d)"; tts_essential_path "$STUB_IMG3" >/dev/null
+LOG_IMG3="$(mktemp -u)"; write_stub_curl "$STUB_IMG3" "$LOG_IMG3"
+IMG3="$(setup_format_bridge)"
+cat > "$IMG3/relay.toml" <<'TOML'
+[code_highlight]
+mode = "off"
+TOML
+PATH="$STUB_IMG3" "$IMG3/tg-send.sh" '```myc
+nodule example
+```'
+if ! grep -q 'sendDocument' "$LOG_IMG3" && grep -q 'language-rust' "$LOG_IMG3"; then
+    ok "code-highlight e2e: mode=off sends no document (inline box still aliased, unaffected)"
+else
+    fail "code-highlight e2e: mode=off" "$(cat "$LOG_IMG3" 2>/dev/null)"
+fi
+rm -rf "$IMG3" "$STUB_IMG3" "$LOG_IMG3"
+
+# -- an oversized block (over [code_highlight].max_lines) skips the
+# -- document render - the inline box (unaffected) is the only thing sent.
+STUB_IMG4="$(mktemp -d)"; tts_essential_path "$STUB_IMG4" >/dev/null
+LOG_IMG4="$(mktemp -u)"; write_stub_curl "$STUB_IMG4" "$LOG_IMG4"
+IMG4="$(setup_format_bridge)"
+cat > "$IMG4/relay.toml" <<'TOML'
+[code_highlight]
+mode = "html-doc"
+max_lines = 2
+TOML
+BIG_BLOCK="$(python3 -c "print(chr(10).join('line%d' % i for i in range(10)))" 2>/dev/null)"
+PATH="$STUB_IMG4" "$IMG4/tg-send.sh" "\`\`\`python
+${BIG_BLOCK:-line0
+line1
+line2}
+\`\`\`"
+if ! grep -q 'sendDocument' "$LOG_IMG4" && grep -q 'language-python' "$LOG_IMG4" \
+    && grep -q "$(printf 'code_highlight\tfallback')" "$IMG4/.metrics.log" 2>/dev/null; then
+    ok "code-highlight e2e: an oversized block (over max_lines) skips the document render, and the skip is logged"
+else
+    fail "code-highlight e2e: max_lines skip" "log=$(cat "$LOG_IMG4" 2>/dev/null) metrics=$(cat "$IMG4/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$IMG4" "$STUB_IMG4" "$LOG_IMG4"
+
+# -- pygments unavailable (mocked import failure - see this file's header
+# -- for why a stub python3 is used rather than actually uninstalling
+# -- anything) -> mode=html-doc gracefully sends NO document; the inline
+# -- box (unaffected either way) is the only thing that goes out.
+STUB_IMG5="$(mktemp -d)"; tts_essential_path "$STUB_IMG5" >/dev/null
+LOG_IMG5="$(mktemp -u)"; write_stub_curl "$STUB_IMG5" "$LOG_IMG5"
+REAL_PYTHON3="$(command -v python3)"
+# tts_essential_path already symlinked the REAL python3 at this path -
+# remove the symlink FIRST so the heredoc below creates a fresh regular
+# file, not a write THROUGH the symlink into the real system binary.
+rm -f "$STUB_IMG5/python3"
+cat > "$STUB_IMG5/python3" <<STUB
+#!/bin/bash
+case "\$*" in
+    *"import pygments"*) exit 1 ;;
+    *) exec "$REAL_PYTHON3" "\$@" ;;
+esac
+STUB
+chmod +x "$STUB_IMG5/python3"
+IMG5="$(setup_format_bridge)"
+cat > "$IMG5/relay.toml" <<'TOML'
+[code_highlight]
+mode = "html-doc"
+TOML
+PATH="$STUB_IMG5" "$IMG5/tg-send.sh" '```myc
+nodule example
+```'
+if ! grep -q 'sendDocument' "$LOG_IMG5" && grep -q 'language-rust' "$LOG_IMG5" \
+    && grep -q "$(printf 'code_highlight\tfallback')" "$IMG5/.metrics.log" 2>/dev/null; then
+    ok "code-highlight e2e: pygments unavailable -> no document sent, logged, inline box unaffected"
+else
+    fail "code-highlight e2e: pygments-absent fallback" "log=$(cat "$LOG_IMG5" 2>/dev/null) metrics=$(cat "$IMG5/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$IMG5" "$STUB_IMG5" "$LOG_IMG5"
+
+# -- keep_text="none": the document sends with no caption at all.
+STUB_IMG6="$(mktemp -d)"; tts_essential_path "$STUB_IMG6" >/dev/null
+LOG_IMG6="$(mktemp -u)"; write_stub_curl "$STUB_IMG6" "$LOG_IMG6"
+IMG6="$(setup_format_bridge)"
+cat > "$IMG6/relay.toml" <<'TOML'
+[code_highlight]
+mode = "html-doc"
+keep_text = "none"
+TOML
+PATH="$STUB_IMG6" "$IMG6/tg-send.sh" '```myc
+nodule example
+```'
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import pygments, pygments.formatters' >/dev/null 2>&1; then
+    if grep -q 'sendDocument' "$LOG_IMG6" && ! grep 'sendDocument' "$LOG_IMG6" | grep -q 'caption='; then
+        ok "code-highlight e2e: keep_text=none sends the document with no caption"
+    else
+        fail "code-highlight e2e: keep_text=none" "$(cat "$LOG_IMG6" 2>/dev/null)"
+    fi
+else
+    printf 'SKIP  code-highlight e2e: keep_text=none - pygments not importable, skipping (never-silent: this line IS the record)\n'
+fi
+rm -rf "$IMG6" "$STUB_IMG6" "$LOG_IMG6"
+
+# -- myc_inline_lang is configurable independent of [code_highlight].mode -
+# -- confirms the alias applies even with mode="off" (see lib/format.sh).
+STUB_IMG7="$(mktemp -d)"; tts_essential_path "$STUB_IMG7" >/dev/null
+LOG_IMG7="$(mktemp -u)"; write_stub_curl "$STUB_IMG7" "$LOG_IMG7"
+IMG7="$(setup_format_bridge)"
+cat > "$IMG7/relay.toml" <<'TOML'
+[code_highlight]
+mode = "off"
+myc_inline_lang = "mycelium"
+TOML
+PATH="$STUB_IMG7" "$IMG7/tg-send.sh" '```myc
+nodule example
+```'
+if grep -q 'language-mycelium' "$LOG_IMG7" && ! grep -q 'language-rust' "$LOG_IMG7"; then
+    ok "code-highlight e2e: myc_inline_lang applies independent of mode (mode=off, myc_inline_lang=mycelium -> literal tag)"
+else
+    fail "code-highlight e2e: myc_inline_lang independent of mode" "$(cat "$LOG_IMG7" 2>/dev/null)"
+fi
+rm -rf "$IMG7" "$STUB_IMG7" "$LOG_IMG7"
+
+# ============================================================================
 echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="
 if command -v python3 >/dev/null 2>&1; then
     PY_OUT="$(python3 "$REPO_ROOT/tests/test_metrics_agg.py" 2>&1)"
@@ -1333,6 +1627,19 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 else
     printf 'SKIP  python3 not installed - skipping usage-ingest unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== lib/code_highlight.py: Python unit tests (pygments render + native MyceliumLexer) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(python3 "$REPO_ROOT/tests/test_code_highlight.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "python3 tests/test_code_highlight.py"
+    else
+        fail "python3 tests/test_code_highlight.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping code-highlight unit tests (never-silent: this line IS the record)\n'
 fi
 
 # ============================================================================

@@ -238,6 +238,133 @@ retries **once** as plain text and logs that fallback too. Either way,
 the message still arrives — formatting is a readability improvement, not
 a new way for a status ping to silently disappear.
 
+## Syntax-highlighted code
+
+`tg-send.sh` also runs every outbound message through
+[`lib/code_highlight.sh`](../lib/code_highlight.sh) — a v0.5.0 headline
+feature that **extends** the fenced-code handling above (it reuses
+`lib/format.sh`'s own fence regex, rather than detecting fences a second,
+possibly-drifting way) — it never replaces or removes the inline
+`<pre><code>` box; it only ever adds to it.
+
+### The design rationale — why a document, not inline color
+
+Telegram message *text* supports **no color at all** — a fixed HTML
+entity set, no `<span>`/color attribute of any kind, and `<pre>`/`<code>`
+can't even *nest* `<b>`/`<i>` around individual tokens (see "Structured
+formatting" above). So true per-token colored highlighting **inside a
+chat bubble is structurally impossible as text** — full stop, no
+workaround. `<pre><code class="language-X">` (`lib/format.sh`'s existing,
+always-on v0.3.0 box, unchanged) is the best a bubble alone can do: it
+only lights up on a Telegram **client** that ships its own highlighter,
+and even then it's monochrome-per-message-theme, never truly per-token
+colored.
+
+**Two tiers, both live today:**
+
+1. **The always-on inline box, now Mycelium-aware.** A `myc`/`mycelium`
+   fence's inline box emits `language-rust` instead of the literal
+   `language-mycelium` (`[code_highlight].myc_inline_lang`, default
+   `"rust"` — see `lib/format.sh`'s `_fmt_render_code_block` for the full
+   rationale): Telegram's client highlighter has never heard of Mycelium
+   (an in-development language), but its built-in **Rust** highlighter
+   colors Mycelium reasonably well — Rust-family syntax
+   (`fn`/`let`/`match`/`impl`/strings/comments/generic types all align);
+   only Mycelium-unique keywords (`nodule`/`phylum`/`swap`/`fuse`/`hypha`)
+   render as plain identifiers, never actively wrong. Zero-infra,
+   applies **unconditionally**, regardless of `[code_highlight].mode`.
+2. **An opt-in, host-highlighted HTML document — the exact tier.** With
+   `[code_highlight] mode = "html-doc"`, each fenced block is
+   *additionally* rendered host-side via
+   [`lib/code_highlight.py`](../lib/code_highlight.py) (`pygments`'
+   `HtmlFormatter(full=True, noclasses=True)` — every color inlined as
+   CSS, no external stylesheet, no network fetch needed to view it) and
+   sent with Telegram's `sendDocument`. Opened in the phone's browser: real
+   per-token colors on **any** device, no local highlighter needed, and
+   the code stays selectable/copyable right there in the document (unlike
+   an image) — using the repo's own
+   [`MyceliumLexer`](../lib/code_highlight.py) for the unique keywords
+   too.
+
+### A rendered example
+
+A `myc`/`mycelium` fenced block:
+
+    ```myc
+    // nodule: example
+    nodule example
+
+    fn swap(v: Value) -> Result<Value, SwapError> {
+        v.as_dense().ok_or(SwapError::OutOfRange)
+    }
+    ```
+
+sends the inline box (`language-rust` alias — colored on-phone on stock
+Telegram, right now, no config needed) **and**, with
+`mode = "html-doc"`, a `snippet.myc.html` document: opened in-browser,
+real per-token color via the repo's own
+[`MyceliumLexer`](../lib/code_highlight.py) — pygments ships no lexer for
+Mycelium, so this one is a `Declared`, best-effort lexical approximation,
+not a validated grammar (it colors the tokens it recognizes and leaves
+the rest plain, exactly like any other pygments lexer degrades on
+unfamiliar syntax). Both `myc` and `mycelium` fence tags resolve to it —
+the same two first-class aliases `lib/format.sh`'s `_fmt_known_lang`
+already treats specially. Any other tag resolves via pygments' own
+`get_lexer_by_name` (hundreds of languages, well past `_fmt_known_lang`'s
+small CSS-class allowlist); an unrecognized tag — or no tag at all —
+still renders a clean document via a plain-text lexer, never a crash.
+
+### The copyable-text pairing (html-doc mode)
+
+The inline box in the main message already carries the full code, so the
+document's caption is a convenience, not the only copy:
+
+- `"caption"` (**the default**) — a `<pre>` copy of the code as the
+  document's *caption* (Telegram documents support HTML captions, up to
+  1024 chars, same as photos) — **silently omitted, never truncated**,
+  when the code doesn't fit.
+- `"none"` — no caption at all.
+
+(There is no "companion" separate-message mode here — the inline box
+already travels in the main message unconditionally, so a separate
+companion would just duplicate it.)
+
+### Config — `relay.toml`'s `[code_highlight]` table
+
+```toml
+[code_highlight]
+mode = "inline-only"      # "off" | "inline-only" (DEFAULT, no-op) | "html-doc"
+theme = "monokai"          # a dark pygments style for the document -
+                            # dracula/native/... also work
+line_numbers = false       # a line-number gutter in the document
+max_lines = 60              # a block over this many lines skips the
+                             # document render entirely - NEVER an
+                             # unbounded document
+keep_text = "caption"       # "caption" (omitted, never truncated, if
+                             # >1024 chars) | "none"
+myc_inline_lang = "rust"    # applies UNCONDITIONALLY, regardless of mode
+```
+
+`mode = "inline-only"` (the default) and `"off"` are behaviorally
+identical — this file stays a no-op, just the always-on inline box.
+Opt into `mode = "html-doc"` for the extra document.
+
+### Never-silent (a code block is never dropped)
+
+The inline box already carries the full code in every case, so a
+document-render failure never loses anything — it just means no document
+is sent for that ONE block, logged via `.metrics.log`
+(`code_highlight  fallback  <reason>`):
+
+- `pygments` not installed (or `python3` itself unavailable) — no Pillow
+  needed at all for this feature (`HtmlFormatter(noclasses=True)` is pure
+  text generation).
+- A block over `[code_highlight].max_lines` (never an unbounded
+  document).
+- A genuine render error (a bad `theme` name, an encoding issue, ...).
+- `[code_highlight] mode = "off"` (or `"inline-only"`) — no document is
+  ever attempted; the inline box is unaffected either way.
+
 ## Receiving messages (inbound, phone -> agent)
 
 `tg-poll.sh` long-polls Telegram's `getUpdates` and is meant to run as

@@ -19,8 +19,21 @@ Sample artifacts for a future README showcase (not built here — see
   `lib/usage_ingest.py`'s tests). Never real token-usage data — this
   feature is opt-in and its real cache is gitignored by design (see
   `docs/USAGE.md`'s "Token usage dashboard" privacy note).
+- `code-highlight-example.html` — a representative `[code_highlight]
+  mode = "html-doc"` render (`pygments`' `HtmlFormatter(noclasses=True)`,
+  `monokai` theme, line numbers on), generated from a **synthetic,
+  hand-written `.myc` snippet** (not real production code — this repo's
+  Mycelium native-lexer showcase) via `lib/code_highlight.py`'s
+  `MyceliumLexer`. Download and open it in a browser to see the real
+  per-token color (this is exactly the self-contained document
+  `sendDocument` delivers — all CSS inlined, no external stylesheet).
+  `code-highlight-example.txt` shows BOTH tiers side by side for the same
+  snippet: the always-on inline `<pre><code class="language-rust">` box
+  (the `myc_inline_lang` alias, Tier 1) and a description of the Tier-2
+  document alongside it.
 
 Regenerate with `lib/dashboard_render.py` / `lib/metrics_agg.py` against
-any `.metrics.log`, or `lib/usage_ingest.py` / `lib/dashboard_render.py
---usage-only` against any usage-summary JSON (see each module's docstring
-for the CLI).
+any `.metrics.log`, `lib/usage_ingest.py` / `lib/dashboard_render.py
+--usage-only` against any usage-summary JSON, or `lib/code_highlight.py
+<lang> <out.html>` (code on stdin) for a code-highlight example (see each
+module's docstring for the CLI).

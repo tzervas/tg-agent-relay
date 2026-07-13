@@ -84,7 +84,12 @@ DISPLAY_FLAGS=()
 [[ "$SHOW_PROVIDERS" == "false" ]] && DISPLAY_FLAGS+=("--no-providers")
 [[ "$SHOW_MODELS" == "false" ]] && DISPLAY_FLAGS+=("--no-models")
 
-OUT_PNG="$(mktemp -u "${TMPDIR:-/tmp}/relay-usage-XXXXXX.png")"
+# Real mktemp (no -u): atomically CREATES the file so the name can never be
+# raced/reserved by another process between this call and
+# dashboard_render.py actually writing the image (the python side
+# overwrites it in place). Previously `mktemp -u` (TOCTOU race - #13
+# review LOW).
+OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-usage-XXXXXX.png")"
 
 RENDER_OUT=""
 if command -v python3 >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
@@ -122,7 +127,7 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
         curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
             -F "chat_id=${ALLOWED_CHAT_ID}" \
             -F "photo=@${OUT_PNG}" \
-            -F "caption=${CAPTION}" \
+            --form-string "caption=${CAPTION}" \
             >/dev/null 2>&1
         emit_metric "usage" "render" "image"
     fi
