@@ -255,30 +255,51 @@ hook_voice = true       # v0.5.1+, default true. A ping tagged
                         # voice even when long/paginated, where max_chars
                         # above would otherwise skip it — this is what
                         # actually fixes "hook pings never get voice".
-hook_voice_max_chars = 1500  # v0.5.3: a per-CLIP length, not a cap on
-                        # what's spoken — a long ping is CHUNKED at word
-                        # boundaries into multiple ordered voice notes
-                        # that together cover the WHOLE message (never
-                        # truncated/dropped past this length like
-                        # v0.5.1/v0.5.2 did). Set to 0 for one unbounded
-                        # clip instead of chunking. The TEXT send always
-                        # carries the full message regardless.
-# --- clean spoken transcript (v0.5.2) ---
+# --- spoken length (short is the default) ---
+spoken_mode = "short"   # DEFAULT: one voice clip, truncated at a word
+                        # boundary to spoken_max_chars. Text bubble stays
+                        # full/unabridged either way.
+spoken_max_chars = 600  # short-mode spoken-char cap (after strip)
+# --- clean spoken transcript (v0.5.2+) ---
 speak_code = false      # a code span/block is REFERENCED in the voice, not
                         # read char-by-char; true reads the code verbatim.
-voice_code_ref = "code, see the text message"   # spoken in place of code
-voice_link_ref = "see the text message"          # a [label](url) → "label,
+voice_code_ref = "ref. the message for the code"  # spoken in place of code
+voice_link_ref = "ref. the message for the link"  # a [label](url) → "label,
                         # <ref>"; a bare URL → "link, <ref>". The URL chars
                         # are never voiced.
+collapse_adjacent_refs = true  # DEFAULT true — consecutive identical
+                        # code/link refs collapse to one spoken phrase.
 ```
+
+#### Full-mode user recipe
+
+Default voice is **short** (one clipped note). To have the whole message
+read aloud — chunked into ordered clips instead of truncated — opt in:
+
+```toml
+[tts]
+mode = "text+voice"
+spoken_mode = "full"
+clip_max_chars = 1500   # per-clip length (spoken chars after strip);
+                        # 0 = one unbounded clip. hook_voice_max_chars is
+                        # the legacy alias when clip_max_chars is unset.
+collapse_adjacent_refs = true
+voice_code_ref = "ref. the message for the code"
+voice_link_ref = "ref. the message for the link"
+```
+
+Multi-clip sends log `tts hook_voice_chunked` to `.metrics.log`; short-mode
+truncation logs `tts hook_voice_truncated`.
 
 Before any voice note is synthesized, the message is stripped to plain-text
 prose (`lib/tts_plain_text.py`) so the engine reads **words, not formatting
 symbols** (`##`, `*`, `` ` ``, ```` ``` ````, `<b>`/`<pre>`, `&lt;`, `>`,
-`[k/n]`, list markers) — and code + links are referenced back to the text
-message rather than read aloud. **The sent text message keeps its full
-formatting; only the voice's input is stripped.** The `hook_voice_max_chars`
-cap counts the *spoken* (post-strip) characters.
+`[k/n]`, list markers). **Call/tool/request IDs** (UUIDs, `call_*`,
+`toolu_*`, long hex tokens, …), **URLs**, and **code/backticks** are not
+spoken — code and links become short spoken references; IDs are dropped.
+**The sent text message keeps its full formatting and full length; only
+the voice's input is stripped.** `spoken_max_chars` / `clip_max_chars`
+count the *spoken* (post-strip) characters.
 
 See `relay.toml.example`'s `[tts]` comments for the full schema, and
 `lib/tts.sh`'s header for the engine-selection/transcode/pitch/cadence/send
