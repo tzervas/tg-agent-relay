@@ -75,6 +75,7 @@ cleanly, just without color, never a crash.
 """
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 
@@ -206,7 +207,15 @@ def render_code_html(
 
     try:
         lexer = _get_lexer(lang)
-        title = f"{lang or 'code'} snippet"
+        # `lang` crosses a trust boundary here: today lib/code_highlight.sh's
+        # fence regex constrains it to [A-Za-z0-9_+.-] before this module
+        # ever sees it, but HtmlFormatter(title=...) does NOT html-escape
+        # its `title` (unlike the highlighted code content, which pygments
+        # already escapes) - it lands verbatim in the generated document's
+        # <title>/<h2>. This module must not rely on the caller's
+        # constraint holding forever, so escape defensively here too
+        # (defense-in-depth, not a currently-reachable exploit).
+        title = html.escape(f"{lang or 'code'} snippet")
         formatter = HtmlFormatter(
             full=True,
             style=theme,

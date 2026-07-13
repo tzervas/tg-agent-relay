@@ -308,7 +308,7 @@ _img_post_send_document() {
         resp="$(curl -s -m 30 -X POST "https://api.telegram.org/bot${bot_token}/sendDocument" \
             -F "chat_id=${chat_id}" \
             -F "document=@${doc_path};filename=${filename}" \
-            -F "caption=${caption}" \
+            --form-string "caption=${caption}" \
             -F "parse_mode=HTML" \
             2>/dev/null)"
     else

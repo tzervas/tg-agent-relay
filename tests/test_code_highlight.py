@@ -204,6 +204,36 @@ if HAS_PYGMENTS:
         assert_true("myc render: self-contained - no external stylesheet reference", "<link" not in doc)
         assert_true("myc render: the actual source text is present in the document", "nodule" in doc and "example" in doc)
 
+    # --- XSS/HTML-injection regression guard (Finding 2 class): the CODE
+    # --- CONTENT is already escaped by pygments today, but this is the
+    # --- assertion that keeps it honest against a future pygments/
+    # --- formatter change - adversarial content must never appear
+    # --- unescaped in the generated (self-contained, opened-in-a-browser)
+    # --- document.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = str(Path(tmpdir) / "adversarial.html")
+        adversarial_code = "x = '<script>alert(1)</script>'\ny = \"quote's \\\" edge-case\"\n"
+        ok_, reason = ch.render_code_html(adversarial_code, "python", out)
+        assert_eq("adversarial code block still renders successfully", True, ok_)
+        adv_doc = Path(out).read_text(encoding="utf-8")
+        assert_true("adversarial content: raw <script> tag is NOT present verbatim", "<script>alert(1)</script>" not in adv_doc, adv_doc[:2000])
+        assert_true("adversarial content: the payload is present only in an escaped form (&lt;script&gt;)", "&lt;script&gt;" in adv_doc, adv_doc[:2000])
+
+    # --- title-escaping regression guard (Finding 2): HtmlFormatter(title=)
+    # --- does NOT html-escape its argument, so this module must escape
+    # --- `lang` itself before building the title - independent of the
+    # --- caller's own fence-tag charset restriction (defense-in-depth:
+    # --- exercised here by calling render_code_html directly with a
+    # --- payload the real caller's regex would never let through, to
+    # --- prove THIS module doesn't rely on that upstream constraint).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = str(Path(tmpdir) / "title_xss.html")
+        ok_, reason = ch.render_code_html("print(1)", "<script>alert(1)</script>", out)
+        assert_eq("adversarial lang/title still renders successfully (never-raise contract)", True, ok_)
+        title_doc = Path(out).read_text(encoding="utf-8")
+        assert_true("title escaping: raw <script> tag is NOT present verbatim (defense-in-depth XSS guard)", "<script>alert(1)</script>" not in title_doc, title_doc[:2000])
+        assert_true("title escaping: the lang payload is present only in an escaped form (&lt;script&gt;)", "&lt;script&gt;" in title_doc, title_doc[:2000])
+
     for lang, code in (
         ("rust", 'fn main() {\n    println!("hi");\n}\n'),
         ("python", "def f(x):\n    return x + 1\n"),

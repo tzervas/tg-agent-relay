@@ -1242,8 +1242,24 @@ RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":"python"}}'
 format_message "\`\`\`myc
 nodule example5
 \`\`\`"
-assert_eq "myc_inline_lang is a free-form alias, not just rust/mycelium" \
+assert_eq "myc_inline_lang can alias to any ALLOWLISTED language, not just rust/mycelium" \
     '<pre><code class="language-python">nodule example5</code></pre>' \
+    "$FMT_TEXT"
+RELAY_CONFIG_JSON="{}"
+
+# -- Fail-closed regression guard: myc_inline_lang crosses a trust
+# -- boundary (relay.toml is local config today, but this must not rely
+# -- on that) straight into `class="language-%s"`. An unrecognized/
+# -- malformed value must NOT be passed through verbatim - it must fall
+# -- back to the safe default already established ("mycelium" itself),
+# -- validated against the same _fmt_known_lang allowlist real fence
+# -- tags go through.
+RELAY_CONFIG_JSON='{"code_highlight":{"myc_inline_lang":"totally-not-a-real-lang<script>"}}'
+format_message "\`\`\`myc
+nodule example6
+\`\`\`"
+assert_eq "myc_inline_lang: an unrecognized/adversarial config value fails CLOSED (falls back to language-mycelium, never passed through unchecked)" \
+    '<pre><code class="language-mycelium">nodule example6</code></pre>' \
     "$FMT_TEXT"
 RELAY_CONFIG_JSON="{}"
 
@@ -1439,6 +1455,26 @@ if command -v python3 >/dev/null 2>&1 && python3 -c 'import pygments, pygments.f
         ok "code-highlight e2e: default keep_text=caption pairs a copyable <pre> caption with the document"
     else
         fail "code-highlight e2e: document caption" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    # -- Regression guard for the curl `-F "caption=<...>" ` exit-26
+    # -- message-drop bug: the caption ALWAYS starts with the literal `<`
+    # -- (it's _fmt_render_code_block's `<pre>...` HTML), and classic
+    # -- `curl -F name=value` treats a value starting with `<`/`@` as
+    # -- "read this from a local file" and aborts before any network call.
+    # -- write_stub_curl above can't reproduce that (it isn't real curl -
+    # -- it just logs argv and always answers ok:true), so this asserts
+    # -- directly on the CONSTRUCTED argv: the caption field must be sent
+    # -- via `--form-string` (curl's documented literal-text mechanism),
+    # -- never a bare `-F caption=...`.
+    if grep 'sendDocument' "$LOG_IMG2" | grep -q -- '--form-string caption='; then
+        ok "code-highlight e2e: sendDocument caption uses --form-string (not -F, which would exit 26 on a leading '<')"
+    else
+        fail "code-highlight e2e: sendDocument caption must use --form-string" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    fi
+    if grep 'sendDocument' "$LOG_IMG2" | grep -qE -- '(^|[[:space:]])-F caption='; then
+        fail "code-highlight e2e: sendDocument caption regressed to bare -F (curl exit-26 message-drop risk)" "$(cat "$LOG_IMG2" 2>/dev/null)"
+    else
+        ok "code-highlight e2e: sendDocument caption is NOT sent via bare -F"
     fi
 else
     printf 'SKIP  code-highlight e2e: pygments not importable in this interpreter - skipping the html-doc happy-path checks (never-silent: this line IS the record)\n'

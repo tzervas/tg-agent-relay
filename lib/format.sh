@@ -182,9 +182,18 @@ _fmt_render_code_block() {
     lang="$(printf '%s' "$lang" | tr '[:upper:]' '[:lower:]')"
     if [[ -n "$lang" ]] && norm="$(_fmt_known_lang "$lang")"; then
         if [[ "$norm" == "mycelium" ]]; then
-            local myc_alias
+            local myc_alias myc_alias_norm
             myc_alias="$(cfg_get '.code_highlight.myc_inline_lang' 'rust')"
-            [[ -n "$myc_alias" ]] && norm="$myc_alias"
+            myc_alias="$(printf '%s' "$myc_alias" | tr '[:upper:]' '[:lower:]')"
+            # Fail CLOSED: an arbitrary config value must not land straight
+            # in `class="language-%s"` - validate it against the same
+            # allowlist real fence tags go through (_fmt_known_lang) before
+            # using it as the alias. An unrecognized/malformed config value
+            # falls back to the safe default already established above
+            # ("mycelium" itself), never passed through unchecked.
+            if [[ -n "$myc_alias" ]] && myc_alias_norm="$(_fmt_known_lang "$myc_alias")"; then
+                norm="$myc_alias_norm"
+            fi
         fi
         printf '<pre><code class="language-%s">%s</code></pre>' "$norm" "$esc"
     else

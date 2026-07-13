@@ -133,7 +133,7 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
         curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
             -F "chat_id=${ALLOWED_CHAT_ID}" \
             -F "photo=@${OUT_PNG}" \
-            -F "caption=${CAPTION}" \
+            --form-string "caption=${CAPTION}" \
             >/dev/null 2>&1
         emit_metric "dashboard" "render" "image"
     fi
