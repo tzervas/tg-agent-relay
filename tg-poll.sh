@@ -58,6 +58,16 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Opt-in Python port (issue #27). Default remains this shell implementation.
+#   RELAY_PYTHON_POLL=1  bash tg-poll.sh
+if [[ "${RELAY_PYTHON_POLL:-0}" == "1" ]]; then
+    # shellcheck disable=SC1091
+    [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    if relay_python -c "import tg_agent_relay.poll" 2>/dev/null; then
+        exec relay_python -m tg_agent_relay.poll "$@"
+    fi
+fi
 CONFIG_FILE="$BRIDGE_DIR/.env"
 OFFSET_FILE="$BRIDGE_DIR/.offset"
 # Legacy single-buffer paths (used when multi-chat routing is off).

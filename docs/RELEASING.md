@@ -4,6 +4,18 @@
 
 **This workstation is the source of truth for quality gates and releases.**
 
+### Python package cutover (optional)
+
+Shell remains the default live path. Opt into Python ports per process:
+
+```bash
+export RELAY_PYTHON_SEND=1   # tg-send.sh → python -m tg_agent_relay.send
+export RELAY_PYTHON_POLL=1   # tg-poll.sh → python -m tg_agent_relay.poll
+# or invoke entry points:
+uv run tg-relay-send …
+uv run tg-relay-poll …
+```
+
 | Step | Where | Command |
 |---|---|---|
 | Lint + format + tests + MSRV | **Local** | `bash scripts/local-ci.sh` |
