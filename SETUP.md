@@ -148,21 +148,43 @@ call at synthesis time):
 sudo apt install espeak-ng    # Debian/Ubuntu; tiny package
 ```
 
-**Option B — piper (preferred: natural-sounding, still fully local/offline):**
+**Option B — piper (recommended: the quality path — natural-sounding,
+still fully local/offline):**
 
 ```bash
-# 1. Install piper (see https://github.com/rhasspy/piper for other platforms)
-pip install piper-tts   # or download the prebuilt binary release
+# 1. Install piper — either works:
+pip install --user piper-tts          # add --break-system-packages if pip
+                                       # refuses on an externally-managed env
+pipx install piper-tts                # cleaner: isolated venv, `piper` on
+                                       # PATH via ~/.local/bin — no system
+                                       # Python conflict (recommended)
+# or download the prebuilt binary release:
+#   https://github.com/rhasspy/piper/releases
 
-# 2. Fetch a small voice model (e.g. an en_US low/medium-quality voice —
-#    a few tens of MB) — see the piper voices index for the full list:
-#    https://github.com/rhasspy/piper/blob/master/VOICES.md
-mkdir -p ~/.claude/telegram-bridge/voices
-curl -L -o ~/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -L -o ~/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx.json \
-    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+# 2. Fetch a voice model — the one-liner:
+./fetch-voices.sh              # deep male (en_US-joe-medium, default, ~60MB)
+./fetch-voices.sh --list       # see all recommended voices (male + female)
+./fetch-voices.sh amy          # fetch a specific one instead, e.g. amy
 ```
+
+`fetch-voices.sh` downloads both files a voice needs (the `.onnx` model +
+its `.onnx.json` config) into `./voices/`, verifies the download against a
+pinned sha256, and skips re-downloading a voice that's already present and
+checksum-clean. Recommended voices (see `./fetch-voices.sh --list` for the
+live table):
+
+| key        | model                    | character                                          |
+|------------|--------------------------|-----------------------------------------------------|
+| `joe`      | `en_US-joe-medium`       | **default** — deep, full male narrator               |
+| `hfc_male` | `en_US-hfc_male-medium`  | alternative deep male, brighter timbre                |
+| `ryan`     | `en_US-ryan-high`        | alternative male, higher/lighter, high-quality (~120MB) |
+| `lessac`   | `en_US-lessac-medium`    | neutral/warm general-purpose narrator                 |
+| `amy`      | `en_US-amy-medium`       | female, bright/conversational                         |
+
+(If you'd rather fetch by hand: each voice's two files live at
+`https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/<voice>/<quality>/<voice>-<quality>.onnx`
+[`+.json`] — see the [piper voices index](https://github.com/rhasspy/piper/blob/master/VOICES.md)
+for the full catalog beyond the ones above.)
 
 Voice notes are transcoded to OGG/OPUS (what Telegram's `sendVoice`
 expects) via **ffmpeg** (`sudo apt install ffmpeg`); with no ffmpeg
@@ -177,13 +199,24 @@ Then enable it in `relay.toml`:
 ```toml
 [tts]
 mode = "text+voice"   # or "voice-only"
-engine = "auto"        # prefers piper if voice_model is set + the binary is present
-voice_model = "/root/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx"
+engine = "piper"       # or "auto" (prefers piper if voice_model is set +
+                        # the binary is present, else falls back to espeak-ng)
+voice_model = "/root/.claude/telegram-bridge/voices/en_US-joe-medium.onnx"
+pitch = "-1"            # OPTIONAL, default unset (no shift) — a small
+                        # negative semitone value nudges pitch a bit deeper
+                        # still (duration-preserving; skip-graceful if the
+                        # filter fails, falls back to unfiltered audio).
+                        # See lib/tts.sh's _tts_pitch_filter header.
+length_scale = "0.9"    # OPTIONAL, piper only, default unset (piper's own
+                        # 1.0 = unchanged cadence). Lower = faster speech,
+                        # higher = slower — wired straight to piper's own
+                        # `--length-scale` flag.
 max_chars = 600         # don't TTS anything longer than this — stays text-only
 ```
 
 See `relay.toml.example`'s `[tts]` comments for the full schema, and
-`lib/tts.sh`'s header for the engine-selection/transcode/send pipeline.
+`lib/tts.sh`'s header for the engine-selection/transcode/pitch/cadence/send
+pipeline.
 
 ## Security model
 

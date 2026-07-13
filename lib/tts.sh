@@ -37,6 +37,33 @@ declare -f cfg_get >/dev/null 2>&1 || cfg_get() { printf '%s' "$2"; }  # lib mis
 [[ -f "$_TTS_LIB_DIR/relay-common.sh" ]] && source "$_TTS_LIB_DIR/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
 
+# _tts_pitch_filter <sample_rate>
+#
+# Optional, OFF-BY-DEFAULT depth knob: reads [tts].pitch from relay.toml -
+# a signed number of SEMITONES to shift pitch by (negative = deeper/lower,
+# e.g. "-1.5"), unset/empty/"0"/non-numeric -> no filter at all (today's
+# behavior, byte-identical output). When set, prints an ffmpeg `-af` filter
+# string that shifts pitch via `asetrate` (tape-speed-style: changes pitch
+# AND tempo together) immediately compensated by `atempo` (tempo-only, no
+# further pitch change) so DURATION is preserved - only pitch moves. Uses
+# awk for the float math (semitones -> a linear rate factor,
+# factor = 2^(semitones/12)) since bash has no floating point; a bad/awk-less
+# environment prints nothing (skip-graceful - the caller just omits -af).
+# This is a small, best-effort timbre nudge, NOT a substitute for picking a
+# naturally deep voice model - see SETUP.md's "Voice messages (TTS)" section.
+_tts_pitch_filter() {
+    local rate="$1" semitones factor
+    [[ "$rate" =~ ^[0-9]+$ ]] || return 0
+    semitones="$(cfg_get '.tts.pitch' '')"
+    [[ -z "$semitones" || "$semitones" == "0" ]] && return 0
+    # Validate: optional leading -, digits, optional decimal part.
+    [[ "$semitones" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || return 0
+    command -v awk >/dev/null 2>&1 || return 0
+    factor="$(awk -v s="$semitones" 'BEGIN { printf "%.6f", 2 ^ (s / 12) }' 2>/dev/null)"
+    [[ -n "$factor" ]] || return 0
+    printf 'asetrate=%s*%s,aresample=%s,atempo=1/%s' "$rate" "$factor" "$rate" "$factor"
+}
+
 # tts_select_engine
 #
 # Resolves relay.toml's [tts].engine ("auto" | "piper" | "espeak"; default
@@ -85,9 +112,17 @@ tts_synthesize() {
     local engine="$1" text="$2" out_wav="$3"
     case "$engine" in
         piper)
-            local voice_model
+            local voice_model length_scale piper_args=()
             voice_model="$(cfg_get '.tts.voice_model' '')"
-            printf '%s' "$text" | piper --model "$voice_model" --output_file "$out_wav" >/dev/null 2>&1
+            # Optional cadence knob (piper's own --length-scale: lower =
+            # faster, default 1.0 = unchanged). Unset/empty/non-numeric ->
+            # omit the flag entirely, so piper uses its built-in default -
+            # byte-identical to before this knob existed.
+            length_scale="$(cfg_get '.tts.length_scale' '')"
+            if [[ "$length_scale" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                piper_args=(--length-scale "$length_scale")
+            fi
+            printf '%s' "$text" | piper --model "$voice_model" "${piper_args[@]}" --output_file "$out_wav" >/dev/null 2>&1
             ;;
         espeak)
             espeak-ng -w "$out_wav" "$text" >/dev/null 2>&1
@@ -134,8 +169,26 @@ tts_send_voice() {
 
     if command -v ffmpeg >/dev/null 2>&1; then
         tmp_ogg="${tmp_wav%.wav}.ogg"
-        if ffmpeg -y -loglevel error -i "$tmp_wav" -c:a libopus -b:a 32k "$tmp_ogg" >/dev/null 2>&1 \
+        local wav_rate pitch_af ffmpeg_af_args=()
+        if command -v ffprobe >/dev/null 2>&1; then
+            wav_rate="$(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate \
+                -of csv=p=0 "$tmp_wav" 2>/dev/null)"
+        fi
+        pitch_af="$(_tts_pitch_filter "${wav_rate:-}")"
+        [[ -n "$pitch_af" ]] && ffmpeg_af_args=(-af "$pitch_af")
+        if ffmpeg -y -loglevel error -i "$tmp_wav" "${ffmpeg_af_args[@]}" -c:a libopus -b:a 32k "$tmp_ogg" >/dev/null 2>&1 \
             && [[ -s "$tmp_ogg" ]]; then
+            send_file="$tmp_ogg"
+            send_field="voice"
+            send_method="sendVoice"
+        elif [[ -n "$pitch_af" ]] \
+            && ffmpeg -y -loglevel error -i "$tmp_wav" -c:a libopus -b:a 32k "$tmp_ogg" >/dev/null 2>&1 \
+            && [[ -s "$tmp_ogg" ]]; then
+            # Pitch filter itself failed to apply cleanly (bad ffmpeg build, odd
+            # sample rate, ...) - never let an optional depth knob break voice
+            # notes; retry once with NO filter (today's plain transcode) before
+            # giving up. Skip-graceful all the way down.
+            emit_metric "tts" "skip" "engine=$engine pitch filter failed, sent unfiltered"
             send_file="$tmp_ogg"
             send_field="voice"
             send_method="sendVoice"

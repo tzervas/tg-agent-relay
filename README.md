@@ -244,8 +244,25 @@ piper or espeak-ng run entirely on this machine. Opt in via `relay.toml`'s
 sends only voice, falling back to text if TTS is unavailable — a message
 is never dropped). Default `mode = "off"` means the feature is inert with
 no `relay.toml`, or an existing one that doesn't set it — identical
-behavior to before TTS existed. See `relay.toml.example`'s `[tts]`
-comments for the full schema and
+behavior to before TTS existed.
+
+**Recommended: piper + a medium/high voice model** for natural-sounding
+speech (espeak-ng is the zero-config fallback — always available, but
+robotic). One-liner: `./fetch-voices.sh` fetches the recommended deep-male
+voice (`en_US-joe-medium`) into `./voices/`; `./fetch-voices.sh --list`
+shows every recommended voice (male + female). Then:
+
+```toml
+[tts]
+mode = "text+voice"
+engine = "piper"
+voice_model = "/root/.claude/telegram-bridge/voices/en_US-joe-medium.onnx"
+max_chars = 600
+```
+
+See `relay.toml.example`'s `[tts]` comments for the full schema (including
+the optional `pitch` depth knob and `length_scale` cadence knob, piper's
+own `--length-scale` — lower is faster) and
 [`SETUP.md`](SETUP.md#voice-messages-tts-optional) for installing piper
 or espeak-ng.
 
