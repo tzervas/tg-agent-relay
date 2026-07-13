@@ -37,6 +37,52 @@ declare -f cfg_get >/dev/null 2>&1 || cfg_get() { printf '%s' "$2"; }  # lib mis
 [[ -f "$_TTS_LIB_DIR/relay-common.sh" ]] && source "$_TTS_LIB_DIR/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
 
+# _tts_plain_text <text>
+#
+# Convert a formatted message (the raw markdown tg-send.sh receives, or the
+# HTML lib/format.sh emits - both are handled) into clean plain-text PROSE
+# for the TTS engine, so the voice reads WORDS, never the formatting SYMBOLS
+# (`#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ```` code, `<b>`/`<pre>`
+# tags, `&lt;` entities, `>` quotes, `[k/n]` page headers, list markers).
+# Prints the stripped text to stdout. The SENT text message is NEVER touched
+# - only this spoken copy is stripped (the caller passes the result to
+# tts_send_voice; the text send uses the original $MSG). v0.5.2.
+#
+# Code and links are, by the maintainer's choice, referenced rather than
+# read: a code span/block -> `[tts].voice_code_ref` (default "code, see the
+# text message"); a link -> "<label>, `[tts].voice_link_ref`" (default
+# "see the text message"), never the URL characters. `[tts].speak_code`
+# (default false) is an opt-in escape hatch to read code verbatim instead.
+#
+# The heavy lifting lives in lib/tts_plain_text.py (stdlib-only, same
+# python3-for-text convention as lib/toml_to_json.py) so the transforms are
+# regex-clean and directly unit-testable (tests/test_tts_plain_text.py).
+# Skip-graceful: if python3 or the script is unavailable, or it produces an
+# empty result from non-empty input, this returns the ORIGINAL text - the
+# voice still speaks (unstripped) rather than being dropped, exactly like
+# the rest of lib/tts.sh's never-block-the-message contract.
+_tts_plain_text() {
+    local text="$1" speak_code code_ref link_ref out args
+    speak_code="$(cfg_get '.tts.speak_code' 'false')"
+    code_ref="$(cfg_get '.tts.voice_code_ref' 'code, see the text message')"
+    link_ref="$(cfg_get '.tts.voice_link_ref' 'see the text message')"
+    args=(--code-ref "$code_ref" --link-ref "$link_ref")
+    case "$speak_code" in
+        true | 1 | yes | on) args+=(--speak-code) ;;
+    esac
+    if command -v python3 >/dev/null 2>&1 && [[ -f "$_TTS_LIB_DIR/tts_plain_text.py" ]]; then
+        out="$(printf '%s' "$text" | python3 "$_TTS_LIB_DIR/tts_plain_text.py" "${args[@]}" 2>/dev/null)"
+        # Never blank a message that HAD content (a strip that collapses to
+        # nothing falls back to the raw text - a voice note of symbols beats
+        # no voice note at all, and the text send is unaffected regardless).
+        if [[ -n "$out" || -z "$text" ]]; then
+            printf '%s' "$out"
+            return 0
+        fi
+    fi
+    printf '%s' "$text"
+}
+
 # _tts_pitch_filter <sample_rate>
 #
 # Optional, OFF-BY-DEFAULT depth knob: reads [tts].pitch from relay.toml -

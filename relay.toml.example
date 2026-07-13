@@ -579,6 +579,35 @@
 #   is slow and not a good listen anyway). Only bounds what's passed to
 #   the TTS engine; irrelevant when hook_voice = false. A truncation is
 #   logged to .metrics.log ("tts hook_voice_truncated") - never silent.
+#   v0.5.2: the cap counts SPOKEN chars - it is applied AFTER the message
+#   is stripped to plain prose (below), so a message that is long in markup
+#   but short in spoken words is not needlessly truncated.
+#
+# --- Clean spoken transcript (v0.5.2) -------------------------------------
+# Before ANY voice note is synthesized, the message is stripped to plain-
+# text PROSE (lib/tts_plain_text.py) so the engine reads WORDS, never the
+# formatting SYMBOLS: `#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ````
+# code, `<b>`/`<pre>`/`<code>` HTML tags, `&lt;`-style entities (unescaped
+# to the real char), `>` blockquotes, `[k/n]` page headers, and `-`/`*`/`N.`
+# list markers. The SENT text message keeps its FULL formatting - only the
+# voice's input is stripped. These knobs tune what the voice SAYS in place
+# of code and links (which are referenced, not read aloud):
+#
+# speak_code = false
+#   Default false: a code span/block is replaced by voice_code_ref below
+#   (the listener looks at the text bubble instead of hearing code read
+#   character-by-character). Set true to read the code body verbatim (the
+#   surrounding markdown is still stripped either way).
+#
+# voice_code_ref = "code, see the text message"
+#   What the voice says in place of a fenced OR inline code span (unless
+#   speak_code = true). Keep it short + natural so the read flows.
+#
+# voice_link_ref = "see the text message"
+#   The spoken tail for a link. A Markdown link `[label](url)` is read as
+#   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped); a
+#   bare URL is read as "link, <voice_link_ref>". The URL characters are
+#   never voiced (no "h-t-t-p-s-colon-slash-slash..." spell-out).
 
 # --------------------------------------------------------------------------
 # [dashboard] - shared config for the dashboard/stats relay-handled

@@ -52,10 +52,23 @@ cap_if_huge() {
 # Example: render_template '{prefix} {agent} finished' prefix "✅" agent "build"
 #   -> "✅ build finished"
 render_template() {
-    local tmpl="$1"
+    local tmpl="$1" val
     shift
     while [[ $# -ge 2 ]]; do
-        tmpl="${tmpl//\{$1\}/$2}"
+        val="$2"
+        # Bash 5.2+ made `${var//pat/repl}` treat an unescaped `&` in the
+        # REPLACEMENT as "the text matched by pat" (sed-style), and `\` as
+        # its escape. A value carrying `&` (e.g. a message with "a &lt; b"
+        # or a literal "&") would therefore be corrupted into the matched
+        # placeholder text (e.g. "&lt;" -> "{detail_suffix}lt;"). Escape `\`
+        # then `&` so the value is inserted LITERALLY - but only on 5.2+,
+        # where the special-casing exists (on <5.2 those chars are already
+        # literal, so escaping there would wrongly emit backslashes).
+        if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 2) )); then
+            val="${val//\\/\\\\}"
+            val="${val//&/\\&}"
+        fi
+        tmpl="${tmpl//\{$1\}/$val}"
         shift 2
     done
     printf '%s' "$tmpl"
