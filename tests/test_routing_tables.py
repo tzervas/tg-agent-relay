@@ -523,9 +523,28 @@ tag = "grok"
 chat_id = -100
 backend = "claude"
 project = "from-toml"
+
+[[chats]]
+chat_id = -300
+thread_id = 9
+project = "keep-static"
 """,
         encoding="utf-8",
     )
+    # Missing overlay: static only (#34)
+    cfg_no_ov = config.load_config(toml, bridge_dir=bridge)
+    eq("overlay missing: static chat count", 2, len(cfg_no_ov.get("chats") or []))
+    eq(
+        "overlay missing: static project",
+        "from-toml",
+        routing.resolve(cfg_no_ov, "-100", "", "x").project,
+    )
+
+    # Corrupt overlay must not drop static rows (#34)
+    (chats_d / "bindings.json").write_text("{broken", encoding="utf-8")
+    cfg_corrupt = config.load_config(toml, bridge_dir=bridge)
+    eq("overlay corrupt: static preserved", 2, len(cfg_corrupt.get("chats") or []))
+
     (chats_d / "bindings.json").write_text(
         json.dumps(
             {
@@ -538,6 +557,11 @@ project = "from-toml"
                     {
                         "chat_id": -200,
                         "project": "sticky-only",
+                    },
+                    {
+                        "chat_id": -1001234567890,
+                        "thread_id": 7,
+                        "project": "forum-topic",
                     },
                 ]
             }
@@ -554,16 +578,25 @@ project = "from-toml"
         else:
             os.environ["RELAY_CHATS_OVERLAY"] = old_overlay
 
-    # Overlay replaces same chat_id|thread_id key
+    # Overlay replaces same chat_id|thread_id key; other static kept
     r_ov = routing.resolve(cfg_ov, "-100", "", "hello")
     eq("overlay replaces chat binding backend", "grok", r_ov.backend)
     eq("overlay replaces chat binding project", "from-overlay", r_ov.project)
     eq("overlay sticky match_kind chat", "chat", r_ov.match_kind)
+    eq(
+        "overlay merge keeps unrelated static thread row",
+        "keep-static",
+        routing.resolve(cfg_ov, "-300", "9", "x").project,
+    )
 
     r_sticky = routing.resolve(cfg_ov, "-200", "", "@grok go")
     eq("overlay adds project-only room backend", "grok", r_sticky.backend)
     eq("overlay adds project-only room project", "sticky-only", r_sticky.project)
     eq("overlay project-only match_kind chat", "chat", r_sticky.match_kind)
+
+    r_forum = routing.resolve(cfg_ov, "-1001234567890", "7", "hi")
+    eq("overlay negative chat_id + thread project", "forum-topic", r_forum.project)
+    eq("overlay forum match_kind chat", "chat", r_forum.match_kind)
 
 # --- CLI: tg_agent_relay.cli route + module routing -------------------------
 with tempfile.TemporaryDirectory() as td:
