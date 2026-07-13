@@ -204,6 +204,39 @@ with ANY agent using ANY harness, maximum portability + usability.
   plain `mktemp`; and `lib/format.sh` gained a direct unit test that forces
   `_fmt_html_balanced` to fail and asserts the escaped-plain-text fallback
   actually fires (previously reasoning-verified but untested).
+- **Hook audio + guaranteed send ordering (v0.5.1, live-defect fixes).**
+  Two maintainer-reported defects, fixed: (1) **automated hook pings had
+  NO voice read-through**, ever, even with TTS on — `[tts].max_chars`
+  (600) plus the pagination-always-skips-TTS rule silently gated out
+  nearly every hook ping (they routinely carry a full agent message, so
+  are routinely over max_chars/multi-page), while a short direct
+  `tg-send.sh` call got voice fine. Fixed via a new send-origin tag:
+  `adapters/claude-code.sh` exports `TG_SEND_SOURCE=hook` (a real env var,
+  inherited straight through `relay-notify.sh`'s own call to
+  `tg-send.sh`, no extra plumbing), and `tg-send.sh` gives a
+  `hook`-tagged send its own, relaxed TTS-eligibility rule
+  (`[tts].hook_voice`, default true) — eligible regardless of
+  length/pagination; only the SPOKEN text is capped
+  (`[tts].hook_voice_max_chars`, default 1500 — a sensible read-through,
+  not the whole report; a truncation is logged, never silent). The
+  never-silent contract is stronger for a hook ping than an ordinary
+  send: text ALWAYS sends (every page, unabridged) even in
+  `mode = "voice-only"` — voice is purely additive, never a replacement.
+  (2) **message ordering wasn't guaranteed** — concurrent `tg-send.sh`
+  invocations (a burst of hook events) each POST to Telegram
+  independently, and network scheduling gives no cross-process ordering
+  guarantee. Fixed with a serialized send queue: every send (dedup check
+  through the final metric write) runs under an exclusive `flock` on
+  `.tg-send.lock`, so concurrent invocations queue up and send one at a
+  time — a send's text pages + voice note always complete before the
+  next begins. A small, configurable delay (`[general].send_interval_ms`,
+  default 350ms) is held after each send before the next may proceed —
+  the maintainer explicitly accepted a slight delay to guarantee order.
+  `flock` missing → skip-graceful (unserialized, exactly as before this
+  feature existed, logged once) rather than a hard failure. Both features
+  are fully backward-compatible: a direct/manual send (no
+  `TG_SEND_SOURCE`) keeps the original TTS-eligibility rule unchanged,
+  and `send_interval_ms = 0` (or no `flock`) reduces to today's behavior.
 
 ## Next
 

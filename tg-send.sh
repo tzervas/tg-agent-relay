@@ -35,6 +35,29 @@
 # whenever TTS is unavailable/too-long - a message is never dropped
 # outright.
 #
+# Hook audio (`[tts].hook_voice`, default true): automated hook/notification
+# pings (routed here via adapters/claude-code.sh -> relay-notify.sh, which
+# export/pass through TG_SEND_SOURCE=hook) get a voice read-through even
+# when long or paginated, where an ordinary direct send would stay
+# text-only - long reports are exactly the case a hook ping usually is.
+# The SPOKEN text is capped at `[tts].hook_voice_max_chars` (default 1500,
+# higher than the ordinary `max_chars`) - a sensible read-through, not the
+# whole report; the TEXT send always carries the full, unabridged message
+# regardless (voice is strictly additive - never-silent: text is never
+# skipped for a hook ping, even in `mode = "voice-only"`). Set
+# `hook_voice = false` to restore the pre-v0.5.1 hook-is-text-only shape.
+#
+# Serialized send queue + ordering (`[general].send_interval_ms`, default
+# 350): every send (dedup check through the final metric write) runs under
+# an exclusive `flock` on `.tg-send.lock`, so concurrent invocations (a
+# burst of hook events) queue up and send one at a time, each send's text
+# pages + voice note completing before the next begins - never
+# interleaved, never reordered by a network race. The lock is held for
+# `send_interval_ms` after each send finishes before the next invocation
+# can proceed, adding a small, configurable, accepted delay so Telegram's
+# own delivery also preserves order. `flock` missing -> skip-graceful,
+# unserialized (logged once, never a hard failure).
+#
 # Structured formatting (lib/format.sh, relay.toml [format]): ON by
 # default (headline v0.3.0 feature - phone-readable messages instead of a
 # wall of text) - dynamic soft-wrap, bolded section headers, code boxes,
@@ -122,6 +145,35 @@ source "$CONFIG_FILE"
 [[ -z "${BOT_TOKEN:-}" ]] && exit 0
 [[ -z "${ALLOWED_CHAT_ID:-}" ]] && exit 0
 
+# --- Serialized send queue (guaranteed ordering) ----------------------------
+# Concurrent tg-send.sh invocations (e.g. several SubagentStop hooks firing
+# within the same second) each POST to Telegram independently; network
+# scheduling gives no ordering guarantee across separate curl processes, so
+# messages can arrive out of order. Fix: an exclusive flock on a lockfile
+# serializes the ENTIRE remainder of this script (dedup check through the
+# final send + metric) across every concurrent invocation, one at a time -
+# so a send (its text pages + its voice note) always completes before the
+# next invocation's send begins. Acquisition order under contention is a
+# kernel-level FIFO wait queue on Linux, so invocations serialize in
+# (very close to) the order they were fired - and the maintainer has
+# explicitly accepted a slight added delay to guarantee this.
+#
+# Skip-graceful: if `flock` isn't installed, sending proceeds unserialized
+# (today's behavior) rather than failing - logged once so the gap is never
+# silent.
+LOCK_FILE="${TG_SEND_LOCK_FILE:-$BRIDGE_DIR/.tg-send.lock}"
+SEND_INTERVAL_MS="${TG_SEND_INTERVAL_MS:-$(cfg_get '.general.send_interval_ms' 350)}"
+[[ "$SEND_INTERVAL_MS" =~ ^[0-9]+$ ]] || SEND_INTERVAL_MS=350
+HAVE_FLOCK=0
+if command -v flock >/dev/null 2>&1; then
+    HAVE_FLOCK=1
+    # shellcheck disable=SC2261
+    exec 200>"$LOCK_FILE"
+    flock -x 200
+else
+    emit_metric "queue" "flock_unavailable" "serialized send ordering skipped - install util-linux flock"
+fi
+
 # Light rate-limit/dedup: skip an identical message sent within the last 10s,
 # so a hook storm (e.g. several subagents finishing at once) can't flood the
 # chat. Keyed on the full, pre-split $MSG, so a multi-page message is deduped
@@ -188,25 +240,75 @@ case "$TTS_MODE" in
     *) TTS_MODE="off" ;;  # "off", unset, or any unrecognized value -> off
 esac
 
-# Eligible only for a single-page message (a paginated long message is,
-# by construction, over PAGE_SIZE and so also over the much smaller
-# max_chars - but the length check is explicit here too, never implicit)
-# within [tts].max_chars (default 600) - long reports/dashboards stay
-# text-only, per design.
+# This send's origin: adapters/claude-code.sh exports TG_SEND_SOURCE=hook
+# before invoking relay-notify.sh, which is inherited straight through to
+# this process (a real environment variable, not a shell-local one) - no
+# extra plumbing needed. Empty/unset (a direct/manual tg-send.sh call, or
+# any other harness that doesn't set it) means "not a hook".
+SEND_SOURCE="${TG_SEND_SOURCE:-}"
+IS_HOOK=0
+[[ "$SEND_SOURCE" == "hook" ]] && IS_HOOK=1
+
+# hook_voice: automated hook/notification pings (SubagentStop, Notification,
+# ...) get a voice read-through too, even when long/paginated - the
+# maintainer's explicit ask (they were getting text-only for every hook
+# ping while direct tg-send.sh calls got voice, because those tend to be
+# short/single-page and hook pings routinely are not). Defaults to true so
+# turning TTS on gets hook coverage by construction; set
+# `[tts] hook_voice = false` to restore the old hook-is-always-text-only
+# shape.
+HOOK_VOICE="$(cfg_get '.tts.hook_voice' 'true')"
+case "$HOOK_VOICE" in
+    true | 1 | yes | on) HOOK_VOICE=1 ;;
+    *) HOOK_VOICE=0 ;;
+esac
+# Cap on how much of a long/paginated hook message is actually SPOKEN - a
+# "sensible read-through" (the maintainer's phrasing), not the full report.
+# Higher than [tts].max_chars (which still gates ordinary direct sends)
+# because a hook ping is exactly the case that needed relaxing. The TEXT
+# send is completely unaffected either way - this only bounds what goes
+# into tts_send_voice.
+HOOK_VOICE_MAX_CHARS="$(cfg_get '.tts.hook_voice_max_chars' 1500)"
+[[ "$HOOK_VOICE_MAX_CHARS" =~ ^[0-9]+$ ]] || HOOK_VOICE_MAX_CHARS=1500
+
+TTS_MAX_CHARS="$(cfg_get '.tts.max_chars' 600)"
+[[ "$TTS_MAX_CHARS" =~ ^[0-9]+$ ]] || TTS_MAX_CHARS=600
+
 TTS_ELIGIBLE=0
-if [[ "$TTS_MODE" != "off" && "$TOTAL" -eq 1 ]]; then
-    TTS_MAX_CHARS="$(cfg_get '.tts.max_chars' 600)"
-    [[ "$TTS_MAX_CHARS" =~ ^[0-9]+$ ]] || TTS_MAX_CHARS=600
-    (( ${#MSG} <= TTS_MAX_CHARS )) && TTS_ELIGIBLE=1
+TTS_VOICE_TEXT="$MSG"
+if [[ "$TTS_MODE" != "off" ]]; then
+    if (( IS_HOOK == 1 && HOOK_VOICE == 1 )); then
+        # Hook ping: eligible regardless of pagination/length - never
+        # silently skip voice just because the ping was long. Only the
+        # SPOKEN text is capped; every text page still goes out unabridged.
+        if (( ${#MSG} > 0 )); then
+            TTS_ELIGIBLE=1
+            if (( ${#MSG} > HOOK_VOICE_MAX_CHARS )); then
+                TTS_VOICE_TEXT="${MSG:0:HOOK_VOICE_MAX_CHARS}"
+                emit_metric "tts" "hook_voice_truncated" "chars=${#MSG} max=${HOOK_VOICE_MAX_CHARS}"
+            fi
+        fi
+    elif [[ "$TOTAL" -eq 1 ]]; then
+        # Direct/manual send (or a hook with hook_voice disabled): the
+        # original, unrelaxed rule - single page, within max_chars.
+        (( ${#MSG} <= TTS_MAX_CHARS )) && TTS_ELIGIBLE=1
+    fi
 fi
 
 # "voice-only": try the voice note FIRST; only skip the text loop below on
 # an actual successful send. Unavailable engine / conversion failure /
 # send failure / ineligible (off, too long, paginated) all fall through
 # to the ordinary text send - a message is never sent as nothing.
+#
+# Hook pings NEVER take this early/skip-text path, even in "voice-only"
+# mode: the never-silent contract for an automated ping is stronger than
+# usual - text ALWAYS sends, voice is purely additive (see the final
+# text+voice/hook block below the send loop). A direct/manual "voice-only"
+# send keeps its exact original shape (skip text on a successful voice
+# send).
 VOICE_SENT=0
-if [[ "$TTS_MODE" == "voice-only" && "$TTS_ELIGIBLE" -eq 1 ]]; then
-    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$MSG" && VOICE_SENT=1
+if [[ "$TTS_MODE" == "voice-only" && "$TTS_ELIGIBLE" -eq 1 && "$IS_HOOK" -eq 0 ]]; then
+    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$TTS_VOICE_TEXT" && VOICE_SENT=1
 fi
 
 # _tg_post_send_message <text> <parse_mode> - one sendMessage POST.
@@ -290,15 +392,30 @@ if [[ "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]]; then
     done
 fi
 
-# "text+voice": text already sent above (unchanged path); now send the
-# voice note too, best-effort (never blocks/reverts the already-sent text
-# on a TTS failure).
-if [[ "$TTS_MODE" == "text+voice" && "$TTS_ELIGIBLE" -eq 1 ]]; then
-    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$MSG" || true
+# Additive voice note: text has already sent above (unchanged path); now
+# send the voice note too, best-effort (never blocks/reverts the
+# already-sent text on a TTS failure). Fires for "text+voice" (any
+# source, as before) OR any eligible hook ping that hasn't already sent
+# its voice note (hooks never take the voice-only pre-send path above -
+# see VOICE_SENT's guard - so this is where a hook's voice note actually
+# goes out, in EVERY tts mode except "off").
+if [[ "$TTS_ELIGIBLE" -eq 1 && "$VOICE_SENT" -eq 0 ]] \
+    && { [[ "$TTS_MODE" == "text+voice" ]] || [[ "$IS_HOOK" -eq 1 ]]; }; then
+    tts_send_voice "$BOT_TOKEN" "$ALLOWED_CHAT_ID" "$TTS_VOICE_TEXT" || true
 fi
 
 printf '%s|%s\n' "$NOW" "$MSG" > "$LAST_MSG_FILE" 2>/dev/null || true
 
 emit_metric "tg-send" "send" "pages=${TOTAL}"
+
+# Hold the serialization lock for the configured inter-send interval before
+# releasing (fd 200 closes at process exit) - this is what actually
+# enforces a minimum gap between one send finishing and the next
+# beginning, so Telegram sees sends spaced out even under a hook storm.
+# No-op (0s) when flock isn't available or the interval is 0.
+if (( HAVE_FLOCK == 1 && SEND_INTERVAL_MS > 0 )); then
+    _interval_s="$(awk -v ms="$SEND_INTERVAL_MS" 'BEGIN { printf "%.3f", ms / 1000 }' 2>/dev/null || true)"
+    [[ -n "$_interval_s" ]] && sleep "$_interval_s" 2>/dev/null
+fi
 
 exit 0

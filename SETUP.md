@@ -222,12 +222,42 @@ length_scale = "0.81"  # OPTIONAL, piper only, default unset (piper's own
                         # sufficient; pitch stays off unless you want to
                         # experiment further. See lib/tts.sh's
                         # _tts_pitch_filter header.
-max_chars = 600         # don't TTS anything longer than this — stays text-only
+max_chars = 600         # don't TTS a DIRECT/manual send longer than this
+                        # — stays text-only. Automated hook pings follow
+                        # the more permissive rule below instead.
+hook_voice = true       # v0.5.1+, default true. A ping tagged
+                        # TG_SEND_SOURCE=hook (Claude Code's
+                        # SubagentStop/Notification hooks today) gets
+                        # voice even when long/paginated, where max_chars
+                        # above would otherwise skip it — this is what
+                        # actually fixes "hook pings never get voice".
+hook_voice_max_chars = 1500  # how much of a long hook ping is SPOKEN —
+                        # a sensible read-through, not the whole report.
+                        # The TEXT send always carries the full message
+                        # regardless; only the voice note is capped.
 ```
 
 See `relay.toml.example`'s `[tts]` comments for the full schema, and
 `lib/tts.sh`'s header for the engine-selection/transcode/pitch/cadence/send
 pipeline.
+
+### Guaranteed send ordering (v0.5.1+)
+
+`tg-send.sh` serializes every send under an exclusive `flock`
+(`.tg-send.lock`), so a burst of concurrent sends (several hook events
+firing close together) go out one at a time instead of racing against the
+Telegram API with no ordering guarantee:
+
+```toml
+[general]
+send_interval_ms = 350   # default; delay held after each send finishes,
+                          # before the next may begin — 0 disables the
+                          # extra pause (mutual exclusion still applies)
+```
+
+Needs `flock` (util-linux — on essentially every Linux box already); if
+it's missing, sends proceed unserialized exactly as before this feature
+existed, logged once to `.metrics.log`, never a hard failure.
 
 ## Syntax-highlighted code (optional HTML-document tier)
 
