@@ -95,8 +95,9 @@ def main_send(argv: list[str] | None = None) -> int:
 
 
 def main_poll(argv: list[str] | None = None) -> int:
-    print("tg-relay-poll: not yet ported — use tg-poll.sh (issue #27)", file=sys.stderr)
-    return 2
+    from tg_agent_relay.poll import main as poll_main
+
+    return poll_main(argv)
 
 
 def main_hook(argv: list[str] | None = None) -> int:
