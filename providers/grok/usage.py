@@ -1,4 +1,9 @@
-"""Grok local session usage collector (context-peak proxy)."""
+"""Grok local session usage collector (context-peak proxy).
+
+Registered on the Grok Provider as ``usage_collect``. usage_ingest.ADAPTERS
+picks this up via the providers registry (issue #31); a local copy remains in
+lib/usage_ingest.py only as a fallback when ``providers`` cannot be imported.
+"""
 
 from __future__ import annotations
 
