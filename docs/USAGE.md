@@ -106,6 +106,138 @@ event doesn't provide is left **literal** in the sent message (e.g. a
 typo'd `{mesage}` shows up as-is) rather than silently rendering as a
 blank — the same never-silent posture as the rest of this bridge.
 
+## Structured formatting (outbound messages)
+
+Every message text built above (a hook summary, a `relay-notify.sh` call,
+a handler's reply) is run through [`lib/format.sh`](../lib/format.sh)
+before `tg-send.sh` posts it — a **v0.3.0 headline feature, on by
+default** — turning a wall of text into a message with real visual
+hierarchy on the phone. Telegram has no true font sizes, so this uses
+what it actually supports: `parse_mode=HTML` (only `<`/`>`/`&` need
+escaping — far safer than MarkdownV2's ~18-character escape table).
+
+### Before / after
+
+The exact same report, before v0.3.0 vs. with structured formatting:
+
+**Before** (v0.2.x — a wall of text, plain `sendMessage`):
+
+```text
+Findings: found the issue in format_message() in swap.myc -- it wasn't
+validating a swap before applying it. before: fn swap(v: Value) -> Value
+{ v.as_dense() } after: fn swap(v: Value) -> Result<Value, SwapError> {
+v.as_dense().ok_or(SwapError::OutOfRange) } note: an out-of-range swap is
+now an explicit Result, not a silent truncation. all tests green
+(165/165)
+```
+
+**After** (v0.3.0 — the SAME content, using the input-markup convention
+below), rendered on the phone as: a bolded **Findings** header, an inline
+`format_message()`/`swap.myc` code reference, a real monospace **code
+box** for the `myc` diff (verbatim, never reflowed), an (optionally
+expandable) quoted note, and a bolded closing line:
+
+    ## Findings
+
+    Found the issue in `format_message()` in `swap.myc` — it wasn't
+    validating a swap before applying it.
+
+    ```myc
+    // before
+    fn swap(v: Value) -> Value {
+        v.as_dense()
+    }
+
+    // after
+    fn swap(v: Value) -> Result<Value, SwapError> {
+        v.as_dense().ok_or(SwapError::OutOfRange)
+    }
+    ```
+
+    > Never-silent: an out-of-range swap is now an explicit `Result`,
+    > not a silent truncation.
+
+    ✅ TESTS GREEN (165/165)
+
+### The input-markup convention
+
+Your plain message text drives the rendering — no HTML to write by hand:
+
+- `## Header` -> `<b>Header</b>` (bold, blank line above).
+- A line with a **leading emoji + a SHORT all-caps or Title-Case phrase**
+  (<=60 chars), e.g. `✅ BUILD FINISHED` or `🚀 Deploy Started` -> also
+  bolded. An ordinary leading-emoji SENTENCE with any lowercase,
+  non-Title-Case word (e.g. `✅ build finished — 2 issues found`) stays
+  plain prose — conservative by design, so this never mis-fires on a
+  normal status ping.
+- ` ```lang ... ``` ` (a fenced code block) -> a real Telegram code box
+  (`<pre><code class="language-lang">...</code></pre>`). The content is
+  **NEVER reflowed, wrapped, or marked up** — only the three HTML-special
+  characters are escaped, byte-for-byte verbatim otherwise. Common tags
+  pass through as-is: `rust`, `python`/`py`, `bash`/`sh`, `json`, `yaml`,
+  `toml`, `c`/`cpp`, `go`, `js`/`ts`, `java`, `sql`, `diff`, `html`,
+  `css`, `ruby`, `php`, and more (see `lib/format.sh`'s `_fmt_known_lang`
+  for the full list). **`myc` and `mycelium` are first-class tags** —
+  both normalize to `language-mycelium`, since Mycelium is this
+  ecosystem's own language. An unrecognized tag still boxes the code,
+  just without a language class (a plain `<pre>`).
+- `` `inline code` `` -> `<code>...</code>` (monospace, never reflowed —
+  an inline code span with embedded spaces is kept whole by the
+  soft-wrap pass too, never torn mid-span).
+- `> quoted line(s)` -> consecutive `> `-prefixed lines group into ONE
+  `<blockquote>...</blockquote>`; a long quote (more than 3 lines, or
+  over 200 characters) automatically becomes an **expandable**
+  blockquote (a native Telegram feature — collapsed by default on the
+  phone, tap to expand).
+- `*emphasis*` / `_emphasis_` -> `<i>...</i>`. Word-boundary-guarded: the
+  character immediately outside each marker must not be alphanumeric, so
+  a snake_case identifier like `my_var_name` (outside backticks) is never
+  mistaken for emphasis — the classic Markdown-in-prose false positive.
+
+### Dynamic soft-wrap
+
+A prose line longer than `wrap_width` (default 50 — a phone-friendly
+width) is wrapped at **word boundaries**. It never breaks a word, a URL,
+or the inside of an inline `` `code span` `` (even one with embedded
+spaces — protected as a single atomic token). A line already within
+`wrap_width` is left completely untouched. Fenced code-block interiors
+are never wrapped, regardless of width (see above — always verbatim).
+
+### Config — `relay.toml`'s `[format]` table
+
+```toml
+[format]
+enabled = true          # master switch
+parse_mode = "HTML"     # "HTML" (default, implemented) | "MarkdownV2"
+                         # (accepted but not yet rendered - falls back to
+                         # plain text, logged) | "none" (= enabled=false)
+wrap_width = 50          # soft-wrap width in characters
+headers = true            # "## Header" / leading-emoji CAPS-or-Title lines
+code_spans = true         # `inline code` and ```lang fences
+blockquotes = true        # "> quoted" lines
+soft_wrap = true          # the word-boundary wrap pass
+```
+
+**`enabled = false` (or `parse_mode = "none"`) restores today's exact
+pre-v0.3.0 plain-text behavior, byte-for-byte** — this is the one
+opt-out that matters if you'd rather receive raw, unformatted text; every
+other toggle above defaults on and can be flipped off individually
+without disabling the whole layer. This is also the **one exception** to
+"no `relay.toml` -> byte-identical to before the feature existed" that
+this bridge otherwise guarantees everywhere else — structured formatting
+is meant to just work out of the box.
+
+### Never-silent (a message is never dropped nor sent broken)
+
+`format_message()` self-checks the HTML it renders (an open/close tag
+balance check) before using it; if that check ever fails, it falls back
+to the plain, HTML-escaped original text and logs the downgrade. On top
+of that, `tg-send.sh` itself checks Telegram's actual API response: if a
+formatted send is rejected (an HTML-parse error on Telegram's side), it
+retries **once** as plain text and logs that fallback too. Either way,
+the message still arrives — formatting is a readability improvement, not
+a new way for a status ping to silently disappear.
+
 ## Receiving messages (inbound, phone -> agent)
 
 `tg-poll.sh` long-polls Telegram's `getUpdates` and is meant to run as

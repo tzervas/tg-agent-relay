@@ -13,6 +13,12 @@
 # ever ADDS behavior (overrides a default, enables a new command/event);
 # it never changes what already-live invocations do until you opt in.
 #
+# ONE DELIBERATE EXCEPTION: [format] (structured formatting, below) is ON
+# by default even with NO relay.toml at all - the v0.3.0 headline feature,
+# meant to just work. `[format] enabled = false` (or `parse_mode = "none"`)
+# restores today's exact plain-text behavior byte-for-byte; see that
+# section for the full opt-out.
+#
 # Every key here is optional - uncomment/add only what you want to change.
 
 [general]
@@ -32,6 +38,75 @@
 # before being truncated with a "[+N more pages omitted]" marker. Same as
 # env var TG_HOOK_MAX_PAGES.
 # hook_max_pages = 6
+
+# --------------------------------------------------------------------------
+# [format] - structured formatting (lib/format.sh), applied to EVERY
+# outbound send (tg-send.sh's curl call - so relay-notify.sh, every
+# handlers/*.sh, every adapter, all route through it). Turns a wall of
+# text into a phone-readable message: dynamic soft-wrap, bolded section
+# headers, code boxes, quotes, light emphasis - via Telegram's
+# `parse_mode=HTML` (only `< > &` ever need escaping - far safer than
+# MarkdownV2's ~18-character escape table).
+#
+# ON BY DEFAULT - the one exception to "every value below has a
+# hardcoded/env-var fallback that's inert with no relay.toml": this is a
+# v0.3.0 headline feature meant to just work out of the box. Set
+# `enabled = false` (or `parse_mode = "none"`) below to get today's exact
+# pre-v0.3.0 plain-text behavior, byte-for-byte.
+#
+# [format]
+# enabled = true
+#
+# "HTML" (default, implemented) | "MarkdownV2" (accepted but not yet
+# rendered - falls back to plain text, logged via .metrics.log, never
+# silently mis-rendered) | "none" (same effect as enabled=false).
+# parse_mode = "HTML"
+#
+# Soft-wrap width in characters (phone-friendly default). A prose line
+# longer than this wraps at WORD boundaries - never mid-word, mid-URL, or
+# mid-`code span`. A line already <= wrap_width is left untouched.
+# wrap_width = 50
+#
+# Per-feature toggles, all on by default - flip any one off without
+# disabling the whole layer.
+# headers = true       # "## Header" / leading-emoji CAPS-or-Title lines -> <b>bold</b>
+# code_spans = true    # `inline code` -> <code>; ```lang fences -> <pre><code>
+# blockquotes = true   # "> quoted" lines -> <blockquote> (auto-expandable if long)
+# soft_wrap = true      # the word-boundary wrap pass
+#
+# --- The input-markup convention (what your PLAIN TEXT can use to get
+# --- structure - see README.md/docs/USAGE.md for the full, canonical
+# --- writeup with a before/after example) ----------------------------------
+#   ## Header                 -> <b>Header</b> (blank line above)
+#   ✅ SHORT CAPS LINE        -> <b>...</b> (leading emoji + all-caps or
+#   🚀 Title Case Line           Title-Case, <=60 chars - a leading-emoji
+#                                 SENTENCE with any lowercase word stays
+#                                 plain prose, never mistakenly bolded)
+#   ```lang ... ```            -> a code box: <pre><code class="language-
+#                                 lang">...</code></pre>, content NEVER
+#                                 reflowed/wrapped/marked-up - only
+#                                 HTML-escaped, byte-for-byte verbatim.
+#                                 Common tags pass through as-is (rust,
+#                                 python, bash, json, yaml, toml, go, js,
+#                                 ts, java, sql, diff, ...); `myc` AND
+#                                 `mycelium` are first-class tags (both ->
+#                                 language-mycelium, this project's own
+#                                 language); an unrecognized tag still
+#                                 boxes the code, just without a language
+#                                 class (plain <pre>).
+#   `inline code`              -> <code>...</code> (never reflowed).
+#   > quoted line(s)           -> <blockquote>...</blockquote>; a long
+#                                 quote (>3 lines or >200 chars) becomes an
+#                                 EXPANDABLE blockquote (Telegram feature).
+#   *emphasis* / _emphasis_    -> <i>...</i>, word-boundary-guarded so a
+#                                 snake_case identifier like `my_var_name`
+#                                 (outside backticks) is never mistaken for
+#                                 emphasis.
+#
+# Never-silent (see lib/format.sh's header for the full contract): a
+# malformed render, or a Telegram-side HTML-parse rejection, retries ONCE
+# as plain text and logs the fallback via .metrics.log - a message is
+# NEVER dropped nor sent with broken markup.
 
 # --------------------------------------------------------------------------
 # [generic] - relay-notify.sh's own formatting, for callers that are NOT

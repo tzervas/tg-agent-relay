@@ -160,12 +160,71 @@ A `SubagentStop` hook firing produces a DM like:
 ✅ code-reviewer finished — Found 2 issues in the diff, both low severity
 ```
 
-A long message (e.g. a full tool output) is auto-paginated:
+A long message (e.g. a full tool output) is auto-paginated, with a
+**bolded** `[k/n]` page header (see "Structured formatting" below):
 
 ```
 [1/3]
 ✅ build finished — Compiling mycelium-core v0.4.0 ...
 ```
+
+**Structured formatting (v0.3.0 — on by default):** a longer, richer
+report — the kind of message that used to arrive as an unreadable wall of
+text — renders with real hierarchy instead. Before/after, the same
+message:
+
+<table>
+<tr><th>Before (v0.2.x — a wall of text)</th><th>After (v0.3.0 — structured)</th></tr>
+<tr><td>
+
+```text
+Findings: found the issue in format_message()
+in swap.myc -- it wasn't validating a swap
+before applying it. before: fn swap(v: Value)
+-> Value { v.as_dense() } after: fn swap(v:
+Value) -> Result<Value, SwapError> {
+v.as_dense().ok_or(SwapError::OutOfRange) }
+note: an out-of-range swap is now an explicit
+Result, not a silent truncation. all tests
+green (165/165)
+```
+
+</td><td>
+
+**Findings**
+
+Found the issue in `format_message()` in
+`swap.myc` — it wasn't validating a swap
+before applying it.
+
+```myc
+// before
+fn swap(v: Value) -> Value {
+    v.as_dense()
+}
+
+// after
+fn swap(v: Value) -> Result<Value, SwapError> {
+    v.as_dense().ok_or(SwapError::OutOfRange)
+}
+```
+
+> Never-silent: an out-of-range swap is now an
+> explicit `Result`, not a silent truncation.
+
+**✅ TESTS GREEN (165/165)**
+
+</td></tr>
+</table>
+
+The right-hand column is exactly what arrives on the phone — a bolded
+header, a monospace `inline code` reference, a real **code box** for the
+`myc` diff (Telegram renders `mycelium`/`myc` fences as a monospace box,
+byte-for-byte verbatim — never reflowed or re-marked-up), a quoted note,
+and a bolded closing line — instead of one dense paragraph. See
+"Structured formatting" below for the full input-markup convention and
+config, and [`docs/USAGE.md`](docs/USAGE.md#structured-formatting-outbound-messages)
+for more examples.
 
 ### (d) Sending `/dashboard` → image back
 
@@ -225,15 +284,70 @@ guessed at.
 ## Configurable via `relay.toml` (optional)
 
 Copy [`relay.toml.example`](relay.toml.example) to `relay.toml` to
-configure page size/delay, the reassemble window, which Claude Code hook
-events are enabled + their prefix + their message format, the `[generic]`
-prefix/format, in-chat commands, the dashboard window, and optional local
-TTS voice notes. **Every script falls back to its pre-existing
-env-var/hardcoded default with no `relay.toml` present** — this is the
-backward-compat guarantee: an existing bridge with no `relay.toml`
-behaves byte-for-byte as it always has. See the example file's comments
-for the full schema, and [`docs/USAGE.md`](docs/USAGE.md) /
-[`docs/COMMANDS.md`](docs/COMMANDS.md) for how to use it.
+configure page size/delay, the reassemble window, structured message
+formatting, which Claude Code hook events are enabled + their prefix +
+their message format, the `[generic]` prefix/format, in-chat commands,
+the dashboard window, and optional local TTS voice notes. **Every script
+falls back to its pre-existing env-var/hardcoded default with no
+`relay.toml` present** — this is the backward-compat guarantee: an
+existing bridge with no `relay.toml` behaves byte-for-byte as it always
+has — **with one deliberate exception, `[format]` below**, which is ON
+by default. See the example file's comments for the full schema, and
+[`docs/USAGE.md`](docs/USAGE.md) / [`docs/COMMANDS.md`](docs/COMMANDS.md)
+for how to use it.
+
+### Structured formatting — phone-readable messages (v0.3.0, on by default)
+
+`tg-send.sh` runs every outbound message through
+[`lib/format.sh`](lib/format.sh) before it hits Telegram's API, turning a
+wall of text into a message with real visual hierarchy — using the
+formatting Telegram actually supports (`parse_mode=HTML`: dynamic
+soft-wrap at word boundaries, bolded section headers, real code boxes,
+expandable quotes, light emphasis), since Telegram has no true font
+sizes. See "(c) A status ping arriving on the phone" above for a full
+before/after example.
+
+**Your plain message text drives it** — a small, documented input-markup
+convention:
+
+| Write this | Get this |
+|---|---|
+| `## Header` | **Header** (bold, blank line above) |
+| `✅ SHORT CAPS` or `🚀 Title Case` (leading emoji + short all-caps/Title-Case) | **bolded header** — an ordinary lowercase sentence stays plain prose, never mistakenly bolded |
+| ` ```lang ... ``` ` | a real code box (`<pre><code>`) — content is **never** reflowed, wrapped, or marked up, only HTML-escaped, byte-for-byte verbatim |
+| `` `inline code` `` | monospace `inline code` |
+| `> quoted line(s)` | a blockquote (auto-**expandable** if long) |
+| `*emphasis*` / `_emphasis_` | *italic* — word-boundary-guarded, so `my_var_name` outside backticks is never mistaken for emphasis |
+
+**Code fences recognize the common language tags** (`rust`, `python`,
+`bash`, `json`, `yaml`, `toml`, `go`, `js`, `ts`, `java`, `sql`, `diff`,
+...) — and **`myc`/`mycelium` are first-class tags** (both normalize to
+`language-mycelium`), since Mycelium is this ecosystem's own language. An
+unrecognized tag still boxes the code, just without a language class.
+
+Config — `relay.toml`'s `[format]` table, every key optional and on by
+default:
+
+```toml
+[format]
+enabled = true
+parse_mode = "HTML"   # "HTML" (default) | "MarkdownV2" (not yet rendered,
+                       # logged + falls back to plain text) | "none"
+wrap_width = 50        # soft-wrap width, phone-friendly default
+headers = true
+code_spans = true
+blockquotes = true
+soft_wrap = true
+```
+
+`enabled = false` (or `parse_mode = "none"`) restores today's exact
+plain-text behavior, byte-for-byte — the one opt-out you need if you'd
+rather keep receiving raw text. **Never-silent:** a render that would
+produce malformed HTML, or a Telegram-side HTML-parse rejection, retries
+ONCE as plain text and logs the fallback via `.metrics.log` — a message
+is never dropped nor sent with broken markup. See
+[`docs/USAGE.md`](docs/USAGE.md#structured-formatting-outbound-messages)
+for the full writeup and more examples.
 
 ### Voice messages (TTS) — self-hosted, off by default
 
@@ -315,7 +429,8 @@ and how to define your own.
 | `.env` | **Local-only, gitignored, 0600** — holds the live bot token. Never committed. |
 | `relay.toml.example` | Non-secret config template (committed). Copy to `relay.toml` to customize. |
 | `relay.toml` | **Local-only, gitignored** — your actual config. Optional; scripts fall back gracefully without it. |
-| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; optional local TTS voice note (`[tts]`, default off). |
+| `tg-send.sh` | Outbound `sendMessage`; silent no-op with no token; 10s dedup; auto-paginates (`[k/n]`) over `page_size`/`TG_PAGE_SIZE` (default 3500) chars; structured formatting (`[format]`, default ON); optional local TTS voice note (`[tts]`, default off). |
+| `lib/format.sh` | Structured-formatting layer (`[format]`, v0.3.0, on by default) — dynamic soft-wrap, bolded headers, code boxes (`myc`/`mycelium` first-class), quotes, emphasis, via `parse_mode=HTML`; never-silent fallback to plain text on a bad render or a Telegram-side rejection. |
 | `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. |
 | `fetch-voices.sh` | One-command piper voice model downloader (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful); no args fetches the recommended default (`en_US-joe-medium`), `--list` shows the full recommended table. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
