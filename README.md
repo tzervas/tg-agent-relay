@@ -7,6 +7,7 @@ the relay — zero model tokens either direction unless *you* start a
 conversation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/tzervas/tg-agent-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/ci.yml)
 [![gitleaks](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
 
 Built with pure `curl` + `jq` + **Python 3.14** (preferred; 3.13 ok; ≥3.11
