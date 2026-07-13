@@ -8,7 +8,7 @@ Stable public surface for agents:
   - tg_agent_relay.config   load relay.toml + overlays
   - tg_agent_relay.routing  project/backend route resolve
   - tg_agent_relay.metrics  emit_metric TSV
-  - tg_agent_relay.tts      strip_formatting (voice prose)
+  - tg_agent_relay.tts      strip_formatting + spoken_mode short/full chunk
   - tg_agent_relay.hooks    provider_hook dispatch
   - tg_agent_relay.protocols Protocol types for send/format/usage
 

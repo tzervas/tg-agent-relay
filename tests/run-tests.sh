@@ -2439,6 +2439,19 @@ else
     printf 'SKIP  python3 not installed - skipping tts-plain-text unit tests (never-silent: this line IS the record)\n'
 fi
 
+echo "== tg_agent_relay.tts: spoken_mode short/full strip+chunk (issue #28) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_tts_package.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_tts_package.py"
+    else
+        fail "relay_python tests/test_tts_package.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping tts package unit tests (never-silent: this line IS the record)\n'
+fi
+
 echo "== providers/grok + providers/claude (Python unit tests) =="
 if command -v python3 >/dev/null 2>&1; then
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_grok.py" 2>&1)"
