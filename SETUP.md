@@ -132,6 +132,59 @@ That's it. From then on:
   Telegram monitor and treated as your next input (tokens spent only
   then).
 
+## Voice messages (TTS) (optional)
+
+`tg-send.sh` can send a **self-hosted, local voice note** instead of (or
+alongside) the text message — no external TTS API is ever called, and the
+feature is **off by default** (`mode = "off"` — no behavior change with no
+`relay.toml`, or an existing one that doesn't set `[tts]`).
+
+Pick ONE local engine (both are small; neither needs a GPU or a network
+call at synthesis time):
+
+**Option A — espeak-ng (zero-config fallback, robotic but always works):**
+
+```bash
+sudo apt install espeak-ng    # Debian/Ubuntu; tiny package
+```
+
+**Option B — piper (preferred: natural-sounding, still fully local/offline):**
+
+```bash
+# 1. Install piper (see https://github.com/rhasspy/piper for other platforms)
+pip install piper-tts   # or download the prebuilt binary release
+
+# 2. Fetch a small voice model (e.g. an en_US low/medium-quality voice —
+#    a few tens of MB) — see the piper voices index for the full list:
+#    https://github.com/rhasspy/piper/blob/master/VOICES.md
+mkdir -p ~/.claude/telegram-bridge/voices
+curl -L -o ~/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+curl -L -o ~/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx.json \
+    https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+
+Voice notes are transcoded to OGG/OPUS (what Telegram's `sendVoice`
+expects) via **ffmpeg** (`sudo apt install ffmpeg`); with no ffmpeg
+installed, the raw WAV is sent via `sendAudio` instead — still SOME voice,
+never a hard failure. With **neither** engine installed, TTS is
+skip-graceful: nothing voice-related happens, the text message still
+sends exactly as always, and a one-line note lands in `.metrics.log`
+(never a silent gap, never a failed send).
+
+Then enable it in `relay.toml`:
+
+```toml
+[tts]
+mode = "text+voice"   # or "voice-only"
+engine = "auto"        # prefers piper if voice_model is set + the binary is present
+voice_model = "/root/.claude/telegram-bridge/voices/en_US-lessac-medium.onnx"
+max_chars = 600         # don't TTS anything longer than this — stays text-only
+```
+
+See `relay.toml.example`'s `[tts]` comments for the full schema, and
+`lib/tts.sh`'s header for the engine-selection/transcode/send pipeline.
+
 ## Security model
 
 - **Allowlist by numeric `user_id`, not username.** `tg-poll.sh` only

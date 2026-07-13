@@ -85,6 +85,19 @@ with ANY agent using ANY harness, maximum portability + usability.
   to the same text renderer on any render failure. "Model-turns avoided"
   is tracked as a `Declared` heuristic (enabled-hook pings +
   relay-handled commands), never presented as a measured token count.
+- **Self-hosted TTS voice messages (v0.2.0).** `lib/tts.sh` + `[tts]` in
+  `relay.toml`: `tg-send.sh` can generate a voice note locally (piper
+  preferred, espeak-ng fallback — no external TTS API, ever) and send it
+  via `sendVoice`, either alongside the text (`mode = "text+voice"`) or
+  instead of it (`mode = "voice-only"`, with an automatic text fallback
+  if TTS is unavailable — a message is never dropped). `max_chars`
+  (default 600) keeps long reports/dashboards text-only; a paginated
+  multi-message send always skips TTS. `ffmpeg` transcodes WAV → OGG/OPUS
+  for `sendVoice`, falling back to `sendAudio` with the raw WAV if
+  `ffmpeg` is absent. Default `mode = "off"` — byte-identical behavior
+  with no `relay.toml`, or an existing one that doesn't set `[tts]`;
+  skip-graceful (one `emit_metric` line, never a failed/blocked send) at
+  every stage where an engine/model/`ffmpeg` is missing.
 
 ## Next
 

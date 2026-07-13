@@ -312,6 +312,40 @@
 # (example-echo.sh is test-only - not a real command; see handlers/README.md)
 
 # --------------------------------------------------------------------------
+# [tts] - optional, self-hosted, LOCAL text-to-speech voice notes (lib/tts.sh).
+# No external TTS API is ever called - piper (preferred) or espeak-ng
+# (fallback) run on this machine; see SETUP.md's "Voice messages (TTS)"
+# section for installing either. DEFAULT mode = "off" -> tg-send.sh behaves
+# byte-for-byte as it always has, with NO relay.toml present at all.
+# [tts]
+# mode = "off"
+#   "off"          - never generate a voice note (today's behavior).
+#   "text+voice"   - send the text message as usual, THEN a voice note.
+#   "voice-only"   - send ONLY a voice note; automatically falls back to
+#                    the text message if TTS is unavailable/fails/the
+#                    message is over max_chars - a message is never
+#                    dropped outright.
+#
+# engine = "auto"
+#   "auto"   - prefer piper (needs the piper binary AND voice_model below);
+#              fall back to espeak-ng (needs only the espeak-ng binary).
+#   "piper"  - only use piper; no fallback if it's unusable.
+#   "espeak" - only use espeak-ng.
+#
+# voice_model = "/path/to/en_US-voice-medium.onnx"
+#   Required for the piper engine (a downloaded .onnx model file - piper
+#   itself has no built-in voice). Ignored by espeak-ng. With no piper
+#   binary or no voice_model configured, "auto"/"piper" silently (but
+#   never-silently-logged, via .metrics.log) falls back to espeak-ng or
+#   skips voice entirely if that's absent too - the text message always
+#   still sends.
+#
+# max_chars = 600
+#   Do NOT TTS a message longer than this - long reports/dashboards stay
+#   text-only. A paginated (multi-message) send is always skipped for TTS
+#   too, regardless of this value (it's already far over it by construction).
+
+# --------------------------------------------------------------------------
 # [dashboard] - shared config for the dashboard/stats relay-handled
 # commands below (handlers/dashboard.sh, handlers/stats.sh). Optional; both
 # scripts default to 24h with no [dashboard] section, same
