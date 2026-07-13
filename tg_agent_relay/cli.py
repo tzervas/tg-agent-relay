@@ -72,8 +72,10 @@ def Path_read(p: str) -> str:
 
 
 def main_send(argv: list[str] | None = None) -> int:
-    print("tg-relay-send: not yet ported — use tg-send.sh (issue #26)", file=sys.stderr)
-    return 2
+    """Thin CLI for Python send core (issue #26). Live path may still be tg-send.sh."""
+    from tg_agent_relay.send import main as send_main
+
+    return send_main(argv)
 
 
 def main_poll(argv: list[str] | None = None) -> int:
