@@ -14,9 +14,11 @@ Shell implementations remain as fallback and explicit opt-out:
 bash tg-send.sh "hello"
 bash tg-poll.sh
 
-# Force legacy shell paths:
+# Force legacy shell paths (noisy: stderr + metrics log python_fallback):
 export RELAY_PYTHON_SEND=0
 export RELAY_PYTHON_POLL=0
+# If Python import fails without opt-out, shell still runs but prints why
+# and records metrics: tg-send/tg-poll  python_fallback  failed: …
 
 # Or call entry points directly:
 uv run tg-relay-send "hello"

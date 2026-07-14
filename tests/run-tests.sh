@@ -24,8 +24,10 @@ set -u
 
 # Production default is Python send/poll (#67). This suite validates the
 # shell e2e path with PATH-stubbed curl — force shell bodies here.
+# Quiet stderr spam; metrics still record python_fallback=forced.
 export RELAY_PYTHON_SEND=0
 export RELAY_PYTHON_POLL=0
+export RELAY_PYTHON_FALLBACK_QUIET=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Prefer Python 3.14 for unit tests / helpers

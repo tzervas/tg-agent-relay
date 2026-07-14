@@ -17,10 +17,14 @@ see the README's repo/directory note) — no other repo is touched.
 # Default — no env required
 bash tg-send.sh "hello"
 
-# Force legacy shell (debug / bisect only)
+# Force legacy shell (debug / bisect only — logs python_fallback to stderr + metrics)
 export RELAY_PYTHON_SEND=0
 export RELAY_PYTHON_POLL=0
 ```
+
+If the package fails to import (missing `tg_agent_relay/`, wrong Python, broken
+deps), the shell path still runs but is **never silent**: stderr explains the
+failure and recovery, and `.metrics.log` gets a `python_fallback` line.
 
 Claude Code hooks prefer `providers/claude` via Python when available
 (`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).

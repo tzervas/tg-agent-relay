@@ -60,13 +60,28 @@ set -u
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Python poll is the **default** (epic #18 / issue #67). Opt out to shell:
 #   RELAY_PYTHON_POLL=0  bash tg-poll.sh
-# Falls back to this shell body if Python/package is unavailable.
-if [[ "${RELAY_PYTHON_POLL:-1}" != "0" ]]; then
+# Falls back to this shell body if Python/package is unavailable — **noisy**
+# (stderr + metrics): never silent about failure or recovery.
+_PY_POLL_FALLBACK_REASON=""
+_PY_POLL_FALLBACK_KIND=""  # failed | forced
+if [[ "${RELAY_PYTHON_POLL:-1}" == "0" ]]; then
+    _PY_POLL_FALLBACK_KIND="forced"
+    _PY_POLL_FALLBACK_REASON="RELAY_PYTHON_POLL=0 (explicit shell path)"
+else
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
-    if relay_python -c "import tg_agent_relay.poll" 2>/dev/null; then
+    _PY_POLL_ERR=""
+    _PY_POLL_RC=0
+    _PY_POLL_ERR="$(relay_python -c "import tg_agent_relay.poll" 2>&1)" || _PY_POLL_RC=$?
+    if [[ "$_PY_POLL_RC" -eq 0 ]]; then
         exec relay_python -m tg_agent_relay.poll "$@"
+    fi
+    _PY_POLL_FALLBACK_KIND="failed"
+    _py_bin="${RELAY_PYTHON:-python3}"
+    _PY_POLL_FALLBACK_REASON="import tg_agent_relay.poll failed (rc=${_PY_POLL_RC}, interpreter=${_py_bin})"
+    if [[ -n "$_PY_POLL_ERR" ]]; then
+        _PY_POLL_FALLBACK_REASON="${_PY_POLL_FALLBACK_REASON}: $(printf '%s' "$_PY_POLL_ERR" | tr '\n' ' ' | head -c 400)"
     fi
 fi
 CONFIG_FILE="$BRIDGE_DIR/.env"
@@ -86,6 +101,25 @@ fi
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+
+# Never-silent Python→shell recovery notice (after emit_metric is available).
+# RELAY_PYTHON_FALLBACK_QUIET=1 → metric only (used by offline test suite).
+if [[ -n "${_PY_POLL_FALLBACK_KIND:-}" ]]; then
+    if [[ "${RELAY_PYTHON_FALLBACK_QUIET:-0}" != "1" ]]; then
+        if [[ "$_PY_POLL_FALLBACK_KIND" == "failed" ]]; then
+            {
+                printf 'tg-poll.sh: ERROR — Python default path failed; recovering via shell.\n'
+                printf '  reason:   %s\n' "$_PY_POLL_FALLBACK_REASON"
+                printf '  recovery: continuing with shell tg-poll.sh (allowlist, reassembly, routing).\n'
+                printf '  fix:      deploy tg_agent_relay/ + Python 3.14 (uv sync / RELAY_PYTHON=…);\n'
+                printf '            set RELAY_PYTHON_POLL=0 only if shell is intentional.\n'
+            } >&2
+        else
+            printf 'tg-poll.sh: using shell path (%s)\n' "$_PY_POLL_FALLBACK_REASON" >&2
+        fi
+    fi
+    emit_metric "tg-poll" "python_fallback" "${_PY_POLL_FALLBACK_KIND}: ${_PY_POLL_FALLBACK_REASON}"
+fi
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/routing.sh" ]] && source "$BRIDGE_DIR/lib/routing.sh"
 

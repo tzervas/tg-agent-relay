@@ -129,13 +129,28 @@ set -u
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Python send is the **default** (epic #18 / issue #67). Opt out to shell:
 #   RELAY_PYTHON_SEND=0  bash tg-send.sh "hello"
-# Falls back to this shell body if Python/package is unavailable.
-if [[ "${RELAY_PYTHON_SEND:-1}" != "0" ]]; then
+# Falls back to this shell body if Python/package is unavailable — **noisy**
+# (stderr + metrics): never silent about failure or recovery.
+_PY_SEND_FALLBACK_REASON=""
+_PY_SEND_FALLBACK_KIND=""  # failed | forced
+if [[ "${RELAY_PYTHON_SEND:-1}" == "0" ]]; then
+    _PY_SEND_FALLBACK_KIND="forced"
+    _PY_SEND_FALLBACK_REASON="RELAY_PYTHON_SEND=0 (explicit shell path)"
+else
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
-    if relay_python -c "import tg_agent_relay.send" 2>/dev/null; then
+    _PY_SEND_ERR=""
+    _PY_SEND_RC=0
+    _PY_SEND_ERR="$(relay_python -c "import tg_agent_relay.send" 2>&1)" || _PY_SEND_RC=$?
+    if [[ "$_PY_SEND_RC" -eq 0 ]]; then
         exec relay_python -m tg_agent_relay.send "$@"
+    fi
+    _PY_SEND_FALLBACK_KIND="failed"
+    _py_bin="${RELAY_PYTHON:-python3}"
+    _PY_SEND_FALLBACK_REASON="import tg_agent_relay.send failed (rc=${_PY_SEND_RC}, interpreter=${_py_bin})"
+    if [[ -n "$_PY_SEND_ERR" ]]; then
+        _PY_SEND_FALLBACK_REASON="${_PY_SEND_FALLBACK_REASON}: $(printf '%s' "$_PY_SEND_ERR" | tr '\n' ' ' | head -c 400)"
     fi
 fi
 CONFIG_FILE="$BRIDGE_DIR/.env"
@@ -151,6 +166,25 @@ fi
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+
+# Never-silent Python→shell recovery notice (after emit_metric is available).
+# RELAY_PYTHON_FALLBACK_QUIET=1 → metric only (used by offline test suite).
+if [[ -n "${_PY_SEND_FALLBACK_KIND:-}" ]]; then
+    if [[ "${RELAY_PYTHON_FALLBACK_QUIET:-0}" != "1" ]]; then
+        if [[ "$_PY_SEND_FALLBACK_KIND" == "failed" ]]; then
+            {
+                printf 'tg-send.sh: ERROR — Python default path failed; recovering via shell.\n'
+                printf '  reason:   %s\n' "$_PY_SEND_FALLBACK_REASON"
+                printf '  recovery: continuing with shell tg-send.sh (paginate/TTS/format via lib/*.sh).\n'
+                printf '  fix:      deploy tg_agent_relay/ + Python 3.14 (uv sync / RELAY_PYTHON=…);\n'
+                printf '            set RELAY_PYTHON_SEND=0 only if shell is intentional.\n'
+            } >&2
+        else
+            printf 'tg-send.sh: using shell path (%s)\n' "$_PY_SEND_FALLBACK_REASON" >&2
+        fi
+    fi
+    emit_metric "tg-send" "python_fallback" "${_PY_SEND_FALLBACK_KIND}: ${_PY_SEND_FALLBACK_REASON}"
+fi
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/tts.sh" ]] && source "$BRIDGE_DIR/lib/tts.sh"
 declare -f tts_send_voice >/dev/null 2>&1 || tts_send_voice() { return 1; }  # lib missing -> unavailable shim
