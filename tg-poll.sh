@@ -58,9 +58,10 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Opt-in Python port (issue #27). Default remains this shell implementation.
-#   RELAY_PYTHON_POLL=1  bash tg-poll.sh
-if [[ "${RELAY_PYTHON_POLL:-0}" == "1" ]]; then
+# Python poll is the **default** (epic #18 / issue #67). Opt out to shell:
+#   RELAY_PYTHON_POLL=0  bash tg-poll.sh
+# Falls back to this shell body if Python/package is unavailable.
+if [[ "${RELAY_PYTHON_POLL:-1}" != "0" ]]; then
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }

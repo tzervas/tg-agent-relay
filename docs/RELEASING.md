@@ -4,36 +4,37 @@
 
 **This workstation is the source of truth for quality gates and releases.**
 
-### Python package cutover (optional — epic #18)
+### Python package path (default — epic #18 / #67)
 
-Shell remains the **default** live path so existing installs never surprise-break.
-Python ports are production-ready; flip when ready:
+**Python is the default** for send and poll when `tg_agent_relay` imports cleanly.
+Shell implementations remain as fallback and explicit opt-out:
 
 ```bash
-# Per-process (hooks / systemd / Monitor unit environment):
-export RELAY_PYTHON_SEND=1   # tg-send.sh → python -m tg_agent_relay.send
-export RELAY_PYTHON_POLL=1   # tg-poll.sh → python -m tg_agent_relay.poll
+# Default (no env needed): tg-send.sh / tg-poll.sh → Python modules
+bash tg-send.sh "hello"
+bash tg-poll.sh
 
-# Or entry points (same code):
+# Force legacy shell paths:
+export RELAY_PYTHON_SEND=0
+export RELAY_PYTHON_POLL=0
+
+# Or call entry points directly:
 uv run tg-relay-send "hello"
 uv run tg-relay-poll
 
-# Claude hooks: provider_hook is preferred when Python is available.
+# Claude hooks: provider_hook preferred when Python works.
 # Force shell formatting: CLAUDE_USE_PROVIDER_HOOK=0
 ```
 
-**Recommended live cutover checklist**
+**Deploy checklist**
 
 1. `bash scripts/local-ci.sh` green on the deploy commit.
 2. Deploy: `bash scripts/deploy-local.sh` (preserves `.env` / `relay.toml`).
-3. Export `RELAY_PYTHON_SEND=1` / `RELAY_PYTHON_POLL=1` in the process that
-   runs hooks and the poll Monitor (systemd `Environment=`, shell profile, or
-   a small wrapper next to the bridge).
+3. Ensure deploy tree includes `tg_agent_relay/` + `providers/` and a working
+   Python 3.14 (uv `.venv` or `lib/python.sh` resolution).
 4. Smoke: one hook ping + one Telegram inbound message.
-5. Confirm code docs still send when `[code_highlight] mode = "html-doc"`.
-
-Optional: put the two exports in a gitignored `~/.claude/telegram-bridge/.env.python`
-and `source` it from your Monitor unit — do **not** commit secrets.
+5. Confirm code docs when `[code_highlight] mode = "html-doc"`.
+6. Only set `RELAY_PYTHON_SEND=0` / `RELAY_PYTHON_POLL=0` if you must bisect.
 
 | Step | Where | Command |
 |---|---|---|

@@ -303,7 +303,7 @@ with ANY agent using ANY harness, maximum portability + usability.
 
 | Epic | Issue | Notes |
 |---|---|---|
-| Shell → **Python 3.14** cutover | [#18](https://github.com/tzervas/tg-agent-relay/issues/18) | Ports landed; opt-in env; open until live soak / default |
+| Shell → **Python 3.14** | [#18](https://github.com/tzervas/tg-agent-relay/issues/18) | **Python default** (#67); shell via `RELAY_PYTHON_*=0` |
 | Universal provider extensions | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) | **Closed** (+ OpenAI/ADK later) |
 | Product polish | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) | **Closed** |
 | Quality / CI / swarm packaging | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) | **Closed** (local-ci primary) |
@@ -316,7 +316,7 @@ with ANY agent using ANY harness, maximum portability + usability.
 - Voice `spoken_mode` short/full + collapse refs
 - Hybrid context exclusive vision/text (`docs/context/`)
 - Usage recursive Claude + multi windows + wider charts
-- Python **3.14** package ports (send/poll/format/routing/tts) + opt-in cutover
+- Python **3.14** package ports (send/poll/format/routing/tts) — **default** live path (#67)
 - MCP extension bus + local-ci / swarm workflow docs
 
 ### Later / backlog ideas

@@ -127,9 +127,10 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Opt-in Python port (issue #26). Default remains this shell implementation.
-#   RELAY_PYTHON_SEND=1  bash tg-send.sh "hello"
-if [[ "${RELAY_PYTHON_SEND:-0}" == "1" ]]; then
+# Python send is the **default** (epic #18 / issue #67). Opt out to shell:
+#   RELAY_PYTHON_SEND=0  bash tg-send.sh "hello"
+# Falls back to this shell body if Python/package is unavailable.
+if [[ "${RELAY_PYTHON_SEND:-1}" != "0" ]]; then
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }

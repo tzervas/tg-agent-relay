@@ -8,20 +8,24 @@ see the README's repo/directory note) — no other repo is touched.
 
 ### Python version & tooling
 
-#### Python cutover (optional)
+#### Python is the default send/poll path
 
-After deploy, you can run the Python send/poll ports without changing
-install paths:
+`tg-send.sh` and `tg-poll.sh` **exec the Python package by default** when
+`tg_agent_relay` is importable. Shell bodies remain as fallback.
 
 ```bash
-export RELAY_PYTHON_SEND=1   # thin exec from tg-send.sh
-export RELAY_PYTHON_POLL=1   # thin exec from tg-poll.sh
+# Default — no env required
+bash tg-send.sh "hello"
+
+# Force legacy shell (debug / bisect only)
+export RELAY_PYTHON_SEND=0
+export RELAY_PYTHON_POLL=0
 ```
 
 Claude Code hooks prefer `providers/claude` via Python when available
 (`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).
 
-Full checklist: [`docs/RELEASING.md`](docs/RELEASING.md) § Python package cutover.
+Details: [`docs/RELEASING.md`](docs/RELEASING.md) § Python package path.
 
 **Preferred: Python 3.14** (see `.python-version`). Use **uv** for the
 project env and **ruff** for lint/format:

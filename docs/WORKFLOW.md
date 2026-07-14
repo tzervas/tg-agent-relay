@@ -173,11 +173,11 @@ uv run ruff format <paths>
 |---|---|
 | Integration branch (as of handoff) | `fix/tts-voice-full-message-v0.5.3` |
 | Python ports | Landed (send/poll/format/routing/tts/hooks/…) |
-| Live default | **Shell** (`tg-send.sh` / `tg-poll.sh`) |
-| Opt-in Python | `RELAY_PYTHON_SEND=1` · `RELAY_PYTHON_POLL=1` |
+| Live default | **Python** via `tg-send.sh` / `tg-poll.sh` exec (package import) |
+| Opt-out shell | `RELAY_PYTHON_SEND=0` · `RELAY_PYTHON_POLL=0` |
 | Claude hooks | Prefer `provider_hook` when Python works (`CLAUDE_USE_PROVIDER_HOOK=0` to force shell) |
 
-Cutover checklist: [RELEASING.md](RELEASING.md) § Python package cutover.
+Details: [RELEASING.md](RELEASING.md) § Python package path.
 
 ---
 

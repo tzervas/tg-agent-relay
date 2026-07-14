@@ -9,7 +9,7 @@ Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md
 
 | Epic | Status |
 |---:|---|
-| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Near done** — #57–#59 closed; open until live soak / default cutover decision |
+| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Python default** (#67) — shell opt-out via `RELAY_PYTHON_*=0` |
 | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) Providers | **Closed** (+ OpenAI/ADK plug-and-play post-close) |
 | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) Product polish | **Closed** |
 | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) Quality / swarm | **Closed** |
@@ -23,21 +23,25 @@ Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md
 | 57 | Python send code_highlight sendDocument | **Closed** |
 | 58 | Cutover docs + deploy notes | **Closed** |
 | 59 | Claude adapter default provider_hook | **Closed** |
+| 67 | **Python send/poll default** (shell opt-out) | **Landing** |
 | 41 | Rust spike | Deferred P2 |
 
 ## Package surface
 
 `format_api` · `routing` · `send` (+ highlight_docs) · `poll` · `tts` · `hooks` · `mcp_stub` · `extensions` · `adk_bridge` · providers/*
 
-## Cutover
+## Runtime path
 
 ```bash
-export RELAY_PYTHON_SEND=1 RELAY_PYTHON_POLL=1
+# Default: Python send/poll (falls back to shell if import fails)
 bash scripts/local-ci.sh
 bash scripts/deploy-local.sh
+
+# Opt out to shell only if needed:
+# export RELAY_PYTHON_SEND=0 RELAY_PYTHON_POLL=0
 ```
 
-Shell remains default until these env flags are set (see RELEASING.md).
+See RELEASING.md § Python package path.
 
 
 ## Grok hooks epic (#60)
