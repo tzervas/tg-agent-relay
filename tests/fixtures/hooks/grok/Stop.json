@@ -1,6 +1,9 @@
 {
   "hookEventName": "stop",
   "message": "all green",
+  "last_assistant_message": "all green",
   "sessionId": "abc",
-  "cwd": "/tmp/proj"
+  "cwd": "/tmp/proj",
+  "stop_reason": "end_turn"
 }
+
