@@ -7,7 +7,7 @@ Join: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · 
 
 | Epic | Status |
 |---:|---|
-| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Near done** — ports + opt-in cutover; remaining children #57–#59 |
+| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Near done** — #57–#59 closed; open until live soak / default cutover decision |
 | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) Providers | **Closed** (+ OpenAI/ADK plug-and-play post-close) |
 | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) Product polish | **Closed** |
 | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) Quality / swarm | **Closed** |
