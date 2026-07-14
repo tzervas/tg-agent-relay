@@ -2478,6 +2478,13 @@ if command -v python3 >/dev/null 2>&1; then
     else
         fail "relay_python tests/test_providers_claude.py" "$PY_OUT"
     fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_plugplay.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_providers_plugplay.py"
+    else
+        fail "relay_python tests/test_providers_plugplay.py" "$PY_OUT"
+    fi
 else
     printf 'SKIP  python3 not installed - skipping provider unit tests\n'
 fi

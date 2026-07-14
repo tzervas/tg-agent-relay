@@ -874,6 +874,38 @@
 # tag = "llamacpp"
 # prefixes = ["@llama", "/llama", "llamacpp:"]
 #
+# --- OpenAI / ChatGPT / OpenAI-compatible self-hosted (docs/PROVIDERS.md) ---
+# [backends.openai]
+# type = "openai"
+# delivery = "cmd"
+# model = "gpt-4o-mini"
+# tag = "openai"
+# prefixes = ["@openai", "@chatgpt", "openai:", "chatgpt:"]
+# # OPENAI_API_KEY must be in the poll environment
+# cmd = ["bash", "-lc", "openai api chat.completions.create -m \"$RELAY_MODEL\" -g user \"$RELAY_TEXT\" | RELAY_BACKEND=openai \"$HOME/.claude/telegram-bridge/relay-notify.sh\" --raw"]
+#
+# [backends.local]
+# type = "openai-compat"   # vLLM / LM Studio / LiteLLM / LocalAI / OpenRouter…
+# delivery = "cmd"
+# model = "local-model"
+# tag = "local"
+# prefixes = ["@local", "@oai", "oai:"]
+# # OPENAI_BASE_URL=http://127.0.0.1:1234/v1
+# cmd = ["bash", "-lc", "curl -sS \"${OPENAI_BASE_URL:-http://127.0.0.1:1234/v1}/chat/completions\" -H 'Content-Type: application/json' -H \"Authorization: Bearer ${OPENAI_API_KEY:-lm-studio}\" -d \"$(jq -n --arg m \\\"$RELAY_MODEL\\\" --arg p \\\"$RELAY_TEXT\\\" '{model:$m,messages:[{role:\\\"user\\\",content:$p}]}')\" | jq -r '.choices[0].message.content // empty' | RELAY_BACKEND=local \"$HOME/.claude/telegram-bridge/relay-notify.sh\" --raw"]
+#
+# [backends.gemini]
+# type = "gemini"
+# delivery = "cmd"
+# model = "gemini-2.0-flash"
+# prefixes = ["@gemini", "gemini:"]
+# # GEMINI_API_KEY in poll env — see: python lib/provider_catalog.py presets gemini
+#
+# [backends.aider]
+# type = "aider"
+# delivery = "cmd"
+# prefixes = ["@aider", "aider:"]
+# # runs in RELAY_CWD from project worktree
+#
 # [[chats]]
 # chat_id = -1001111111111
 # backend = "claude"

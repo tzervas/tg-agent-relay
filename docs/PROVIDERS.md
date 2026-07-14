@@ -1,31 +1,137 @@
-# Provider extensions
+# Provider extensions (plug-and-play)
 
-Universal **platform / provider / model** support is implemented as a
-registry of provider extensions under [`providers/`](../providers/).
+Universal **platform / provider / model** support is a registry under
+[`providers/`](../providers/). **Grok** and **Claude Code** are the full hook
+harnesses; **OpenAI / ChatGPT**, **Gemini**, **Ollama**, **Aider**, and any
+OpenAI-compatible self-hosted stack plug in as **delivery backends** (and
+optional usage adapters) without changing the relay core.
 
-Each extension can contribute:
+## Two integration shapes
 
-| Capability | How |
+| Shape | Who | What the relay does |
+|---|---|---|
+| **Hook harness** | Claude Code, Grok Build | Lifecycle events → Telegram (status pings, TTS) |
+| **Delivery backend** | OpenAI, Ollama, vLLM, LM Studio, Gemini, Aider, … | Telegram message → agent/CLI/HTTP → optional reply via `relay-notify` |
+
+Most “ChatGPT / self-hosted model” products are **delivery** only — they have
+no Claude/Grok-style global hook bus. That is expected and supported.
+
+## Capabilities
+
+| Capability | Meaning |
 |---|---|
-| **Hooks** | Event catalog, name normalization, payload → summary formatting |
-| **Usage** | Transcript collector registered as a `usage_ingest` source |
-| **Routing** | `backend_id` for multi-backend rooms / tags |
-| **Model inference** | `model_prefixes` → `provider_label` (anthropic, xai, ollama, …) |
+| `hooks` | Event catalog + `format_hook` |
+| `usage` | `usage_collect` for the dashboard |
+| `delivery` | Multi-backend routing (`[backends.*]`) |
+| `openai_compat` | Speaks OpenAI Chat Completions HTTP (vLLM, LM Studio, OpenRouter, …) |
 
 ## Registered providers
 
-| id | Platform | Hooks | Usage source | Config namespace |
-|---|---|---|---|---|
-| `grok` | Grok Build / Grok CLI | **14/14** documented | `grok` | `[grok.*]` |
-| `claude` | Claude Code | **30/30** documented (`providers/claude/hooks.py`; shell adapter still default) | `claude-code` | `[claude_code.*]` |
-| `ollama` | Ollama (+ llama.cpp backends) | (delivery via backends; hooks N/A) | `ollama` (stub — no local logs) | `[ollama]` / `[backends.*]` |
-| `generic` | Free-text / label | via `relay-notify` | — | `[generic]` |
+| id | Platform | Caps | Config |
+|---|---|---|---|
+| `grok` | Grok Build | hooks + usage + delivery | `[grok.*]` |
+| `claude` | Claude Code | hooks + usage + delivery | `[claude_code.*]` |
+| `openai` | ChatGPT API + OpenAI-compatible self-host | delivery + usage + openai_compat | `[openai]` / `[backends.*]` |
+| `ollama` | Ollama + llama.cpp | delivery + usage | `[ollama]` / `[backends.*]` |
+| `gemini` | Google Gemini API | delivery | `[gemini]` |
+| `aider` | Aider coding agent | delivery | `[aider]` |
+| `generic` | Free-text / label | delivery | `[generic]` |
 
 ```bash
-# Prefer python3.14 (see lib/python.sh); or: source lib/python.sh && relay_python …
-python3.14 lib/provider_catalog.py list   # or python3 if 3.14 not on PATH
-python3.14 lib/provider_catalog.py events grok
-python3.14 lib/provider_catalog.py usage-sources
+source lib/python.sh   # or: uv run python
+relay_python lib/provider_catalog.py list
+relay_python lib/provider_catalog.py capabilities
+relay_python lib/provider_catalog.py presets openai
+relay_python lib/provider_catalog.py backend-type vllm
+relay_python lib/provider_catalog.py usage-sources
+```
+
+## Plug-and-play: add a platform in minutes
+
+```bash
+# Scaffold
+bash scripts/new-provider.sh mytool --with-usage   # optional --with-hooks
+
+# Edit providers/mytool/__init__.py (prefixes, cmd preset, model_prefixes)
+# Auto-discovered — no need to edit providers/__init__.py for new folders
+
+relay_python lib/provider_catalog.py list
+# Copy a delivery preset into relay.toml [backends.mytool]
+```
+
+1. Create `providers/<id>/` with `register(Provider(...))`.
+2. Optional `hooks.py` / `usage.py`.
+3. Drop-in discovery via `discover_and_import()` (already called on import).
+4. Add `[backends.<id>]` from a **delivery preset** (or invent your own `cmd`).
+5. Route with prefixes (`@mytool …`) or sticky `[[chats]]` / `/project bind`.
+
+No core relay changes required for a new delivery platform.
+
+## OpenAI / ChatGPT / OpenAI-compatible (self-hosted)
+
+Provider id: **`openai`**. Backend types owned:
+
+`openai`, `chatgpt`, `openai-compat`, `openrouter`, `lmstudio`, `vllm`,
+`litellm`, `localai`, `azure-openai`.
+
+### ChatGPT API (cloud)
+
+```toml
+[routing]
+default_backend = "openai"
+
+[backends.openai]
+type = "openai"
+delivery = "cmd"
+model = "gpt-4o-mini"
+tag = "openai"
+prefixes = ["@openai", "@chatgpt", "openai:", "chatgpt:"]
+# Requires OPENAI_API_KEY in the poll process environment
+cmd = ["bash", "-lc", "openai api chat.completions.create -m \"$RELAY_MODEL\" -g user \"$RELAY_TEXT\" | RELAY_BACKEND=openai \"$HOME/.claude/telegram-bridge/relay-notify.sh\" --raw"]
+```
+
+### Self-hosted / any OpenAI-compatible server
+
+Works for **vLLM, LM Studio, LiteLLM, LocalAI, Ollama’s OpenAI shim,
+text-generation-webui, OpenRouter**, etc.:
+
+```toml
+[backends.local]
+type = "openai-compat"    # or lmstudio / vllm / openrouter
+delivery = "cmd"
+model = "local-model"
+tag = "local"
+prefixes = ["@local", "@oai"]
+# OPENAI_BASE_URL=http://127.0.0.1:1234/v1  OPENAI_API_KEY=lm-studio
+cmd = [
+  "bash", "-lc",
+  '''curl -sS "${OPENAI_BASE_URL:-http://127.0.0.1:1234/v1}/chat/completions" \
+       -H "Content-Type: application/json" \
+       -H "Authorization: Bearer ${OPENAI_API_KEY:-lm-studio}" \
+       -d "$(jq -n --arg m "${RELAY_MODEL:-local-model}" --arg p "$RELAY_TEXT" \
+            '{model:$m,messages:[{role:"user",content:$p}]}')" \
+     | jq -r '.choices[0].message.content // empty' \
+     | RELAY_BACKEND=local "$HOME/.claude/telegram-bridge/relay-notify.sh" --raw'''
+]
+```
+
+List built-in presets:
+
+```bash
+relay_python lib/provider_catalog.py presets openai
+```
+
+**Usage:** cloud token dashboards are not scraped. `source = "openai"` is a
+known adapter that **honestly skips** until a local export/Codex log parser
+exists (same pattern as Ollama).
+
+## Gemini / Aider
+
+Same delivery model — see `providers/gemini` and `providers/aider` presets:
+
+```bash
+relay_python lib/provider_catalog.py presets gemini
+relay_python lib/provider_catalog.py presets aider
 ```
 
 ## Grok Build (complete)

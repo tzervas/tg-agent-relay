@@ -107,6 +107,7 @@ addopts = [
     "--ignore=tests/test_mcp_stub.py",
     "--ignore=tests/test_tts_package.py",
     "--ignore=tests/test_project_bind.py",
+    "--ignore=tests/test_providers_plugplay.py",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

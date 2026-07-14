@@ -21,6 +21,7 @@ SCRIPT_SUITES = [
     "test_poll.py",
     "test_tts_package.py",
     "test_project_bind.py",
+    "test_providers_plugplay.py",
 ]
 
 
