@@ -71,15 +71,31 @@ else
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    # Resolve interpreter once (exec cannot run shell functions).
+    if [[ -z "${RELAY_PYTHON:-}" ]] && declare -f relay_python_resolve >/dev/null 2>&1; then
+        relay_python_resolve || true
+    fi
+    _py_bin="${RELAY_PYTHON:-}"
+    if [[ -z "$_py_bin" ]]; then
+        if command -v python3.14 >/dev/null 2>&1; then
+            _py_bin=python3.14
+        elif command -v python3 >/dev/null 2>&1; then
+            _py_bin=python3
+        fi
+    fi
     _PY_POLL_ERR=""
     _PY_POLL_RC=0
-    _PY_POLL_ERR="$(relay_python -c "import tg_agent_relay.poll" 2>&1)" || _PY_POLL_RC=$?
+    if [[ -z "$_py_bin" ]]; then
+        _PY_POLL_RC=127
+        _PY_POLL_ERR="no Python interpreter found (need 3.14 preferred, ≥3.11)"
+    else
+        _PY_POLL_ERR="$("$_py_bin" -c "import tg_agent_relay.poll" 2>&1)" || _PY_POLL_RC=$?
+    fi
     if [[ "$_PY_POLL_RC" -eq 0 ]]; then
-        exec relay_python -m tg_agent_relay.poll "$@"
+        exec "$_py_bin" -m tg_agent_relay.poll "$@"
     fi
     _PY_POLL_FALLBACK_KIND="failed"
-    _py_bin="${RELAY_PYTHON:-python3}"
-    _PY_POLL_FALLBACK_REASON="import tg_agent_relay.poll failed (rc=${_PY_POLL_RC}, interpreter=${_py_bin})"
+    _PY_POLL_FALLBACK_REASON="import tg_agent_relay.poll failed (rc=${_PY_POLL_RC}, interpreter=${_py_bin:-none})"
     if [[ -n "$_PY_POLL_ERR" ]]; then
         _PY_POLL_FALLBACK_REASON="${_PY_POLL_FALLBACK_REASON}: $(printf '%s' "$_PY_POLL_ERR" | tr '\n' ' ' | head -c 400)"
     fi
