@@ -16,7 +16,7 @@ build/
 /target/
 **/*.rs.bk
 
-# Manual GitHub runner downloads (use gha-runner-ctl + Podman instead)
+# Manual GitHub runner downloads (use tzervas/gha-runner-ctl instead)
 /scripts/actions-runner/
 actions-runner-linux-*.tar.gz
 

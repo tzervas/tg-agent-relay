@@ -88,7 +88,7 @@ uv run tg-relay-poll
 | Merge feature PR into **`dev`** (issues stay open) | **Local** | `bash scripts/merge-pr.sh N` |
 | Promote **`dev` → `main`** (PR only; closes tasks/epic) | **GitHub PR** | `gh pr create --base main --head dev` |
 | Close issues for a **main** PR (if needed) | **Local** | `bash scripts/close-linked-issues.sh --pr N` |
-| Self-hosted runner (Podman) | **Local** | `bash scripts/self-hosted-runner/run-runner.sh start` |
+| Self-hosted runner (shared) | **Local** | [gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl) `listen` / `up` |
 | GitHub Actions `ci` / `release` / `gitleaks` | **Manual** | `workflow_dispatch` (optional) |
 | Auto-close on **main** merge | **Actions** | `close-issues-on-merge.yml` (self-hosted) |
 

@@ -1,116 +1,41 @@
-# One self-hosted runner (Podman + `gha-runner-ctl`)
+# Self-hosted runner (shared)
 
-Exactly **one** GitHub Actions runner for this repo. A small Rust controller
-listens for demand, registers with a short-lived token, and spins the container
-up/down. A **snapshot baseline** (image + seeded volume) keeps startup near
-zero — no runner download on the hot path.
+This repo does **not** vendor a runner controller. Use the standalone MIT project:
 
-## Pieces
+**[tzervas/gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)** · [v0.1.0](https://github.com/tzervas/gha-runner-ctl/releases/tag/v0.1.0)
 
-| Piece | Role |
-|---|---|
-| `scripts/self-hosted-runner/Containerfile` | Image with runner binary + deps |
-| Snapshot volume `tg-agent-relay-gha-runner-data` | Pre-seeded runner home |
-| `gha-runner-ctl` | Listen / prepare / up / down (one container only) |
+One Podman runner on the workstation; every consumer repo uses the same labels.
+GitHub queues jobs and dispatches them — you do not run one instance per repo.
 
-## Modes
-
-| Mode | Behavior |
-|---|---|
-| **`ephemeral`** (default) | Fresh registration each `up` (`config.sh --ephemeral`). Runner leaves GitHub after one job. Best for security. |
-| **`retain`** | Keep `.runner` on the volume; start/stop only. Use when you want the same registration across restarts. |
-
-## Auth (secure)
-
-Controller obtains a **registration token** (≈1h, single-use style) via:
-
-1. `GH_TOKEN` / `GITHUB_TOKEN`, or  
-2. `gh auth token` (preferred on this workstation)
-
-Fine-grained PAT needs **Administration: Read and write** on this repository
-(or classic `repo` admin). The short-lived registration token is written to a
-`0600` env-file, passed into Podman, then deleted — never printed.
-
-## Relation to GitHub’s “New self-hosted runner” UI
-
-GitHub shows the classic install steps (download tarball → `./config.sh` →
-`./run.sh`). We automate the same flow for **one** runner:
-
-| UI step | Our equivalent |
-|---|---|
-| Download `actions-runner-linux-x64-2.335.1.tar.gz` + sha256 | Baked into the Podman image (`Containerfile`, hash-checked) |
-| `./config.sh --url … --token …` | `gha-runner-ctl up` fetches a **short-lived** registration token via API and injects it (never commit UI tokens) |
-| `./run.sh` | Container entrypoint |
-| `runs-on: self-hosted` | Workflows use `[self-hosted, linux, x64]` |
-
-Do **not** paste one-off UI tokens into git, scripts, or chat. If a token was
-exposed, ignore it — the controller mints a new one each `up`.
-
-## Install (what you actually run)
-
-`config.sh` is **not** how you install our tooling. It is the official
-runner’s *internal* “register with GitHub” script, and `gha-runner-ctl`
-invokes that for you inside Podman.
+## Host (once)
 
 ```bash
-# Needs: cargo (MSRV 1.96), podman, gh (logged in)
-bash scripts/self-hosted-runner/install-ctl.sh
-export PATH="$HOME/.local/bin:$PATH"   # if not already
+git clone https://github.com/tzervas/gha-runner-ctl.git
+cd gha-runner-ctl
+bash packaging/install-ctl.sh
+export PATH="$HOME/.local/bin:$PATH"
 
-gh auth status                         # must be able to admin this repo
+gha-runner-ctl prepare
 
-gha-runner-ctl prepare                 # once: image + volume snapshot
-gha-runner-ctl up                      # register + start the one runner
-gha-runner-ctl status                  # expect status=online
+# Single-repo (personal account)
+GHA_SCOPE=repo GHA_REPO=tzervas/tg-agent-relay \
+  gha-runner-ctl listen --interval 30 --idle-secs 180
+
+# Shared across an organization (recommended for many repos)
+# GHA_SCOPE=org GHA_OWNER=your-org gha-runner-ctl listen --interval 30 --idle-secs 180
 ```
 
-Ignore `scripts/actions-runner/` if you downloaded the UI tarball by hand —
-that path is gitignored; the controller uses the Podman snapshot instead.
+## This repo’s workflows
 
-### Day-to-day
+Use labels that match the host:
 
-```bash
-gha-runner-ctl up
-gha-runner-ctl down
-gha-runner-ctl listen --interval 15 --idle-secs 120   # auto up/down
-# Optional: curl -X POST http://127.0.0.1:7099/wake   # with --wake-port 7099
+```yaml
+runs-on: [self-hosted, linux, x64, podman]
 ```
 
-Resources default to **5 CPUs / 8 GiB** (`--cpus` / `--memory` or `GHA_CPUS` /
-`GHA_MEMORY`).
+See `.github/workflows/close-issues-on-merge.yml` and [gha-runner-ctl docs/CONSUMERS.md](https://github.com/tzervas/gha-runner-ctl/blob/main/docs/CONSUMERS.md).
 
-## Why snapshot
+## License
 
-| Step | Cold | After `prepare` |
-|---|---|---|
-| Pull/build image | slow | local image |
-| Download runner tarball | slow | already on volume |
-| `config.sh` + `run.sh` | seconds | seconds (register only) |
-| `podman start` retained | — | sub-second process start |
-
-`prepare` copies runner binaries into the volume and stamps
-`.snapshot-baseline`. Ephemeral mode still re-registers (required for a clean
-one-shot runner) but does **not** re-download tooling.
-
-## Listen loop
-
-```
-poll GitHub for queued/in_progress jobs with labels self-hosted|podman
-  → demand & not running  →  up
-  → no demand & running & idle ≥ idle-secs  →  down
-```
-
-Only **one** container name is used (`gha-runner-tg-agent-relay`); a second
-instance is not started.
-
-## Workflows
-
-`close-issues-on-merge.yml` uses `runs-on: [self-hosted, linux, x64]` and only
-on **main** merges. Start `gha-runner-ctl listen` (or `up`) on the workstation
-when you expect a promote-to-main PR.
-
-## Not in scope
-
-- Multi-runner pools, autoscaling fleets, K8s ARC  
-- Org-wide runners  
-- Long-lived registration tokens in git or world-readable files  
+- `tg-agent-relay`: MIT  
+- `gha-runner-ctl`: MIT (cites GitHub’s `actions/runner`, also MIT)  

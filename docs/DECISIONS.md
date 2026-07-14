@@ -127,7 +127,8 @@ made the board lie (epics/tasks closed before work was on the default branch).
 - **Task issues** close only when `Fixes #N` (or commit trail) lands on **`main`**.
 - **Epics** stay open until a **final ship issue** with `Closes #<epic>` merges to **`main`**.
 - Merges into **`dev` never close issues**.
-- Optional Actions close job runs on **main** merges only, on a **Podman self-hosted** runner.
+- Optional Actions close job runs on **main** merges only, on a **shared**
+  self-hosted runner ([gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)).
 
 **Why.** Board state matches “on the release line”; epics reflect real completion;
 `dev` can soak without pretending the default branch is updated.
@@ -139,11 +140,13 @@ made the board lie (epics/tasks closed before work was on the default branch).
 | Close issues when merging to `dev` | Main lags; “closed” work not on default branch. |
 | PR every feature straight to `main` | No integration buffer; noisy default branch. |
 | Manual epic close without ship issue | Easy to forget; no auto-close hook on main. |
-| GitHub-hosted runners only | Fine for rare jobs; local Podman keeps close/CI fast and offline-capable. |
+| One self-hosted install per repo | Scales with repo count; one shared host is enough. |
 
 **Where.** [WORKFLOW.md](WORKFLOW.md) §0 · [RELEASING.md](RELEASING.md) ·
-[SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md) · `scripts/merge-pr.sh` ·
-`scripts/close-linked-issues.sh` · `.github/workflows/close-issues-on-merge.yml`.
+[SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md) ·
+[tzervas/gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl) ·
+`scripts/merge-pr.sh` · `scripts/close-linked-issues.sh` ·
+`.github/workflows/close-issues-on-merge.yml`.
 
 ---
 

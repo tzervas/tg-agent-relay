@@ -3,7 +3,7 @@
 Canonical process for **tg-agent-relay** and related work.  
 Goal: **high velocity + high quality at lower cost** — small, exclusive-file agents do implementation; a thin orchestrator owns joins, board hygiene, and merges.
 
-Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md)
+Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md) · [gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)
 
 ---
 
@@ -78,7 +78,7 @@ bash scripts/close-linked-issues.sh --pr N      # refuses non-main bases
 bash scripts/close-linked-issues.sh --pr N --dry-run
 ```
 
-Self-hosted Actions runner (Podman): [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md).
+Self-hosted Actions runner (one shared host): **[tzervas/gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)** · [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md).
 
 ---
 
