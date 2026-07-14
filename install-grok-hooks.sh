@@ -7,6 +7,13 @@
 # HookEvent.default_enabled; shell lib/grok-events.sh is only a fallback if
 # the catalog is unavailable).
 #
+# Optional per-event tool-name matchers come from
+# relay.toml [grok.<Event>].matcher (Grok-native regex). Empty or absent
+# matcher = match all (field omitted from the hooks JSON). When set, the
+# installer emits `"matcher": "<value>"` on that event's hook block.
+# Notify-only remains — this script never installs a PreToolUse deny/policy
+# engine.
+#
 # Writes ONLY ~/.grok/hooks/tg-agent-relay.json (or --hooks-file). Never
 # edits Claude settings, other files under ~/.grok/hooks/, or any path outside
 # the chosen hooks file. That file is fully owned by this script: the whole
@@ -30,6 +37,7 @@
 #   install-grok-hooks.sh --uninstall        # remove the managed hooks file
 #   install-grok-hooks.sh --dry-run          # print the plan, change nothing
 #   install-grok-hooks.sh --help
+#   RELAY_TOML=path/to/relay.toml install-grok-hooks.sh   # config override
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -60,7 +68,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h | --help)
-            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -81,7 +89,8 @@ fi
 
 HOOK_CMD="$BRIDGE_DIR/hook-notify-grok.sh"
 
-load_relay_config "$BRIDGE_DIR/relay.toml"
+# RELAY_TOML overrides the default bridge-root relay.toml (used by offline tests).
+load_relay_config "${RELAY_TOML:-$BRIDGE_DIR/relay.toml}"
 
 # All event names from provider catalog (providers/grok); shell array fallback.
 mapfile -t ALL_EVENTS < <(relay_python "$BRIDGE_DIR/lib/provider_catalog.py" events grok --names-only 2>/dev/null)
@@ -128,16 +137,40 @@ json_array_from_lines() {
 
 WANT_JSON="$(printf '%s\n' "${WANT_EVENTS[@]}" | json_array_from_lines)"
 
+# Optional per-event matchers from [grok.<Event>].matcher.
+# Empty/absent = match all (omit the field). Non-empty is emitted as-is
+# into the Grok hooks JSON (regex over tool name / notification type).
+MATCHERS_JSON="{}"
+MATCHER_REPORT=()
+for ev in "${WANT_EVENTS[@]}"; do
+    m="$(cfg_get ".grok.\"$ev\".matcher" "")"
+    if [[ -n "$m" ]]; then
+        MATCHERS_JSON="$(jq -nc --argjson cur "$MATCHERS_JSON" --arg ev "$ev" --arg m "$m" \
+            '$cur + {($ev): $m}')"
+        MATCHER_REPORT+=("$ev=$m")
+    fi
+done
+
 # Desired document: only this bridge's command, only enabled events.
 # Full ownership of the managed file (unlike Claude settings merge).
+# When a matcher is set for an event, include it on that event's block;
+# otherwise omit the key so Grok matches everything (current behavior).
 NEW="$(jq -n \
     --arg cmd "$HOOK_CMD" \
     --argjson events "$WANT_JSON" \
+    --argjson matchers "$MATCHERS_JSON" \
     '{
       description: "TG Agent Relay — Grok Build provider (install-grok-hooks.sh)",
-      hooks: (reduce $events[] as $ev ({}; .[$ev] = [{
-        hooks: [{type: "command", command: $cmd, timeout: 10}]
-      }]))
+      hooks: (reduce $events[] as $ev ({}; .[$ev] = [
+        (
+          (if ($matchers | has($ev) and ($matchers[$ev] | type == "string")
+               and ($matchers[$ev] | length) > 0)
+           then {matcher: $matchers[$ev]}
+           else {}
+           end)
+          + {hooks: [{type: "command", command: $cmd, timeout: 10}]}
+        )
+      ]))
     }')"
 
 if [[ -z "$NEW" ]] || ! printf '%s' "$NEW" | jq -e . >/dev/null 2>&1; then
@@ -192,6 +225,11 @@ if (( ${#WANT_EVENTS[@]} > 0 )); then
     printf '  events enabled: %s\n' "${WANT_EVENTS[*]}"
 else
     printf '  events enabled: (none)\n'
+fi
+if (( ${#MATCHER_REPORT[@]} > 0 )); then
+    printf '  matchers: %s\n' "${MATCHER_REPORT[*]}"
+else
+    printf '  matchers: (none — match all for enabled events)\n'
 fi
 if (( CURRENT_EXISTS == 1 )); then
     printf '  action: rewrite managed hooks file\n'
