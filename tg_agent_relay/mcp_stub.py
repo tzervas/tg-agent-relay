@@ -137,6 +137,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+
 def _core_tool_names() -> frozenset[str]:
     return frozenset(t["name"] for t in TOOL_DEFINITIONS)
 
@@ -235,9 +236,7 @@ class McpFacade:
         ensure_builtin_extensions()
         if name == "relay_call_extension" or get_extension(name) is not None:
             return dispatch_mcp_extension_tool(name, args)
-        known = _core_tool_names() | {
-            t["name"] for t in self.list_tools()
-        }
+        known = _core_tool_names() | {t["name"] for t in self.list_tools()}
         if name not in known:
             return _text_content(f"unknown tool: {name!r}", is_error=True)
         return _text_content(f"unhandled tool: {name!r}", is_error=True)

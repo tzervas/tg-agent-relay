@@ -24,7 +24,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from tg_agent_relay import config, routing  # noqa: E402
+from tg_agent_relay import config, routing
 
 PASS = FAIL = 0
 
@@ -116,9 +116,7 @@ project = "topic-static"
     eq("corrupt overlay: still sticky project", "from-toml", r_bad.project)
 
     # Empty chats array overlay → no replacements, static kept
-    (chats_d / "bindings.json").write_text(
-        json.dumps({"chats": []}), encoding="utf-8"
-    )
+    (chats_d / "bindings.json").write_text(json.dumps({"chats": []}), encoding="utf-8")
     cfg_empty = config.load_config(toml, bridge_dir=bridge)
     eq("empty overlay chats: static intact", 2, len(cfg_empty.get("chats") or []))
 
@@ -201,7 +199,11 @@ project = "topic-static"
         True,
         r_wrong_thread.match_kind in ("default", "prefix", "legacy", "none"),
     )
-    eq("wrong thread: not mycelium sticky", True, r_wrong_thread.project != "mycelium" or r_wrong_thread.match_kind != "chat")
+    eq(
+        "wrong thread: not mycelium sticky",
+        True,
+        r_wrong_thread.project != "mycelium" or r_wrong_thread.match_kind != "chat",
+    )
 
     # Negative chat_id type coercion (int in overlay, string query)
     r_neg = routing.resolve(cfg, "-1001234567890", "7", "x")

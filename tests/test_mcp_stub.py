@@ -68,7 +68,7 @@ for core in ("relay_send", "relay_list_projects", "relay_usage_summary"):
 # Extension bus (no model) tools
 true("list_tools includes relay_call_extension", "relay_call_extension" in names)
 true("list_tools includes relay_ext_list", "relay_ext_list" in names)
-true("TOOL_NAMES is core-only subset", TOOL_NAMES <= names)
+true("TOOL_NAMES is core-only subset", names >= TOOL_NAMES)
 true("list_tools has more than core 3", len(tools) >= 3)
 
 for t in tools:

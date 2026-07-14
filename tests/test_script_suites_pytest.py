@@ -4,6 +4,7 @@ These modules use a PASS/FAIL harness and raise SystemExit when executed as
 scripts. Under pytest we invoke them as subprocesses so import-time execution
 does not abort collection.
 """
+
 from __future__ import annotations
 
 import subprocess
