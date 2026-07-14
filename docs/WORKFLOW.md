@@ -3,7 +3,7 @@
 Canonical process for **tg-agent-relay** and related work.  
 Goal: **high velocity + high quality at lower cost** — small, exclusive-file agents do implementation; a thin orchestrator owns joins, board hygiene, and merges.
 
-Related: [EPICS.md](EPICS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md)
+Related: [EPICS.md](EPICS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md)
 
 ---
 
