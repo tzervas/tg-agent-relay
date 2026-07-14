@@ -281,24 +281,30 @@ Promote `dev` → `main` when cutting a release or when stable work should land 
 
 | # | Title | Lane | Next action |
 |---:|---|---|---|
-| **18** | Epic: Shell → Python | orchestrator | Live soak with env flags; then decide default cutover issue or close epic |
-| **22** | Epic: Rust hotspots | P2 | After #41 |
-| **41** | Rust spike benchmarks | Build swarm M | Optional; spawn when wanted |
+| **22** | Epic: Optional Rust hotspots | P2 | Optional; only if benchmarks wanted |
+| **41** | Rust spike benchmarks | Build swarm M | Deferred |
 
-Providers / product / quality epics (#19–#21) are **closed**. Further provider/ADK/MCP work: open new `swarm-ready` children rather than reopening closed epics unless the epic success criteria truly regress.
+Providers / product / Grok hooks epics are **closed** on `dev`. Promote `dev` → `main` when ready to ship the post-v0.6.1 line to the default branch.
+
+Related standalone repos:
+
+| Repo | Role |
+|---|---|
+| [gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl) | One shared self-hosted runner (**v0.1.1** released) |
+| [agent-harness](https://github.com/tzervas/agent-harness) | Universal orchestrator + swarms scaffold |
 
 ---
 
-## 9. Separate universal harness (future repo)
+## 9. Separate universal harness
 
-**Not** this repo’s runtime. Planned as **`tzervas/…` only** (e.g. `agent-harness`):
+**Not** this repo’s runtime. Live scaffold: **[tzervas/agent-harness](https://github.com/tzervas/agent-harness)** (MIT).
 
-- Extends **tg-agent-relay** (Telegram, providers, MCP server, cutover) as a dependency/integration.
-- Composes existing **tzervas** pieces where useful: `agent-mcp`, `mcp-vacuum`, `claude-usage-boilerplate`, `aphelion-agent-security-framework`, `agentic-dev-boilerplate`, mycelium-style CONTRIBUTING.
-- **Average Joe’s Labs (AJL)**: read / evaluate only; if useful, **fork to `tzervas`**, work on the fork, PR back with conventional commits. Never push direct to AJL as write base.
-- Swarm implementers: **Grok Build** lane; flagship only for architecture ADRs.
+- Extends **tg-agent-relay** as a dependency/integration (Telegram, providers, MCP).
+- Composes **tzervas** pieces where useful (`agent-mcp`, etc.).
+- **AJL**: read / evaluate only; fork to `tzervas` if useful.
+- Swarms: **Grok Build** lane; shared runner labels via gha-runner-ctl.
 
-Do not land harness core inside `tg-agent-relay` beyond the join surfaces already documented (`providers/`, `mcp_stub`, `extensions`, `adk_bridge`).
+Do not land harness core inside `tg-agent-relay` beyond existing join surfaces.
 
 ---
 
