@@ -13,18 +13,21 @@ Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md
 | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) Providers | **Closed** (+ OpenAI/ADK plug-and-play post-close) |
 | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) Product polish | **Closed** |
 | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) Quality / swarm | **Closed** |
-| [#22](https://github.com/tzervas/tg-agent-relay/issues/22) Rust hotspots | Open — #41 optional |
-| [#60](https://github.com/tzervas/tg-agent-relay/issues/60) **Grok hooks ≥ Claude quality** | **Open** — children #61–#66 · [GROK_HOOKS.md](GROK_HOOKS.md) |
+| [#22](https://github.com/tzervas/tg-agent-relay/issues/22) Rust hotspots | Open — #41 optional / deferred |
+| [#60](https://github.com/tzervas/tg-agent-relay/issues/60) Grok hooks ≥ Claude quality | **Closed** — children #61–#66 · [GROK_HOOKS.md](GROK_HOOKS.md) |
 
-## Active children (#18)
+## Closed recently (#18 / #60)
 
 | # | Task | Status |
 |---:|---|---|
-| 57 | Python send code_highlight sendDocument | **Closed** |
-| 58 | Cutover docs + deploy notes | **Closed** |
-| 59 | Claude adapter default provider_hook | **Closed** |
-| 67 | **Python send/poll default** (shell opt-out) | **Closed** |
-| 41 | Rust spike | Deferred P2 |
+| 57–59, 67 | Python cutover / defaults | **Closed** |
+| 61 | Install Claude-parity dry-run/no-op | **Closed** (PR #70) |
+| 62 | format_hook richer summaries | **Closed** (PR #71) |
+| 63 | Fixture + adapter e2e | **Closed** (PR #74) |
+| 64 | Optional matchers in install | **Closed** (PR #73) |
+| 65 | Quiet vs full operator docs | **Closed** (PR #69) |
+| 66 | Live smoke + metrics | **Closed** (PR #72) |
+| 41 | Rust spike | Deferred P2 (epic #22) |
 
 ## Package surface
 
@@ -41,18 +44,12 @@ bash scripts/deploy-local.sh
 # export RELAY_PYTHON_SEND=0 RELAY_PYTHON_POLL=0
 ```
 
-See RELEASING.md § Python package path.
+See RELEASING.md § Python package path · decisions: [DECISIONS.md](DECISIONS.md).
 
+## Remaining open (optional)
 
-## Grok hooks epic (#60)
+| # | Task | Notes |
+|---:|---|---|
+| 22 / 41 | Rust hotspots / spike | Only if benchmarks wanted; not blocking product |
 
-| # | Task | Size | Priority |
-|---:|---|---|---|
-| 61 | Install Claude-parity idempotent/dry-run | M | P0 |
-| 62 | format_hook richer summaries | M | P0 |
-| 63 | Fixture + adapter e2e all 14 | M | P1 |
-| 64 | Optional matcher in install | S | P2 |
-| 65 | SETUP/PROVIDERS quiet vs full profiles | S | P1 |
-| 66 | Live smoke checklist + metrics | S | P2 |
-
-Spawn with **Grok Build** agents (see WORKFLOW.md cost lanes). Gap analysis: [GROK_HOOKS.md](GROK_HOOKS.md).
+Grok operator guide: [GROK_HOOKS.md](GROK_HOOKS.md) · [PROVIDERS.md](PROVIDERS.md).
