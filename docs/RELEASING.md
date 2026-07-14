@@ -219,11 +219,10 @@ bash scripts/local-ci.sh --quick  # ruff + rust only
 
 ---
 
-## Suggested post-v0.6.0 work
+## After v0.6.1
 
-Ship patch/minor from this branch when local-ci is green:
+- Optional: Rust spike (#41) only if benchmarks are wanted
+- Live soak of Python default + Grok hooks after deploy
+- Next in-progress version: `0.6.2-dev` after the cut
 
-- Package foundation + Wave 1 swarm merges (routing, usage registry, docs, CI-as-manual)
-- Ongoing Python ports (#25 format, #26 send, #27 poll, …)
-
-Until the next cut keep `VERSION=0.6.1-dev` and deploy with `deploy-local.sh` as needed.
+Deploy with `bash scripts/deploy-local.sh --ref v0.6.1` (or current tip while on `-dev`).
