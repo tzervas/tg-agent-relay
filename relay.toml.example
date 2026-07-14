@@ -767,6 +767,10 @@
 # Operator guide: docs/PROVIDERS.md (Grok section) + SETUP.md step 5
 # Usage source: [usage] source = "grok" (or "multi")
 #
+# Optional matchers: [grok.<Event>].matcher = "regex" filters which tool
+# names (or notification types) fire that event. Empty/absent = match all.
+# Example: [grok.PreToolUse] enabled = true; matcher = "Shell|Bash"
+#
 # --- Quiet vs full-fidelity profiles ---------------------------------------
 # QUIET (shipped defaults — leave unset, or keep only these five enabled):
 #   PostToolUseFailure, Stop, StopFailure, Notification, SubagentStop
@@ -807,11 +811,19 @@
 # [grok.PreToolUse]
 # enabled = false  # Tool about to run (notify-only; high volume — opt-in only)
 # prefix = "🔧"
+# # Optional Grok-native tool-name matcher (regex). Exact key: matcher
+# # Empty/absent = match all (field omitted from hooks JSON). When set,
+# # install-grok-hooks.sh emits "matcher" into ~/.grok/hooks/tg-agent-relay.json.
+# # Applies to tool events (Pre/PostToolUse*, PermissionDenied) and Notification
+# # (notification type). Lifecycle events (Stop, Session*, …) reject a matcher.
+# # Notify-only remains — no PreToolUse deny/policy engine in this bridge.
+# # matcher = "Shell|Bash"
 # # placeholders: {prefix} {event} {tool} {verb} {tool_input}
 #
 # [grok.PostToolUse]
 # enabled = false  # Tool completed successfully  (high volume — opt-in only)
 # prefix = "🔧"
+# # matcher = "Edit|Write|MultiEdit"   # optional; same semantics as PreToolUse
 # # placeholders: {prefix} {event} {tool} {verb} {tool_input}
 #
 # [grok.PostToolUseFailure]

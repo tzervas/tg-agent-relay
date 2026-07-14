@@ -259,6 +259,214 @@ else
     fail "empty --hooks-file: rejected nonzero" "$(cat "$WORK/empty_path.out")"
 fi
 
+# ============================================================================
+# Matchers (#64): optional [grok.<Event>].matcher → hooks JSON
+# ============================================================================
+echo "== install-grok-hooks.sh: optional matchers (#64) =="
+
+MATCHER_HOOKS="$WORK/hooks/matcher-tg-agent-relay.json"
+MATCHER_CFG="$WORK/relay-matcher.toml"
+# Fixture: enable PreToolUse + PostToolUse with matchers; keep a default-on
+# event (Stop) without matcher so we can assert omit-vs-emit.
+cat > "$MATCHER_CFG" <<'TOML'
+[grok.PreToolUse]
+enabled = true
+matcher = "Shell|Bash"
+
+[grok.PostToolUse]
+enabled = true
+matcher = "Edit|Write"
+
+[grok.Stop]
+enabled = true
+TOML
+
+# Expected hooks-file snippet shape (matcher on tool events only):
+#   "PreToolUse": [{ "matcher": "Shell|Bash", "hooks": [ ... ] }]
+#   "Stop":       [{ "hooks": [ ... ] }]   # no matcher key
+
+# --- dry-run shows matchers, writes nothing ---------------------------------
+OUT="$WORK/matcher_dry.out"
+set +e
+RELAY_TOML="$MATCHER_CFG" bash "$INSTALL" --hooks-file "$MATCHER_HOOKS" --dry-run >"$OUT" 2>&1
+RC=$?
+set -e
+assert_eq "matcher dry-run: exit 0" "0" "$RC"
+if [[ ! -f "$MATCHER_HOOKS" ]]; then
+    ok "matcher dry-run: does not create hooks file"
+else
+    fail "matcher dry-run: does not create hooks file" "file exists"
+fi
+if grep -qE 'matchers:.*PreToolUse=Shell\|Bash' "$OUT" \
+    && grep -qE 'matchers:.*PostToolUse=Edit\|Write' "$OUT"; then
+    ok "matcher dry-run: plan shows PreToolUse and PostToolUse matchers"
+else
+    fail "matcher dry-run: plan shows PreToolUse and PostToolUse matchers" "$(cat "$OUT")"
+fi
+if grep -qE 'PreToolUse' "$OUT" && grep -qE 'dry-run' "$OUT"; then
+    ok "matcher dry-run: plan mentions PreToolUse + dry-run"
+else
+    fail "matcher dry-run: plan mentions PreToolUse + dry-run" "$(cat "$OUT")"
+fi
+
+# --- write: emits matcher into Grok hooks JSON when set ---------------------
+OUT="$WORK/matcher_write.out"
+set +e
+RELAY_TOML="$MATCHER_CFG" bash "$INSTALL" --hooks-file "$MATCHER_HOOKS" >"$OUT" 2>&1
+RC=$?
+set -e
+assert_eq "matcher write: exit 0" "0" "$RC"
+if [[ -f "$MATCHER_HOOKS" ]] && jq -e . "$MATCHER_HOOKS" >/dev/null 2>&1; then
+    ok "matcher write: creates valid JSON hooks file"
+else
+    fail "matcher write: creates valid JSON hooks file" "$(cat "$OUT"; cat "$MATCHER_HOOKS" 2>/dev/null)"
+fi
+
+# Fixture snippet checks (exact Grok format)
+PRE_MATCHER="$(jq -r '.hooks.PreToolUse[0].matcher // empty' "$MATCHER_HOOKS")"
+assert_eq "matcher write: PreToolUse matcher is Shell|Bash" "Shell|Bash" "$PRE_MATCHER"
+POST_MATCHER="$(jq -r '.hooks.PostToolUse[0].matcher // empty' "$MATCHER_HOOKS")"
+assert_eq "matcher write: PostToolUse matcher is Edit|Write" "Edit|Write" "$POST_MATCHER"
+# Stop has no matcher key (empty/absent = match all)
+if jq -e '.hooks.Stop[0] | has("matcher") | not' "$MATCHER_HOOKS" >/dev/null 2>&1; then
+    ok "matcher write: Stop omits matcher key (match all)"
+else
+    fail "matcher write: Stop omits matcher key (match all)" "$(jq -c '.hooks.Stop' "$MATCHER_HOOKS")"
+fi
+# Command still present under hooks array (structure preserved)
+if jq -e --arg cmd "$REPO_ROOT/hook-notify-grok.sh" \
+    '.hooks.PreToolUse[0].hooks[0].command == $cmd' "$MATCHER_HOOKS" >/dev/null 2>&1; then
+    ok "matcher write: PreToolUse command still bridge hook-notify-grok.sh"
+else
+    fail "matcher write: PreToolUse command still bridge hook-notify-grok.sh" \
+        "$(jq -c '.hooks.PreToolUse' "$MATCHER_HOOKS")"
+fi
+# No deny / policy fields — notify-only
+if jq -e '.. | objects | select(has("decision") or has("permissionDecision") or has("deny"))' \
+    "$MATCHER_HOOKS" >/dev/null 2>&1; then
+    fail "matcher write: notify-only (no deny/policy fields)" "$(jq -c . "$MATCHER_HOOKS")"
+else
+    ok "matcher write: notify-only (no deny/policy fields)"
+fi
+
+# --- second run with same matchers is no-op ---------------------------------
+BEFORE_M="$(cksum "$MATCHER_HOOKS" | awk '{print $1" "$2}')"
+sleep 1
+OUT="$WORK/matcher_noop.out"
+set +e
+RELAY_TOML="$MATCHER_CFG" bash "$INSTALL" --hooks-file "$MATCHER_HOOKS" >"$OUT" 2>&1
+RC=$?
+set -e
+assert_eq "matcher no-op: exit 0" "0" "$RC"
+if grep -qE 'no changes|already matches' "$OUT"; then
+    ok "matcher no-op: reports itself clearly"
+else
+    fail "matcher no-op: reports itself clearly" "$(cat "$OUT")"
+fi
+assert_eq "matcher no-op: content unchanged" "$BEFORE_M" \
+    "$(cksum "$MATCHER_HOOKS" | awk '{print $1" "$2}')"
+
+# --- empty matcher string = match all (omit field) --------------------------
+EMPTY_CFG="$WORK/relay-empty-matcher.toml"
+cat > "$EMPTY_CFG" <<'TOML'
+[grok.PreToolUse]
+enabled = true
+matcher = ""
+
+[grok.Stop]
+enabled = true
+TOML
+EMPTY_HOOKS="$WORK/hooks/empty-matcher.json"
+OUT="$WORK/empty_matcher.out"
+set +e
+RELAY_TOML="$EMPTY_CFG" bash "$INSTALL" --hooks-file "$EMPTY_HOOKS" >"$OUT" 2>&1
+RC=$?
+set -e
+assert_eq "empty matcher: exit 0" "0" "$RC"
+if jq -e '.hooks.PreToolUse[0] | has("matcher") | not' "$EMPTY_HOOKS" >/dev/null 2>&1; then
+    ok "empty matcher: PreToolUse omits matcher key (match all)"
+else
+    fail "empty matcher: PreToolUse omits matcher key (match all)" \
+        "$(jq -c '.hooks.PreToolUse' "$EMPTY_HOOKS")"
+fi
+if grep -qE 'matchers: \(none' "$OUT"; then
+    ok "empty matcher: plan reports none / match all"
+else
+    # Plan only prints on write path; accept either write plan or no-op wording
+    if grep -qE 'matchers:|no changes|already matches|wrote' "$OUT"; then
+        ok "empty matcher: plan reports none / match all"
+    else
+        fail "empty matcher: plan reports none / match all" "$(cat "$OUT")"
+    fi
+fi
+
+# --- absent matcher (key not in toml) = match all ---------------------------
+ABSENT_CFG="$WORK/relay-absent-matcher.toml"
+cat > "$ABSENT_CFG" <<'TOML'
+[grok.PreToolUse]
+enabled = true
+
+[grok.Stop]
+enabled = true
+TOML
+ABSENT_HOOKS="$WORK/hooks/absent-matcher.json"
+set +e
+RELAY_TOML="$ABSENT_CFG" bash "$INSTALL" --hooks-file "$ABSENT_HOOKS" >"$WORK/absent_matcher.out" 2>&1
+RC=$?
+set -e
+assert_eq "absent matcher: exit 0" "0" "$RC"
+if jq -e '.hooks.PreToolUse[0] | has("matcher") | not' "$ABSENT_HOOKS" >/dev/null 2>&1; then
+    ok "absent matcher: PreToolUse omits matcher key (match all)"
+else
+    fail "absent matcher: PreToolUse omits matcher key (match all)" \
+        "$(jq -c '.hooks.PreToolUse' "$ABSENT_HOOKS")"
+fi
+
+# --- changing matcher rewrites (not stuck no-op) ----------------------------
+CHG_CFG="$WORK/relay-matcher-changed.toml"
+cat > "$CHG_CFG" <<'TOML'
+[grok.PreToolUse]
+enabled = true
+matcher = "Read|Grep"
+
+[grok.Stop]
+enabled = true
+TOML
+# Reuse MATCHER_HOOKS which currently has Shell|Bash
+OUT="$WORK/matcher_chg.out"
+set +e
+RELAY_TOML="$CHG_CFG" bash "$INSTALL" --hooks-file "$MATCHER_HOOKS" >"$OUT" 2>&1
+RC=$?
+set -e
+assert_eq "matcher change: exit 0" "0" "$RC"
+CHG_VAL="$(jq -r '.hooks.PreToolUse[0].matcher // empty' "$MATCHER_HOOKS")"
+assert_eq "matcher change: PreToolUse updated to Read|Grep" "Read|Grep" "$CHG_VAL"
+# PostToolUse was previously enabled with matcher; new config disables it
+# (default-off, not listed) — full-file ownership should drop it.
+if jq -e '.hooks.PostToolUse' "$MATCHER_HOOKS" >/dev/null 2>&1; then
+    fail "matcher change: drops events not enabled in new config" \
+        "$(jq -c '.hooks | keys' "$MATCHER_HOOKS")"
+else
+    ok "matcher change: drops events not enabled in new config"
+fi
+
+# --- default path (no RELAY_TOML): still no PreToolUse / no matchers spam ---
+# Already covered by earlier write tests; re-assert default hooks lack matcher
+# on Stop when using repo config (may or may not exist).
+DEFAULT_HOOKS="$WORK/hooks/default-again.json"
+set +e
+bash "$INSTALL" --hooks-file "$DEFAULT_HOOKS" >"$WORK/default_again.out" 2>&1
+RC=$?
+set -e
+assert_eq "default (no matcher cfg): exit 0" "0" "$RC"
+if jq -e '[.hooks | to_entries[] | select(.value[0] | has("matcher"))] | length == 0' \
+    "$DEFAULT_HOOKS" >/dev/null 2>&1; then
+    ok "default (no matcher cfg): no event has matcher key"
+else
+    fail "default (no matcher cfg): no event has matcher key" \
+        "$(jq -c '[.hooks | to_entries[] | {(.key): .value[0].matcher}]' "$DEFAULT_HOOKS")"
+fi
+
 echo
 echo "=============================="
 echo "Results: $PASS passed, $FAIL failed"

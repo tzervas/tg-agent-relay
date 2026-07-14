@@ -272,6 +272,24 @@ enabled = true
 
 After editing, re-run `bash install-grok-hooks.sh` and restart Grok.
 
+### Matchers (optional)
+
+Filter which tool names fire a notify hook without disabling the whole event.
+Config key is exactly `matcher` under `[grok.<Event>]`:
+
+```toml
+[grok.PreToolUse]
+enabled = true
+matcher = "Shell|Bash"   # Grok-native regex; empty/absent = match all
+```
+
+`install-grok-hooks.sh` emits `"matcher"` into the hooks JSON when set;
+omits the field when empty/absent (match all — prior behavior). Dry-run
+prints any matchers in the plan. Tool events (`PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `PermissionDenied`) and `Notification` support
+matchers; lifecycle events reject them. **Notify-only** remains — no
+PreToolUse deny/policy engine in this bridge.
+
 ### Troubleshooting
 
 | Symptom | Likely cause | What to check |
