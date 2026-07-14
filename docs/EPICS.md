@@ -9,7 +9,7 @@ Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md
 
 | Epic | Status |
 |---:|---|
-| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Python default** (#67) — shell opt-out via `RELAY_PYTHON_*=0` |
+| [#18](https://github.com/tzervas/tg-agent-relay/issues/18) Shell → Python | **Closed** — Python default (#67); shell opt-out |
 | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) Providers | **Closed** (+ OpenAI/ADK plug-and-play post-close) |
 | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) Product polish | **Closed** |
 | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) Quality / swarm | **Closed** |
@@ -23,7 +23,7 @@ Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md
 | 57 | Python send code_highlight sendDocument | **Closed** |
 | 58 | Cutover docs + deploy notes | **Closed** |
 | 59 | Claude adapter default provider_hook | **Closed** |
-| 67 | **Python send/poll default** (shell opt-out) | **Landing** |
+| 67 | **Python send/poll default** (shell opt-out) | **Closed** |
 | 41 | Rust spike | Deferred P2 |
 
 ## Package surface

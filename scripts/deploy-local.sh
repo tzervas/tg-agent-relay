@@ -80,14 +80,15 @@ sync_tree() {
     fi
 }
 
-# Top-level scripts and package trees
+# Top-level scripts and package trees (Python package is the default runtime)
 for rel in \
-    adapters handlers lib providers docs scripts tests \
+    adapters handlers lib providers tg_agent_relay docs scripts tests \
     hook-notify.sh hook-notify-grok.sh \
     install-hooks.sh install-grok-hooks.sh \
     relay-notify.sh tg-send.sh tg-poll.sh \
     go-live.sh watch-go-live.sh fetch-voices.sh \
     VERSION LICENSE README.md ROADMAP.md SETUP.md \
+    pyproject.toml uv.lock .python-version \
     relay.toml.example .env.example \
     .gitleaks.toml .pre-commit-config.yaml \
     .github
