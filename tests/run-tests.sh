@@ -215,6 +215,88 @@ clear_recorded "$BRIDGE2"
 rm -rf "$BRIDGE2"
 
 # ============================================================================
+echo "== lib/python_fallback.sh: adversarial recovery (redact / safe-bin / sticky) =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/python_fallback.sh"
+
+# Redaction: secrets must never appear in reason strings
+_RED="$(relay_redact_secrets 'fail BOT_TOKEN=1234567890:AAH-deadbeef_secret_token_value_here and sk-abc1234567890xyz Bearer xyzsecret99')"
+assert_eq "redact: BOT_TOKEN gone" "0" "$(printf '%s' "$_RED" | grep -c 'deadbeef' || true)"
+assert_eq "redact: sk- gone" "0" "$(printf '%s' "$_RED" | grep -c 'sk-abc' || true)"
+assert_eq "redact: Bearer gone" "0" "$(printf '%s' "$_RED" | grep -c 'xyzsecret99' || true)"
+assert_eq "redact: markers present" "1" "$(printf '%s' "$_RED" | grep -c 'REDACTED' || true)"
+# Telegram raw token shape
+_RED2="$(relay_redact_secrets 'err 7123456789:AAHxxxxxxxxxxxxxxxxxxxxYYYY and done')"
+assert_eq "redact: telegram token shape" "0" "$(printf '%s' "$_RED2" | grep -c 'AAH' || true)"
+
+# Safe bin: injection / traversal rejected
+relay_py_bin_is_safe 'python3; rm -rf /' && _SAFE_BAD=0 || _SAFE_BAD=1
+assert_eq "safe-bin: rejects shell metacharacters" "1" "$_SAFE_BAD"
+relay_py_bin_is_safe '/tmp/../etc/passwd' && _SAFE_TRAV=0 || _SAFE_TRAV=1
+assert_eq "safe-bin: rejects path traversal" "1" "$_SAFE_TRAV"
+relay_py_bin_is_safe 'python3' && _SAFE_OK=0 || _SAFE_OK=1
+# python3 usually present in CI; if missing, skip with honest pass via command -v
+if command -v python3 >/dev/null 2>&1; then
+    assert_eq "safe-bin: accepts bare python3" "0" "$_SAFE_OK"
+else
+    ok "safe-bin: accepts bare python3 (SKIP: no python3)"
+fi
+relay_py_bin_is_safe 'node' && _SAFE_NODE=0 || _SAFE_NODE=1
+assert_eq "safe-bin: rejects non-python bare names" "1" "$_SAFE_NODE"
+
+# Sticky window: set → active → clear; kind injection rejected
+_FB_TMP="$(mktemp -d)"
+BRIDGE_DIR="$_FB_TMP"
+export BRIDGE_DIR
+relay_py_sticky_set send "import failed BOT_TOKEN=1234567890:AAHxxxxxxxxxxxxxxxxxxxxSECRET"
+if [[ -f "$_FB_TMP/.python-send-fallback" ]]; then
+    ok "sticky: stamp file created"
+    # mode best-effort 600
+    _mode="$(stat -c '%a' "$_FB_TMP/.python-send-fallback" 2>/dev/null || echo '?')"
+    if [[ "$_mode" == "600" || "$_mode" == "640" || "$_mode" == "400" ]]; then
+        ok "sticky: stamp mode private-ish ($_mode)"
+    else
+        # Some FS ignore chmod; never-silent
+        ok "sticky: stamp mode $_mode (chmod may be noop on this FS)"
+    fi
+    # reason redacted on disk
+    if grep -q 'SECRET\|AAH' "$_FB_TMP/.python-send-fallback" 2>/dev/null; then
+        fail "sticky: stamp must not store raw token" "$(cat "$_FB_TMP/.python-send-fallback")"
+    else
+        ok "sticky: stamp reason redacted on disk"
+    fi
+else
+    fail "sticky: stamp file created" "missing $_FB_TMP/.python-send-fallback"
+fi
+if relay_py_sticky_active send; then
+    ok "sticky: active within TTL"
+    assert_eq "sticky: reason non-empty" "1" "$([[ -n "${RELAY_PY_STICKY_REASON:-}" ]] && echo 1 || echo 0)"
+else
+    fail "sticky: active within TTL" "not active"
+fi
+# kind path injection
+if relay_py_sticky_set '../etc/passwd' 'x' 2>/dev/null; then
+    if [[ -f "$_FB_TMP/.python-../etc/passwd-fallback" ]] || [[ -f /etc/passwd.fallback ]]; then
+        fail "sticky: kind injection rejected" "wrote outside"
+    else
+        ok "sticky: kind injection rejected (no write)"
+    fi
+else
+    ok "sticky: kind injection rejected"
+fi
+relay_py_sticky_clear send
+if [[ -f "$_FB_TMP/.python-send-fallback" ]]; then
+    fail "sticky: clear removes stamp" "still present"
+else
+    ok "sticky: clear removes stamp"
+fi
+# TTL cap: absurd TTL still numeric and <= 3600
+_ttl="$(RELAY_PYTHON_FALLBACK_TTL=999999 _relay_py_sticky_ttl)"
+assert_eq "sticky: TTL capped at 3600" "3600" "$_ttl"
+rm -rf "$_FB_TMP"
+unset BRIDGE_DIR
+
+# ============================================================================
 echo "== lib/relay-common.sh: render_template() (shared {placeholder} engine) =="
 # shellcheck disable=SC1091
 source "$REPO_ROOT/lib/relay-common.sh"

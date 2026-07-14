@@ -175,9 +175,24 @@ uv run ruff format <paths>
 | Python ports | Landed (send/poll/format/routing/tts/hooks/…) |
 | Live default | **Python** via `tg-send.sh` / `tg-poll.sh` exec (package import) |
 | Opt-out shell | `RELAY_PYTHON_SEND=0` · `RELAY_PYTHON_POLL=0` |
+| Recovery | `lib/python_fallback.sh` — redacted, sticky, bounded probe (see SETUP) |
 | Claude hooks | Prefer `provider_hook` when Python works (`CLAUDE_USE_PROVIDER_HOOK=0` to force shell) |
 
 Details: [RELEASING.md](RELEASING.md) § Python package path.
+
+---
+
+## 7b. Adversarial / performance principles (product code)
+
+When changing runtime paths (hooks, send/poll, config, providers), default to:
+
+1. **Never-silent failure** — recover, but say *why* + how to fix (stderr + metrics). Tests may set `*_QUIET=1`.
+2. **Assume hostile env** — `RELAY_PYTHON`, paths, and error strings may contain shell metacharacters or secrets; validate before `exec`, redact before log.
+3. **Fail closed on auth, fail open on UX** — allowlist/token mistakes must not send; formatting/TTS/highlight may degrade with a metric.
+4. **Dynamic cost under outage** — sticky / TTL / timeouts so a missing package does not fork-probe Python on every hook.
+5. **Bounded work** — probe timeouts, TTL caps, reason length caps; no unbounded retries on the hot path.
+6. **Private runtime state** — stamp/lock files mode `0600` when possible; never commit `.env`, tokens, sticky stamps.
+7. **Same contracts on fallback** — shell recovery must preserve allowlist, routing, format, and TTS semantics.
 
 ---
 

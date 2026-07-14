@@ -13,6 +13,9 @@ Never voiced (replaced with short refs or removed):
   - call / tool / request IDs (UUIDs, call_*, toolu_*, long hex ids, …)
   - markdown chrome: # headers, * _ ** emphasis, > quotes, list markers,
     [k/n] page headers, leftover backticks/asterisks
+  - emoji and pictographs (🔔 ✅ 🚀 flags, skin tones, ZWJ sequences, …)
+    — engines often misread these as "emoji" / code points or skip oddly;
+    the on-screen Telegram text is unchanged
 
 Code/links become short references (defaults: "ref. the message for the
 code" / "ref. the message for the link"); adjacent identical refs collapse
@@ -74,6 +77,62 @@ _RE_URL = re.compile(r"(?i)\b(?:https?://|ftp://|file://|www\.)[^\s<>\[\]()\"']+
 # Angle-bracket autolinks <https://...>
 _RE_ANGLE_URL = re.compile(r"<(?i:https?://|ftp://|file://|www\.)[^>\s]+>")
 
+# Emoji / pictographs for voiceover (stdlib-only; no third-party emoji pack).
+# Ranges are deliberate (no mega-spans into CJK/letters). ASCII + normal
+# prose Unicode (accents, curly quotes) stay. Orphan ZWJ/VS/skin tones drop.
+_RE_EMOJI = re.compile(
+    "["
+    "\U0001f600-\U0001f64f"  # emoticons
+    "\U0001f300-\U0001f5ff"  # misc symbols & pictographs
+    "\U0001f680-\U0001f6ff"  # transport & map
+    "\U0001f1e0-\U0001f1ff"  # regional indicator (flags)
+    "\U0001f900-\U0001f9ff"  # supplemental symbols & pictographs
+    "\U0001fa00-\U0001fa6f"  # chess etc.
+    "\U0001fa70-\U0001faff"  # symbols & pictographs extended-A
+    "\U0001f000-\U0001f02f"  # mahjong
+    "\U0001f0a0-\U0001f0ff"  # playing cards
+    "\U00002702-\U000027b0"  # dingbats
+    "\U000027b1-\U000027bf"
+    "\U00002600-\U000026ff"  # misc symbols (☀ ⚠ ⚡ ✅ …)
+    "\U0000231a-\U0000231b"  # watch / hourglass
+    "\U000023e9-\U000023f3"  # media controls
+    "\U000023f8-\U000023fa"
+    "\U000025aa-\U000025ab"  # small squares
+    "\U000025b6\U000025c0"  # play / reverse
+    "\U000025fb-\U000025fe"  # medium squares
+    "\U00002b05-\U00002b07"  # arrows
+    "\U00002b1b-\U00002b1c"
+    "\U00002b50\U00002b55"  # star / circle
+    "\U00002934-\U00002935"
+    "\U00002194-\U00002199"
+    "\U000021a9-\U000021aa"
+    "\U00002139\U00002122"  # ℹ ™
+    "\U0000203c\U00002049"  # ‼ ⁉
+    "\U000000a9\U000000ae"  # © ®
+    "\U00003030\U0000303d"  # wavy dash / part alternation
+    "\U00003297\U00003299"  # ㊗ ㊙
+    "\U0001f170-\U0001f171"  # 🅰 🅱
+    "\U0001f17e-\U0001f17f"
+    "\U0001f18e"
+    "\U0001f191-\U0001f19a"
+    "\U0001f201-\U0001f202"
+    "\U0001f21a\U0001f22f"
+    "\U0001f232-\U0001f23a"
+    "\U0001f250-\U0001f251"
+    "\U000024c2"  # Ⓜ
+    "\U0000fe00-\U0000fe0f"  # variation selectors
+    "\U0000200d"  # ZWJ
+    "\U000020e3"  # keycap combiner
+    # Tag chars U+E0020–U+E007F — must be exactly 8 hex digits after \U
+    # (a 9-digit form is parsed as \Uxxxxxxxx + leftover and can create
+    # an ASCII-swallowing range like '0'-…).
+    "\U000e0020-\U000e007f"
+    "\U0001f3fb-\U0001f3ff"  # skin tone modifiers
+    "]+"
+)
+# Isolated leftover joiners / VS after partial multi-codepoint emoji removal
+_RE_EMOJI_ORPHANS = re.compile("[\u200d\ufe0e\ufe0f\u20e3\U0001f3fb-\U0001f3ff]+")
+
 
 def _strip_ids(text: str) -> str:
     """Remove call IDs / UUIDs / opaque tokens the voice should never spell out."""
@@ -83,6 +142,15 @@ def _strip_ids(text: str) -> str:
     text = _RE_LONG_HEX.sub(" ", text)
     # Avoid nuking normal long words: only slash/plus heavy tokens (ids/hashes)
     text = re.sub(r"\b(?=[A-Za-z0-9_+/-]*[_+/-])[A-Za-z0-9_+/.-]{24,}={0,2}\b", " ", text)
+    return text
+
+
+def strip_emoji(text: str) -> str:
+    """Remove emoji/pictographs from spoken prose. Pure; never raises."""
+    if not text:
+        return text
+    text = _RE_EMOJI.sub(" ", text)
+    text = _RE_EMOJI_ORPHANS.sub(" ", text)
     return text
 
 
@@ -178,13 +246,16 @@ def strip_formatting(
     text = text.replace("#", " ")
     text = re.sub(r"(?<!\w)~(?!\w)", " ", text)
 
-    # 8. Whitespace → one flowing prose line
+    # 8. Emoji / pictographs — never spoken (engines misread or spell code points)
+    text = strip_emoji(text)
+
+    # 9. Whitespace → one flowing prose line
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", " ", text)
     text = re.sub(r"\s{2,}", " ", text)
     text = text.strip()
 
-    # 9. Collapse adjacent identical refs
+    # 10. Collapse adjacent identical refs
     if collapse_refs and not speak_code:
         text = collapse_adjacent_refs(text, code_ref, link_ref, f"link, {link_ref}")
     return text

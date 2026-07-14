@@ -16,15 +16,27 @@ set -u
 
 # relay_python_resolve → sets RELAY_PYTHON to an absolute or PATH command.
 # Preference: RELAY_PYTHON override → project .venv (uv) → python3.14 → 3.13 → python3
+# Internal: reject shell metacharacters / traversal in RELAY_PYTHON (defense-in-depth;
+# python_fallback.sh also enforces before exec).
+_relay_python_looks_safe() {
+    local b="${1:-}"
+    [[ -n "$b" ]] || return 1
+    case "$b" in
+        *[!A-Za-z0-9/_.+-]* | *..* | *' '* | *$'\t'* | *$'\n'* | *';'* | *'|'* | *'&'* | *'$'* | *'`'*) return 1 ;;
+    esac
+    return 0
+}
+
 relay_python_resolve() {
     local cand ver major minor root
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd 2>/dev/null || true)"
 
     if [[ -n "${RELAY_PYTHON:-}" ]]; then
-        if command -v "$RELAY_PYTHON" >/dev/null 2>&1 || [[ -x "$RELAY_PYTHON" ]]; then
+        if _relay_python_looks_safe "$RELAY_PYTHON" \
+            && { command -v "$RELAY_PYTHON" >/dev/null 2>&1 || [[ -x "$RELAY_PYTHON" ]]; }; then
             return 0
         fi
-        # Invalid override — fall through and re-resolve
+        # Invalid or hostile override — fall through and re-resolve
         RELAY_PYTHON=""
     fi
 

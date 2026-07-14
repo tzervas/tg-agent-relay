@@ -20,6 +20,13 @@ export RELAY_PYTHON_POLL=0
 # If Python import fails without opt-out, shell still runs but prints why
 # and records metrics: tg-send/tg-poll  python_fallback  failed: …
 
+# Adversarial / dynamic recovery knobs (lib/python_fallback.sh):
+#   RELAY_PYTHON_FALLBACK_TTL=60   sticky shell after failure (cap 3600s)
+#   RELAY_PYTHON_STICKY=0          always re-probe (costly under outage)
+#   RELAY_PYTHON_PROBE_TIMEOUT=5   import probe bound (cap 30s)
+#   RELAY_PYTHON_FALLBACK_QUIET=1  metric only (tests)
+# Hostile RELAY_PYTHON values are rejected; error text is secret-redacted.
+
 # Or call entry points directly:
 uv run tg-relay-send "hello"
 uv run tg-relay-poll
@@ -32,8 +39,8 @@ uv run tg-relay-poll
 
 1. `bash scripts/local-ci.sh` green on the deploy commit.
 2. Deploy: `bash scripts/deploy-local.sh` (preserves `.env` / `relay.toml`).
-3. Ensure deploy tree includes `tg_agent_relay/` + `providers/` and a working
-   Python 3.14 (uv `.venv` or `lib/python.sh` resolution).
+3. Ensure deploy tree includes `tg_agent_relay/` + `providers/` + `lib/python_fallback.sh`
+   and a working Python 3.14 (uv `.venv` or `lib/python.sh` resolution).
 4. Smoke: one hook ping + one Telegram inbound message.
 5. Confirm code docs when `[code_highlight] mode = "html-doc"`.
 6. Only set `RELAY_PYTHON_SEND=0` / `RELAY_PYTHON_POLL=0` if you must bisect.

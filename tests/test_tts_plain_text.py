@@ -189,6 +189,40 @@ def main() -> int:
     )
     check("call ids: UUID gone", "550e8400" not in IDS, repr(IDS))
     check("call ids: prose kept", "error" in IDS and "done" in IDS, repr(IDS))
+    # Emoji must never reach the voiceover script (on-screen text is separate)
+    EM = strip("🔔 Notification: agent ✅ finished 🚀 ship it ⚠️ warn 🇺🇸 flag")
+    check("emoji: bell stripped", "🔔" not in EM, repr(EM))
+    check("emoji: check stripped", "✅" not in EM, repr(EM))
+    check("emoji: rocket stripped", "🚀" not in EM, repr(EM))
+    check("emoji: warning stripped", "⚠" not in EM, repr(EM))
+    check(
+        "emoji: flag regional indicators stripped",
+        "🇺🇸" not in EM and "\U0001f1fa" not in EM,
+        repr(EM),
+    )
+    check(
+        "emoji: prose preserved around glyphs",
+        "Notification" in EM and "finished" in EM and "ship it" in EM and "warn" in EM,
+        repr(EM),
+    )
+    check("emoji: no double-space wreckage", "  " not in EM, repr(EM))
+    # ZWJ family / skin-tone sequences collapse cleanly
+    ZWJ = strip("hello \U0001f468\u200d\U0001f469\u200d\U0001f467 world \U0001f44b\U0001f3fd")
+    check(
+        "emoji: ZWJ sequence stripped", "\U0001f468" not in ZWJ and "\u200d" not in ZWJ, repr(ZWJ)
+    )
+    check(
+        "emoji: skin-tone sequence stripped",
+        "\U0001f44b" not in ZWJ and "\U0001f3fd" not in ZWJ,
+        repr(ZWJ),
+    )
+    check("emoji: ZWJ neighbors preserved", "hello" in ZWJ and "world" in ZWJ, repr(ZWJ))
+    # Accented prose and currency must survive (not over-stripped as "symbols")
+    ACC = strip("café costs €12 — résumé ready")
+    check("emoji: accented letters preserved", "café" in ACC and "résumé" in ACC, repr(ACC))
+    check("emoji: euro sign preserved (not emoji block)", "€" in ACC, repr(ACC))
+    # Existing flattened sample starts with ✅ — must not voice it
+    check("flattened: leading ✅ emoji stripped", "✅" not in FLAT, repr(FLAT))
     print(f"\n  tts_plain_text: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

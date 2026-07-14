@@ -26,6 +26,16 @@ If the package fails to import (missing `tg_agent_relay/`, wrong Python, broken
 deps), the shell path still runs but is **never silent**: stderr explains the
 failure and recovery, and `.metrics.log` gets a `python_fallback` line.
 
+**Adversarial recovery** (`lib/python_fallback.sh`):
+
+| Guard | Behavior |
+|---|---|
+| Secret redaction | `BOT_TOKEN`, Telegram token shapes, `sk-`, `Bearer`, `xai-`, GitHub pats stripped before stderr/metrics |
+| Safe interpreter | `RELAY_PYTHON` with shell metacharacters / `..` / non-python names is rejected |
+| Sticky window | After a failure, hooks skip re-probe for `RELAY_PYTHON_FALLBACK_TTL` (default 60s, max 1h) |
+| Probe timeout | Import probe bounded (`RELAY_PYTHON_PROBE_TIMEOUT`, default 5s) so a wedged Python cannot hang hooks |
+| Noisy vs quiet sticky | Real failures print recovery steps; sticky hits are metric-only unless `RELAY_PYTHON_STICKY_VERBOSE=1` |
+
 Claude Code hooks prefer `providers/claude` via Python when available
 (`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).
 

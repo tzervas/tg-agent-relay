@@ -28,7 +28,11 @@ _LIB = Path(__file__).resolve().parents[1] / "lib"
 if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
-from tts_plain_text import collapse_adjacent_refs, strip_formatting  # noqa: E402
+from tts_plain_text import (  # noqa: E402
+    collapse_adjacent_refs,
+    strip_emoji,
+    strip_formatting,
+)
 
 DEFAULT_CODE_REF = "ref. the message for the code"
 DEFAULT_LINK_REF = "ref. the message for the link"
@@ -46,6 +50,7 @@ __all__ = [
     "normalize_spoken_mode",
     "prepare_spoken",
     "prepare_spoken_from_config",
+    "strip_emoji",
     "strip_formatting",
     "truncate_words",
 ]

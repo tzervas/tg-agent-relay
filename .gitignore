@@ -31,6 +31,9 @@ build/
 .metrics.log
 .tg-send.lock
 .chats.d/
+# Sticky Python→shell fallback stamps (lib/python_fallback.sh)
+.python-*-fallback
+.python-*-fallback.tmp.*
 *.log
 # ...except a COMMITTED test fixture that happens to share the extension
 # (same reasoning/pattern as /relay.toml above, scoped by directory instead
