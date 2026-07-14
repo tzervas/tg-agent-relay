@@ -8,6 +8,21 @@ see the README's repo/directory note) — no other repo is touched.
 
 ### Python version & tooling
 
+#### Python cutover (optional)
+
+After deploy, you can run the Python send/poll ports without changing
+install paths:
+
+```bash
+export RELAY_PYTHON_SEND=1   # thin exec from tg-send.sh
+export RELAY_PYTHON_POLL=1   # thin exec from tg-poll.sh
+```
+
+Claude Code hooks prefer `providers/claude` via Python when available
+(`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).
+
+Full checklist: [`docs/RELEASING.md`](docs/RELEASING.md) § Python package cutover.
+
 **Preferred: Python 3.14** (see `.python-version`). Use **uv** for the
 project env and **ruff** for lint/format:
 

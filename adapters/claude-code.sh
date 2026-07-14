@@ -111,10 +111,25 @@ fi
 EVENT="${_HE_CLAUDE:-unknown}"
 [[ -z "$EVENT" || "$EVENT" == "null" ]] && EVENT="unknown"
 
-# Optional: format via providers/claude (Python) when CLAUDE_USE_PROVIDER_HOOK=1
-# or PROVIDER_HOOK=1. Shell case statement remains the default path so existing
-# tests stay stable.
-if [[ "${CLAUDE_USE_PROVIDER_HOOK:-${PROVIDER_HOOK:-0}}" == "1" ]]; then
+# Prefer providers/claude via provider_hook when Python is available (issue #59).
+# Force shell case: CLAUDE_USE_PROVIDER_HOOK=0 (or PROVIDER_HOOK=0).
+# Force Python:    CLAUDE_USE_PROVIDER_HOOK=1
+_CC_USE_PY="${CLAUDE_USE_PROVIDER_HOOK:-${PROVIDER_HOOK:-}}"
+if [[ -z "$_CC_USE_PY" ]]; then
+    if [[ -f "$BRIDGE_DIR/lib/provider_hook.py" ]]; then
+        # shellcheck disable=SC1091
+        [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+        declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+        if relay_python -c "import providers.claude" >/dev/null 2>&1; then
+            _CC_USE_PY=1
+        else
+            _CC_USE_PY=0
+        fi
+    else
+        _CC_USE_PY=0
+    fi
+fi
+if [[ "$_CC_USE_PY" == "1" ]]; then
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }

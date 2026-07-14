@@ -4,17 +4,36 @@
 
 **This workstation is the source of truth for quality gates and releases.**
 
-### Python package cutover (optional)
+### Python package cutover (optional — epic #18)
 
-Shell remains the default live path. Opt into Python ports per process:
+Shell remains the **default** live path so existing installs never surprise-break.
+Python ports are production-ready; flip when ready:
 
 ```bash
+# Per-process (hooks / systemd / Monitor unit environment):
 export RELAY_PYTHON_SEND=1   # tg-send.sh → python -m tg_agent_relay.send
 export RELAY_PYTHON_POLL=1   # tg-poll.sh → python -m tg_agent_relay.poll
-# or invoke entry points:
-uv run tg-relay-send …
-uv run tg-relay-poll …
+
+# Or entry points (same code):
+uv run tg-relay-send "hello"
+uv run tg-relay-poll
+
+# Claude hooks: provider_hook is preferred when Python is available.
+# Force shell formatting: CLAUDE_USE_PROVIDER_HOOK=0
 ```
+
+**Recommended live cutover checklist**
+
+1. `bash scripts/local-ci.sh` green on the deploy commit.
+2. Deploy: `bash scripts/deploy-local.sh` (preserves `.env` / `relay.toml`).
+3. Export `RELAY_PYTHON_SEND=1` / `RELAY_PYTHON_POLL=1` in the process that
+   runs hooks and the poll Monitor (systemd `Environment=`, shell profile, or
+   a small wrapper next to the bridge).
+4. Smoke: one hook ping + one Telegram inbound message.
+5. Confirm code docs still send when `[code_highlight] mode = "html-doc"`.
+
+Optional: put the two exports in a gitignored `~/.claude/telegram-bridge/.env.python`
+and `source` it from your Monitor unit — do **not** commit secrets.
 
 | Step | Where | Command |
 |---|---|---|

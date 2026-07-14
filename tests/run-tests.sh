@@ -90,7 +90,6 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/lib/provider_catalog.py" "$dir/lib/provider_catalog.py"
     ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
-    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/providers" "$dir/providers"
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
@@ -2518,6 +2517,13 @@ if command -v python3 >/dev/null 2>&1; then
         ok "relay_python tests/test_extensions_adk.py"
     else
         fail "relay_python tests/test_extensions_adk.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_highlight_docs.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_highlight_docs.py"
+    else
+        fail "relay_python tests/test_highlight_docs.py" "$PY_OUT"
     fi
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_project_bind.py" 2>&1)"
     PY_RC=$?

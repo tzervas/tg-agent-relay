@@ -886,6 +886,25 @@ class EnvSender:
                         bridge_dir=self.bridge_dir,
                         page_label=f"{i}/{total}",
                     )
+                    # Host-highlighted code docs (html-doc mode) after each page
+                    with suppress(Exception):
+                        from tg_agent_relay.highlight_docs import (
+                            build_code_doc_jobs,
+                            send_code_doc_jobs,
+                        )
+
+                        jobs = build_code_doc_jobs(
+                            pages[i - 1],
+                            config=self.config,
+                            bridge_dir=self.bridge_dir,
+                        )
+                        if jobs:
+                            send_code_doc_jobs(
+                                token,
+                                chat,
+                                jobs,
+                                thread_id=thread,
+                            )
                     if i < total and delay > 0:
                         with suppress(Exception):
                             self._sleep(delay)
