@@ -298,26 +298,26 @@ with ANY agent using ANY harness, maximum portability + usability.
 
 ## Next — tracked on GitHub (epics + swarm-ready issues)
 
+**Process:** [docs/WORKFLOW.md](docs/WORKFLOW.md) — orchestrator + **Grok Build** swarms (cheaper than flagship 4.5 for implementation).  
 **Board:** [docs/EPICS.md](docs/EPICS.md) · filter issues by label `swarm-ready`
 
-| Epic | Issue |
-|---|---|
-| Shell → **Python 3.14** (eliminate runtime shell) | [#18](https://github.com/tzervas/tg-agent-relay/issues/18) |
-| Universal provider extensions | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) |
-| Product polish to 100% | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) |
-| Quality / CI / swarm packaging | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) |
-| Optional Rust hotspots (after Python) | [#22](https://github.com/tzervas/tg-agent-relay/issues/22) |
-
-Decomposed children: **#23–#41** (each has user story, acceptance criteria, API/files, size).
+| Epic | Issue | Notes |
+|---|---|---|
+| Shell → **Python 3.14** cutover | [#18](https://github.com/tzervas/tg-agent-relay/issues/18) | Ports landed; opt-in env; open until live soak / default |
+| Universal provider extensions | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) | **Closed** (+ OpenAI/ADK later) |
+| Product polish | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) | **Closed** |
+| Quality / CI / swarm packaging | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) | **Closed** (local-ci primary) |
+| Optional Rust hotspots | [#22](https://github.com/tzervas/tg-agent-relay/issues/22) | Open · child [#41](https://github.com/tzervas/tg-agent-relay/issues/41) |
 
 ### Landed (not re-issued)
 
-- Provider registry + **Grok full 14-event** provider (`docs/PROVIDERS.md`)
+- Provider registry + **Grok full 14-event** + OpenAI-compatible / ADK delivery (`docs/PROVIDERS.md`, `docs/ADK_MCP.md`)
 - Multi-backend + project rooms (`docs/ROUTING.md`)
 - Voice `spoken_mode` short/full + collapse refs
 - Hybrid context exclusive vision/text (`docs/context/`)
 - Usage recursive Claude + multi windows + wider charts
-- Python **3.14** resolver (`lib/python.sh`)
+- Python **3.14** package ports (send/poll/format/routing/tts) + opt-in cutover
+- MCP extension bus + local-ci / swarm workflow docs
 
 ### Later / backlog ideas
 

@@ -1,7 +1,9 @@
 # Epics & swarm task board
 
 **Python 3.14** · **uv + ruff** · Rust **MSRV 1.96** · **local-ci only**.  
-Join: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [ADK_MCP.md](ADK_MCP.md) · [PROVIDERS.md](PROVIDERS.md)
+
+**Process:** [WORKFLOW.md](WORKFLOW.md) (orchestrator + swarm, cost lanes, spawn prompts).  
+Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [ADK_MCP.md](ADK_MCP.md) · [PROVIDERS.md](PROVIDERS.md)
 
 ## Epics
 
@@ -17,9 +19,9 @@ Join: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · 
 
 | # | Task | Status |
 |---:|---|---|
-| 57 | Python send code_highlight sendDocument | **Landing** |
-| 58 | Cutover docs + deploy notes | **Landing** |
-| 59 | Claude adapter default provider_hook | **Landing** |
+| 57 | Python send code_highlight sendDocument | **Closed** |
+| 58 | Cutover docs + deploy notes | **Closed** |
+| 59 | Claude adapter default provider_hook | **Closed** |
 | 41 | Rust spike | Deferred P2 |
 
 ## Package surface

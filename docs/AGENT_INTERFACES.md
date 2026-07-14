@@ -2,6 +2,8 @@
 
 Orchestrator-owned APIs. **Implement against these — do not invent parallel shapes.**
 
+**How we work:** [WORKFLOW.md](WORKFLOW.md) — decompose issues, swarm with **Grok Build** (cheaper), keep flagship models for thin orchestration only.
+
 Python: **3.14** via **uv** + **ruff** (see [`docs/TOOLING.md`](TOOLING.md)).  
 Runtime fallback: `lib/python.sh` / `RELAY_PYTHON` (prefers `.venv` from `uv sync`).
 
