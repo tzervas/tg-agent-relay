@@ -2,7 +2,7 @@
 # Agents: do not add crates without benchmarks (docs/AGENT_INTERFACES.md + epic #22).
 [workspace]
 resolver = "2"
-members = []
+members = ["crates/gha_runner_ctl"]
 # Future: members = ["crates/tg_relay_format", ...]
 
 [workspace.package]
