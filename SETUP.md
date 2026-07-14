@@ -138,10 +138,39 @@ run `~/.claude/telegram-bridge/install-hooks.sh` to sync
 `~/.claude/settings.json` to match — see the
 [README's "Installing hooks" section](README.md#installing-hooks-for-more-events).
 
-**Grok Build / Grok CLI:** run
-`bash install-grok-hooks.sh` after optionally tuning `[grok.*]` in
-`relay.toml`. See [`docs/ROUTING.md`](docs/ROUTING.md) if you also want
-multi-backend chat isolation.
+**Grok Build / Grok CLI** — wire Telegram pings the same way as Claude,
+but into Grok’s own hook store (not `~/.claude/settings.json`):
+
+1. **(Optional) pick a profile** in `relay.toml` under `[grok.<Event>]`.
+   **Quiet** (shipped defaults): `Stop`, `StopFailure`, `SubagentStop`,
+   `Notification`, `PostToolUseFailure`. **Full** adds lifecycle events
+   such as `SessionStart` / `SessionEnd` / `SubagentStart` /
+   `PermissionDenied` / compact — still leave `PreToolUse` /
+   `PostToolUse` off unless you want high-volume tool spam. Snippets and
+   the full 14-event table: [`docs/PROVIDERS.md`](docs/PROVIDERS.md#grok-build-telegram-hooks).
+2. **Install** (idempotent; merge-safe; writes only
+   `~/.grok/hooks/tg-agent-relay.json`):
+   ```bash
+   bash install-grok-hooks.sh --dry-run   # preview enabled events
+   bash install-grok-hooks.sh
+   ```
+3. **Folder trust** — only if you also keep project-local hooks under
+   `<repo>/.grok/hooks/`. Global `~/.grok/hooks/*.json` is always trusted;
+   project hooks are skipped until you grant trust (`/hooks-trust` or
+   launch with `--trust`). Recorded in `~/.grok/trusted_folders.toml`.
+4. **Restart the Grok session** (new session or reload) so hooks reload.
+   Confirm in the Hooks UI: `Ctrl+L` (or `/hooks` on VS Code family) →
+   Hooks tab should list the relay entry for the enabled events.
+5. **Verify a Stop ping** — finish a short turn in Grok; Telegram should
+   get a one-line `🏁` (or your configured prefix) summary. No ping:
+   check `.env` has `BOT_TOKEN` + allowlist, that install wrote the hooks
+   file, and that you restarted after install.
+
+Official Grok hook semantics (14 events, trust, matchers):
+`~/.grok/docs/user-guide/10-hooks.md`. Operator detail, quiet vs full,
+and troubleshooting (misrouted as Claude “unknown”, hooks not firing,
+wrong chat): [`docs/PROVIDERS.md`](docs/PROVIDERS.md#grok-build-telegram-hooks).
+Multi-backend isolation: [`docs/ROUTING.md`](docs/ROUTING.md).
 
 **Any other agent/harness:** either call
 [`relay-notify.sh`](relay-notify.sh) directly wherever you want a status

@@ -135,26 +135,41 @@ relay_python lib/provider_catalog.py presets gemini
 relay_python lib/provider_catalog.py presets aider
 ```
 
-## Grok Build (complete)
+## Grok Build Telegram hooks
 
-All documented Grok hook events are implemented in
-[`providers/grok/hooks.py`](../providers/grok/hooks.py):
+All **14** documented Grok Build hook events are implemented in
+[`providers/grok/hooks.py`](../providers/grok/hooks.py) (catalog matches
+official semantics in `~/.grok/docs/user-guide/10-hooks.md`). Cursor
+aliases (`preToolUse`, `beforeShellExecution`, …) and `SubagentEnd` →
+`SubagentStop` are accepted.
 
-SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure,
-PermissionDenied, Stop, StopFailure, Notification, SubagentStart,
-SubagentStop (+ SubagentEnd alias), PreCompact, PostCompact, SessionEnd.
+Day-one install steps also live in [`SETUP.md`](../SETUP.md) (adapter
+step). Quality bar / epic notes: [`GROK_HOOKS.md`](GROK_HOOKS.md).
+Example config comments: [`relay.toml.example`](../relay.toml.example)
+(`[grok.*]` quiet vs full).
 
-Plus Cursor aliases (`preToolUse`, `beforeShellExecution`, …).
+### Install, trust, reload, verify
 
-**Install:**
+1. **(Optional) choose quiet or full** in `relay.toml` — see [profiles](#quiet-vs-full-profiles) below. Without a `relay.toml`, catalog defaults apply (quiet).
+2. **Install hooks** (catalog-driven; only writes `~/.grok/hooks/tg-agent-relay.json`):
+   ```bash
+   bash install-grok-hooks.sh --dry-run
+   bash install-grok-hooks.sh
+   # reverse: bash install-grok-hooks.sh --uninstall
+   ```
+3. **Folder trust** — required only for **project** hooks under
+   `<repo>/.grok/hooks/` (or project Claude/Cursor hook files Grok scans).
+   Global `~/.grok/hooks/*.json` (what the installer writes) is always
+   trusted. Grant project trust with `/hooks-trust` or `--trust`; decision
+   is stored in `~/.grok/trusted_folders.toml`. Untrusted project hooks
+   are skipped silently.
+4. **Restart the Grok session** so the runner reloads hook files. Check
+   the Hooks tab (`Ctrl+L`, or `/hooks` on VS Code family).
+5. **Verify Stop** — complete a short agent turn; expect a Telegram line
+   with the Stop prefix (`🏁` by default). That confirms install + token
+   + allowlist + session reload in one shot.
 
-```bash
-# Optional: enable more events in relay.toml [grok.<Event>] enabled = true
-bash install-grok-hooks.sh --dry-run
-bash install-grok-hooks.sh
-```
-
-**Runtime path:**
+### Runtime path
 
 ```text
 Grok hook → hook-notify-grok.sh → adapters/grok.sh
@@ -162,7 +177,124 @@ Grok hook → hook-notify-grok.sh → adapters/grok.sh
   → relay-notify.sh --raw  (TG_SEND_SOURCE=hook, RELAY_BACKEND=grok)
 ```
 
-**Usage:**
+Grok may also invoke `hook-notify.sh` when Claude-compat settings are
+scanned; that shim detects `GROK_*` / `hookEventName` and re-dispatches
+to `adapters/grok.sh` so Grok is not formatted as Claude.
+
+### All 14 events (default enabled)
+
+| Event | Default | Typical signal |
+|---|---|---|
+| `SessionStart` | off | Session begins |
+| `UserPromptSubmit` | off | User submitted a prompt |
+| `PreToolUse` | off | Tool about to run (notify-only here; Grok can block via other hooks) |
+| `PostToolUse` | off | Tool succeeded (high volume) |
+| `PostToolUseFailure` | **on** | Tool failed |
+| `PermissionDenied` | off | Permission system denied a tool |
+| `Stop` | **on** | Agent turn ended |
+| `StopFailure` | **on** | Turn ended on API error |
+| `Notification` | **on** | Agent notification |
+| `SubagentStart` | off | Subagent started |
+| `SubagentStop` | **on** | Subagent finished (`SubagentEnd` alias) |
+| `PreCompact` | off | Compaction about to run |
+| `PostCompact` | off | Compaction finished |
+| `SessionEnd` | off | Session ended |
+
+Defaults come from the provider catalog (`providers/grok`); each may be
+overridden with `[grok.<Event>].enabled` in `relay.toml`, then re-run
+`install-grok-hooks.sh`.
+
+### Quiet vs full profiles
+
+**Quiet** (current defaults) keeps phone noise low: lifecycle failures and
+turn/subagent completion only. Prefer this until you know you want more.
+
+**Full** turns on useful session/subagent/permission/compact events for
+higher fidelity without enabling every tool call. Leave `PreToolUse` /
+`PostToolUse` off unless you deliberately want a ping per tool.
+
+Trade-off in one line: quiet optimizes for signal density on a phone;
+full trades volume for visibility into session boundaries and denials.
+(Design notes style: [`DECISIONS.md`](DECISIONS.md).)
+
+**Quiet** — no `relay.toml` needed, or mirror catalog defaults:
+
+```toml
+# Quiet profile (defaults — install-grok-hooks.sh enables these five)
+[grok.PostToolUseFailure]
+enabled = true
+[grok.Stop]
+enabled = true
+[grok.StopFailure]
+enabled = true
+[grok.Notification]
+enabled = true
+[grok.SubagentStop]
+enabled = true
+```
+
+**Full** — recommended extras on top of quiet:
+
+```toml
+# Full profile: quiet five + session / subagent / permission / compact
+[grok.PostToolUseFailure]
+enabled = true
+[grok.Stop]
+enabled = true
+[grok.StopFailure]
+enabled = true
+[grok.Notification]
+enabled = true
+[grok.SubagentStop]
+enabled = true
+
+[grok.SessionStart]
+enabled = true
+[grok.SessionEnd]
+enabled = true
+[grok.SubagentStart]
+enabled = true
+[grok.PermissionDenied]
+enabled = true
+[grok.PreCompact]
+enabled = true
+[grok.PostCompact]
+enabled = true
+
+# Still opt-in only (very high volume):
+# [grok.PreToolUse]
+# enabled = true
+# [grok.PostToolUse]
+# enabled = true
+# [grok.UserPromptSubmit]
+# enabled = true
+```
+
+After editing, re-run `bash install-grok-hooks.sh` and restart Grok.
+
+### Troubleshooting
+
+| Symptom | Likely cause | What to check |
+|---|---|---|
+| Ping looks like **Claude “event: unknown”** (or wrong adapter) | Grok payload reached the Claude formatter | Prefer `install-grok-hooks.sh` → `hook-notify-grok.sh`. If only Claude-compat hooks fire, ensure `hook-notify.sh` is current (it re-dispatches on `GROK_*` / `hookEventName`). Avoid pointing Grok events at a stale path that only runs `adapters/claude-code.sh`. |
+| **Hooks not firing** | No install, no session reload, project untrusted, or event disabled | `ls ~/.grok/hooks/tg-agent-relay.json`; re-run installer; **restart Grok**; for project hooks, `/hooks-trust`; confirm event `enabled` + installer plan lists it; Hooks tab should show the command. |
+| **Wrong chat** / tagged as another backend | Multi-backend routing or sticky binding | Hooks set `RELAY_BACKEND=grok` and may resolve `RELAY_PROJECT` from cwd. Check `[[chats]]` / `/project bind` and `[backends.grok]` in [`ROUTING.md`](ROUTING.md). Unified DM without a sticky bind uses allowlist `ALLOWED_CHAT_ID`. |
+| Install no-op but you expected a change | `relay.toml` still has old `enabled` flags | Edit `[grok.<Event>]`, dry-run, install again. |
+| Silent skip | Missing token / allowlist, or Python provider path missing | `.env` (`BOT_TOKEN`, `ALLOWED_USER_ID`/`ALLOWED_CHAT_ID`); bridge metrics `grok_skip`; `python3` + `lib/provider_hook.py` present. |
+
+### Official Grok hooks reference
+
+On a machine with Grok Build installed:
+
+```text
+~/.grok/docs/user-guide/10-hooks.md
+```
+
+That document is the source for event names, blocking vs passive,
+matchers, trust, and stdin JSON. This relay catalogs all 14 and defaults
+most high-volume events off.
+
+### Usage (token dashboard)
 
 ```toml
 [usage]

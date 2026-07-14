@@ -761,77 +761,106 @@
 # --------------------------------------------------------------------------
 # Grok Build provider — full hook catalog (providers/grok).
 # Install: bash install-grok-hooks.sh
+#   (writes ~/.grok/hooks/tg-agent-relay.json; --dry-run / --uninstall)
 # Adapter: adapters/grok.sh → lib/provider_hook.py grok
+# Official events/trust: ~/.grok/docs/user-guide/10-hooks.md
+# Operator guide: docs/PROVIDERS.md (Grok section) + SETUP.md step 5
 # Usage source: [usage] source = "grok" (or "multi")
+#
+# --- Quiet vs full-fidelity profiles ---------------------------------------
+# QUIET (shipped defaults — leave unset, or keep only these five enabled):
+#   PostToolUseFailure, Stop, StopFailure, Notification, SubagentStop
+#   Best for day-to-day phone pings without tool spam.
+#
+# FULL (recommended extras for higher fidelity — still not every tool call):
+#   quiet five + SessionStart, SessionEnd, SubagentStart, PermissionDenied,
+#   PreCompact, PostCompact
+#   Re-run install-grok-hooks.sh after changing enabled flags; restart Grok.
+#   Leave PreToolUse / PostToolUse / UserPromptSubmit off unless you want
+#   high-volume pings (opt-in explicitly below).
+#
+# Example — full profile (uncomment the blocks you want; quiet is default):
+#   [grok.SessionStart]
+#   enabled = true
+#   [grok.SessionEnd]
+#   enabled = true
+#   [grok.SubagentStart]
+#   enabled = true
+#   [grok.PermissionDenied]
+#   enabled = true
+#   [grok.PreCompact]
+#   enabled = true
+#   [grok.PostCompact]
+#   enabled = true
 #
 # --- [grok.*] full event tables (providers/grok catalog) ---
 # [grok.SessionStart]
-# enabled = false  # Session starts
+# enabled = false  # Session starts  (full profile: true)
 # prefix = "🟢"
 # # placeholders: {prefix} {event} {cwd} {session_id} {detail_suffix}
 #
 # [grok.UserPromptSubmit]
-# enabled = false  # User submits a prompt
+# enabled = false  # User submits a prompt  (high volume — opt-in only)
 # prefix = "⌨️"
 # # placeholders: {prefix} {event} {prompt} {message} {detail_suffix}
 #
 # [grok.PreToolUse]
-# enabled = false  # Tool about to run (blocking capable; we notify only)
+# enabled = false  # Tool about to run (notify-only; high volume — opt-in only)
 # prefix = "🔧"
 # # placeholders: {prefix} {event} {tool} {verb} {tool_input}
 #
 # [grok.PostToolUse]
-# enabled = false  # Tool completed successfully
+# enabled = false  # Tool completed successfully  (high volume — opt-in only)
 # prefix = "🔧"
 # # placeholders: {prefix} {event} {tool} {verb} {tool_input}
 #
 # [grok.PostToolUseFailure]
-# enabled = true  # Tool failed
+# enabled = true  # Tool failed  (quiet + full)
 # prefix = "⚠️"
 # # placeholders: {prefix} {event} {tool} {message} {detail_suffix}
 #
 # [grok.PermissionDenied]
-# enabled = false  # Permission system denied a tool
+# enabled = false  # Permission system denied a tool  (full profile: true)
 # prefix = "🚫"
 # # placeholders: {prefix} {event} {tool}
 #
 # [grok.Stop]
-# enabled = true  # Agent turn ended
+# enabled = true  # Agent turn ended  (quiet + full) — use this to verify install
 # prefix = "🏁"
 # # placeholders: {prefix} {event} {message} {detail_suffix} {stop_reason}
 #
 # [grok.StopFailure]
-# enabled = true  # Turn ended due to API error
+# enabled = true  # Turn ended due to API error  (quiet + full)
 # prefix = "🛑"
 # # placeholders: {prefix} {event} {error_type}
 #
 # [grok.Notification]
-# enabled = true  # Agent notification
+# enabled = true  # Agent notification  (quiet + full)
 # prefix = "🔔"
 # # placeholders: {prefix} {event} {notification_type} {message} {detail_suffix}
 #
 # [grok.SubagentStart]
-# enabled = false  # Subagent started
+# enabled = false  # Subagent started  (full profile: true)
 # prefix = "🚀"
 # # placeholders: {prefix} {event} {agent} {agent_id}
 #
 # [grok.SubagentStop]
-# enabled = true  # Subagent finished
+# enabled = true  # Subagent finished  (quiet + full)
 # prefix = "✅"
 # # placeholders: {prefix} {event} {agent} {message} {detail_suffix}
 #
 # [grok.PreCompact]
-# enabled = false  # Compaction about to run
+# enabled = false  # Compaction about to run  (full profile: true)
 # prefix = "🗜️"
 # # placeholders: {prefix} {event} {trigger}
 #
 # [grok.PostCompact]
-# enabled = false  # Compaction finished
+# enabled = false  # Compaction finished  (full profile: true)
 # prefix = "📦"
 # # placeholders: {prefix} {event} {trigger}
 #
 # [grok.SessionEnd]
-# enabled = false  # Session ended
+# enabled = false  # Session ended  (full profile: true)
 # prefix = "🔴"
 # # placeholders: {prefix} {event} {reason}
 #

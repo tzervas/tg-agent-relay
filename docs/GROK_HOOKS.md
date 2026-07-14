@@ -2,7 +2,8 @@
 
 **Epic:** [#60](https://github.com/tzervas/tg-agent-relay/issues/60)  
 **Process:** [WORKFLOW.md](WORKFLOW.md) (swarm with **Grok Build**, not flagship 4.5)  
-**Official events:** `~/.grok/docs/user-guide/10-hooks.md` (14 events; we catalog all)
+**Official events:** `~/.grok/docs/user-guide/10-hooks.md` (14 events; we catalog all)  
+**Operator install / quiet vs full / troubleshooting:** [PROVIDERS.md](PROVIDERS.md#grok-build-telegram-hooks) · [SETUP.md](../SETUP.md) (Grok under “Wire up an adapter”)
 
 ## Baseline (already good)
 
