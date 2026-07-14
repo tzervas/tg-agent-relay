@@ -109,11 +109,14 @@ You implement ONLY GitHub issue #N for tzervas/tg-agent-relay.
 4. Write ONLY paths under Write ownership. Do not change protocols.py shapes.
 5. No live Telegram; no .env edits; no scope expansion.
 6. Run the Tests listed on the issue.
-7. Commit with conventional message; open PR: “Fixes #N — …”.
+7. Commit with conventional message; open PR body must include `Fixes #N`.
 
 Issue:
 <paste gh issue view N>
 ```
+
+After merge, issues are closed by `scripts/merge-pr.sh` / `close-linked-issues.sh`
+(or the `close-issues-on-merge` workflow)—not by GitHub default-branch auto-close.
 
 **Isolation:** prefer worktree or branch `feat/N-short-slug` off the current integration branch  
 (`fix/tts-voice-full-message-v0.5.3` or `main` when merged).
@@ -129,11 +132,32 @@ Issue:
 │ 2. Post/refresh Agent context comment on each issue     │
 │ 3. Spawn agents in parallel (Build lane)                │
 │ 4. Wait; collect PRs / branches                         │
-│ 5. Merge in order of least conflict                     │
+│ 5. Merge in order of least conflict:                    │
+│      bash scripts/merge-pr.sh N     # merge + close #   │
+│    (or: gh pr merge N && scripts/close-linked-issues)   │
 │ 6. Fix except-footgun + ruff; bash scripts/local-ci.sh  │
-│ 7. Close issues; update docs/EPICS.md; push             │
+│ 7. Update docs/EPICS.md; push                           │
 │ 8. Comment on parent epic with progress table           │
 └─────────────────────────────────────────────────────────┘
+```
+
+### Closing issues on integration merges
+
+GitHub only auto-closes issues when a PR merges into the **default** branch
+(`main`). Swarm PRs usually target the integration branch, so `Fixes #N` does
+not close the issue by itself.
+
+| Tool | Role |
+|---|---|
+| `scripts/close-linked-issues.sh --pr N` | Parse Fixes/Closes/Resolves (+ `feat(#N):` titles) and close open issues |
+| `scripts/merge-pr.sh N` | `gh pr merge` then close linked issues |
+| `.github/workflows/close-issues-on-merge.yml` | Same close logic when a PR is merged (any base); also `workflow_dispatch` |
+
+```bash
+bash scripts/merge-pr.sh 74                 # preferred after review
+bash scripts/close-linked-issues.sh --pr 74 # if already merged
+bash scripts/close-linked-issues.sh --merged-into fix/tts-voice-full-message-v0.5.3 --limit 20
+bash scripts/close-linked-issues.sh --pr 74 --dry-run
 ```
 
 ### File ownership (avoid thrash)

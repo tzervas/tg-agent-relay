@@ -1,0 +1,54 @@
+# Close issues referenced by Fixes/Closes/Resolves when a PR merges.
+#
+# GitHub only auto-closes on the *default* branch. This repo often merges into
+# an integration branch first, so closing keywords never fire. This workflow
+# is intentionally narrow (no tests) and is safe to leave enabled.
+#
+# Local equivalent (source of truth for orchestrators offline):
+#   bash scripts/close-linked-issues.sh --pr N
+#   bash scripts/merge-pr.sh N
+name: close-issues-on-merge
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to process (required for manual run)"
+        type: string
+        required: true
+      dry_run:
+        description: "List issues without closing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked:
+    name: Close Fixes/Closes issues for merged PR
+    runs-on: ubuntu-latest
+    # Auto path: only when the PR actually merged. Manual path: always.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Close linked issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          DRY_INPUT: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          args=(--pr "$PR_NUMBER")
+          if [[ "${DRY_INPUT}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          bash scripts/close-linked-issues.sh "${args[@]}"

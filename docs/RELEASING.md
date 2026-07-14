@@ -44,7 +44,9 @@ uv run tg-relay-poll
 | Lint + format + tests + MSRV | **Local** | `bash scripts/local-ci.sh` |
 | Cut release (tag + GitHub Release + tarball) | **Local** | `bash scripts/release.sh vX.Y.Z` |
 | Deploy live bridge | **Local** | `bash scripts/deploy-local.sh --ref vX.Y.Z` |
+| Merge PR + close `Fixes #N` on integration base | **Local** | `bash scripts/merge-pr.sh N` |
 | GitHub Actions `ci` / `release` / `gitleaks` | **Manual only** | Actions → workflow_dispatch (optional) |
+| Auto-close issues on PR merge (any base) | **Actions** | `close-issues-on-merge.yml` (enabled; no tests) |
 
 Remote CI is **not** required for day-to-day development or for publishing a release.
 Pushing a tag does **not** auto-run release jobs (avoids the v0.6.0 remote flakiness).
