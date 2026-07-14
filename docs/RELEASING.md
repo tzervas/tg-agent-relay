@@ -176,6 +176,24 @@ bash ~/.claude/telegram-bridge/install-grok-hooks.sh --dry-run
 # Restart anything that long-polls (your Monitor / systemd unit / tmux)
 ```
 
+### Grok live smoke (optional, post-deploy)
+
+When Grok Build hooks matter for this deploy, run the operator checklist in
+[GROK_HOOKS.md — Operator live smoke + metrics](GROK_HOOKS.md#operator-live-smoke--metrics)
+instead of only “one hook ping”:
+
+1. Confirm quiet events on the phone: **Stop**, **SubagentStop**,
+   **PostToolUseFailure**, **Notification**.
+2. Confirm a **default-off** event stays silent on Telegram (metrics may
+   still show `hook` / `grok_skip` with `disabled:<Event>`).
+3. If TTS is enabled, confirm `TG_SEND_SOURCE=hook` short voice works for
+   Grok the same way as Claude (full text + short voice note).
+4. Grep deploy-tree `.metrics.log` for `grok_event` / `grok_skip` (exact
+   strings documented in GROK_HOOKS.md). Do not paste secrets from `.env`.
+
+A single Stop ping still remains a valid minimal smoke when you are not
+changing Grok hooks or TTS.
+
 ---
 
 ## Remote GitHub Actions (optional, manual)
