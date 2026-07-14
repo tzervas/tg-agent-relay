@@ -114,6 +114,39 @@ and `tg_agent_relay.tts`.
 
 ---
 
+## D4 — Persistent `dev`, `main` only via PR, close on `main` only
+
+**Context.** Long-lived `fix/tts-…` tips and closing issues on every merge
+made the board lie (epics/tasks closed before work was on the default branch).
+
+**Decision.**
+
+- **`dev`** is the **persistent** integration branch; all feature PRs target it.
+- **`main`** changes **only through PRs** (promote/release), not day-to-day pushes.
+- Working branches cut from **`dev`**.
+- **Task issues** close only when `Fixes #N` (or commit trail) lands on **`main`**.
+- **Epics** stay open until a **final ship issue** with `Closes #<epic>` merges to **`main`**.
+- Merges into **`dev` never close issues**.
+- Optional Actions close job runs on **main** merges only, on a **Podman self-hosted** runner.
+
+**Why.** Board state matches “on the release line”; epics reflect real completion;
+`dev` can soak without pretending the default branch is updated.
+
+**Alternatives considered**
+
+| Alternative | Why rejected |
+|---|---|
+| Close issues when merging to `dev` | Main lags; “closed” work not on default branch. |
+| PR every feature straight to `main` | No integration buffer; noisy default branch. |
+| Manual epic close without ship issue | Easy to forget; no auto-close hook on main. |
+| GitHub-hosted runners only | Fine for rare jobs; local Podman keeps close/CI fast and offline-capable. |
+
+**Where.** [WORKFLOW.md](WORKFLOW.md) §0 · [RELEASING.md](RELEASING.md) ·
+[SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md) · `scripts/merge-pr.sh` ·
+`scripts/close-linked-issues.sh` · `.github/workflows/close-issues-on-merge.yml`.
+
+---
+
 ## Related
 
 - Orchestration process (cost lanes, swarm roles): [WORKFLOW.md](WORKFLOW.md)

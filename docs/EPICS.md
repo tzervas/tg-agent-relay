@@ -2,7 +2,7 @@
 
 **Python 3.14** · **uv + ruff** · Rust **MSRV 1.96** · **local-ci only**.  
 
-**Process:** [WORKFLOW.md](WORKFLOW.md) (orchestrator + swarm, cost lanes, spawn prompts).  
+**Process:** [WORKFLOW.md](WORKFLOW.md) (branches: **`main`** stable · **`dev`** integration · `feat/*` off `dev`).  
 Join APIs: [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [ADK_MCP.md](ADK_MCP.md) · [PROVIDERS.md](PROVIDERS.md)
 
 ## Epics

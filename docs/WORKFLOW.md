@@ -3,7 +3,82 @@
 Canonical process for **tg-agent-relay** and related work.  
 Goal: **high velocity + high quality at lower cost** — small, exclusive-file agents do implementation; a thin orchestrator owns joins, board hygiene, and merges.
 
-Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md)
+Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md) · [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md)
+
+---
+
+## 0. Branch model
+
+| Branch | Role |
+|---|---|
+| **`main`** | Default branch. Stable / tags / deploy refs. **Updated only via PR** (never direct push for product work). |
+| **`dev`** | **Persistent** integration line. Day-to-day merges land here after review + local-ci. |
+| **`feat/N-*` / `fix/*`** | Short-lived. **Cut from `dev`**, PR **into `dev`**. |
+
+```text
+  main  ←── PR only (promote / release) ──  dev  ←── PR ──  feat/N-… (off dev)
+                                              ▲
+                                         persistent
+```
+
+**Rules**
+
+1. Working branches always start from current `origin/dev`.
+2. Feature PR base is **`dev`**. Do not open new long-lived `fix/tts-…` integration branches.
+3. **`main` only changes through a GitHub PR** (typically `dev` → `main`). No “merge locally and push main” as the normal path.
+4. After `main` moves, open a small PR or merge-back so **`dev` includes `main`** (keep `dev` ahead or equal, never behind forever).
+
+```bash
+git fetch origin
+git checkout dev && git pull origin dev
+git checkout -b feat/41-rust-spike
+# … work …
+gh pr create --base dev --title "feat(#41): …" --body "Fixes #41"
+bash scripts/merge-pr.sh N    # merges into PR base (usually dev)
+```
+
+### Issue and epic close policy
+
+| Kind | When it closes |
+|---|---|
+| **Task issues** (`[swarm] …`, `Fixes #N` on the feature PR) | Only when that work reaches **`main`** (promote PR carries `Fixes #N` / commit trail, or GitHub auto-close on the main-bound PR). Merging to **`dev` leaves issues open**. |
+| **Epics** | Stay open until a **final ship issue** for that epic merges into **`main`** with `Closes #<epic>`. |
+
+```text
+  feat PRs → dev     : implement; board issues stay open
+  promote PR → main  : Fixes #61 #62 … (tasks) + optional Closes #60 (epic ship issue)
+```
+
+**Final epic issue** (one per epic, size S):
+
+```markdown
+## Parent
+Epic: #60
+
+## User story
+As a maintainer, when all children are on main I want the epic closed automatically.
+
+## Acceptance criteria
+- [ ] All child issues for this epic are fixed on `dev`
+- [ ] Promote PR `dev` → `main` includes `Closes #60` (or this issue is the promote body)
+- [ ] No open swarm children remain for the epic
+
+## Write ownership
+- docs/EPICS.md (status row only)
+
+## Done
+PR into **main** with `Closes #60`.
+```
+
+Helpers (main only for closes):
+
+```bash
+bash scripts/merge-pr.sh N                      # close only if base=main
+bash scripts/close-linked-issues.sh --pr N      # refuses non-main bases
+bash scripts/close-linked-issues.sh --pr N --dry-run
+```
+
+Self-hosted Actions runner (Podman): [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md).
 
 ---
 
@@ -54,12 +129,13 @@ Published xAI API list prices (USD / 1M tokens; confirm [docs.x.ai pricing](http
 ### States (practical)
 
 1. **Open + swarm-ready** — agent may start  
-2. **In progress** — agent comment with branch name  
-3. **PR open** — `Fixes #N`  
-4. **Integrated** — merged to integration branch, local-ci green  
-5. **Closed** — with comment pointing at commit/PR  
+2. **In progress** — branch from `dev`, agent comment with branch name  
+3. **PR open → `dev`** — body includes `Fixes #N` (for later main auto-close)  
+4. **On `dev`** — merged + local-ci green; **issue still open**  
+5. **On `main`** — promote PR; task issues close via `Fixes #N`  
+6. **Epic closed** — only via final ship issue / `Closes #<epic>` on a **main** PR  
 
-Epics stay open until **success criteria** in the epic body are honestly met (not when half the children exist).
+Epics stay open until children are on `main` and the final ship issue closes them.
 
 ### Issue body template (minimum)
 
@@ -115,11 +191,8 @@ Issue:
 <paste gh issue view N>
 ```
 
-After merge, issues are closed by `scripts/merge-pr.sh` / `close-linked-issues.sh`
-(or the `close-issues-on-merge` workflow)—not by GitHub default-branch auto-close.
-
-**Isolation:** prefer worktree or branch `feat/N-short-slug` off the current integration branch  
-(`fix/tts-voice-full-message-v0.5.3` or `main` when merged).
+**Isolation:** worktree or `feat/N-short-slug` **off `origin/dev`**, PR base **`dev`**.  
+Issue close happens only on **`main`** (see §0).
 
 ---
 
@@ -127,38 +200,23 @@ After merge, issues are closed by `scripts/merge-pr.sh` / `close-linked-issues.s
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│ 0. local-ci green on integration tip                    │
+│ 0. local-ci green on origin/dev                         │
 │ 1. Pick 3–6 open swarm-ready issues with disjoint files │
-│ 2. Post/refresh Agent context comment on each issue     │
-│ 3. Spawn agents in parallel (Build lane)                │
-│ 4. Wait; collect PRs / branches                         │
-│ 5. Merge in order of least conflict:                    │
-│      bash scripts/merge-pr.sh N     # merge + close #   │
-│    (or: gh pr merge N && scripts/close-linked-issues)   │
-│ 6. Fix except-footgun + ruff; bash scripts/local-ci.sh  │
-│ 7. Update docs/EPICS.md; push                           │
-│ 8. Comment on parent epic with progress table           │
+│ 2. Agent context comment; spawn Build off dev           │
+│ 3. PRs base=dev with Fixes #N in body                   │
+│ 4. bash scripts/merge-pr.sh N  (into dev; issues open)  │
+│ 5. local-ci on dev; update EPICS progress (epic open)   │
+│ 6. When shipping: PR dev→main with Fixes #… for tasks   │
+│    + final ship issue Closes #<epic> when epic is done  │
+│ 7. Tag release from main; keep dev ≥ main               │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Closing issues on integration merges
-
-GitHub only auto-closes issues when a PR merges into the **default** branch
-(`main`). Swarm PRs usually target the integration branch, so `Fixes #N` does
-not close the issue by itself.
-
 | Tool | Role |
 |---|---|
-| `scripts/close-linked-issues.sh --pr N` | Parse Fixes/Closes/Resolves (+ `feat(#N):` titles) and close open issues |
-| `scripts/merge-pr.sh N` | `gh pr merge` then close linked issues |
-| `.github/workflows/close-issues-on-merge.yml` | Same close logic when a PR is merged (any base); also `workflow_dispatch` |
-
-```bash
-bash scripts/merge-pr.sh 74                 # preferred after review
-bash scripts/close-linked-issues.sh --pr 74 # if already merged
-bash scripts/close-linked-issues.sh --merged-into fix/tts-voice-full-message-v0.5.3 --limit 20
-bash scripts/close-linked-issues.sh --pr 74 --dry-run
-```
+| `scripts/merge-pr.sh N` | Merge PR; close issues **only if base is main** |
+| `scripts/close-linked-issues.sh --pr N` | Same; **refuses non-main** bases |
+| `close-issues-on-merge.yml` | Actions on **main** merges (self-hosted runner) |
 
 ### File ownership (avoid thrash)
 
@@ -191,18 +249,20 @@ uv run ruff format <paths>
 
 ---
 
-## 7. Integration branch & cutover (current product)
+## 7. Product line (current)
 
 | Item | Value |
 |---|---|
-| Integration branch (as of handoff) | `fix/tts-voice-full-message-v0.5.3` |
+| Default branch | **`main`** (stable / tags) |
+| Integration branch | **`dev`** (feature PRs merge here) |
+| Latest release | **v0.6.1** (see GitHub Releases) |
 | Python ports | Landed (send/poll/format/routing/tts/hooks/…) |
 | Live default | **Python** via `tg-send.sh` / `tg-poll.sh` exec (package import) |
 | Opt-out shell | `RELAY_PYTHON_SEND=0` · `RELAY_PYTHON_POLL=0` |
 | Recovery helpers | `lib/python_fallback.sh` (see SETUP / [DECISIONS.md](DECISIONS.md)) |
 | Claude hooks | Prefer `provider_hook` when Python works (`CLAUDE_USE_PROVIDER_HOOK=0` to force shell) |
 
-Details: [RELEASING.md](RELEASING.md) § Python package path.
+Promote `dev` → `main` when cutting a release or when stable work should land on the default branch. Details: [RELEASING.md](RELEASING.md).
 
 ---
 
@@ -272,7 +332,7 @@ chore: …
 ## 12. Handoff checklist (before switching models / sessions)
 
 - [ ] `git status` clean or intentional WIP committed  
-- [ ] Integration tip pushed  
+- [ ] `dev` tip pushed (and `main` promoted if a release was cut)  
 - [ ] `docs/EPICS.md` matches GitHub open/closed  
 - [ ] Open issues have AC + write ownership (or labeled not ready)  
 - [ ] Next wave list written in epic comment or here §8  
@@ -282,11 +342,12 @@ chore: …
 
 ```bash
 cd /path/to/tg-agent-relay
-git checkout fix/tts-voice-full-message-v0.5.3   # or main if merged
-git pull
+git fetch origin
+git checkout dev && git pull origin dev
 gh issue list --state open
 cat docs/EPICS.md docs/WORKFLOW.md
 bash scripts/local-ci.sh --quick   # or full before spawning
 ```
 
-Then: spawn Build agents for the next disjoint `swarm-ready` issues only.
+Then: spawn Build agents for the next disjoint `swarm-ready` issues only
+(branch from `dev`, PR base `dev`).

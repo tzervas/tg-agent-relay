@@ -4,6 +4,47 @@
 
 **This workstation is the source of truth for quality gates and releases.**
 
+### Branches
+
+| Branch | Use |
+|---|---|
+| **`main`** | Default branch. Tags / stable deploys. **Only via PR** (no direct product pushes). |
+| **`dev`** | Persistent integration. All feature PRs land here. |
+| **`feat/*`** | Cut from **`dev`**; PR base **`dev`**. |
+
+Issues stay open on `dev` merges. Task issues and epic ship issues close when
+their keywords land on **`main`** (GitHub auto-close + optional self-hosted
+workflow). See [WORKFLOW.md](WORKFLOW.md) §0 and [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md).
+
+Release / promote flow (PR only into main):
+
+```bash
+# 1. Feature work on dev; local-ci green
+# 2. Open promote PR (list Fixes for tasks delivered; Closes #epic if final)
+gh pr create --base main --head dev \
+  --title "release: promote dev (vX.Y.Z)" \
+  --body "$(cat <<'EOF'
+## Summary
+Promote dev to main for release.
+
+Fixes #61
+Fixes #62
+# … every task issue included in this promote …
+
+Closes #60   # only when epic is fully done (final ship)
+
+EOF
+)"
+
+# 3. After PR merge into main (review on GitHub):
+git fetch origin && git checkout main && git pull origin main
+bash scripts/local-ci.sh --release
+bash scripts/release.sh vX.Y.Z
+
+# 4. Point dev at main (PR or merge-back) so dev is not behind
+gh pr create --base dev --head main --title "chore: sync dev with main after release"
+```
+
 ### Python package path (default — epic #18 / #67)
 
 **Python is the default** for send and poll when `tg_agent_relay` imports cleanly.
@@ -44,9 +85,12 @@ uv run tg-relay-poll
 | Lint + format + tests + MSRV | **Local** | `bash scripts/local-ci.sh` |
 | Cut release (tag + GitHub Release + tarball) | **Local** | `bash scripts/release.sh vX.Y.Z` |
 | Deploy live bridge | **Local** | `bash scripts/deploy-local.sh --ref vX.Y.Z` |
-| Merge PR + close `Fixes #N` on integration base | **Local** | `bash scripts/merge-pr.sh N` |
-| GitHub Actions `ci` / `release` / `gitleaks` | **Manual only** | Actions → workflow_dispatch (optional) |
-| Auto-close issues on PR merge (any base) | **Actions** | `close-issues-on-merge.yml` (enabled; no tests) |
+| Merge feature PR into **`dev`** (issues stay open) | **Local** | `bash scripts/merge-pr.sh N` |
+| Promote **`dev` → `main`** (PR only; closes tasks/epic) | **GitHub PR** | `gh pr create --base main --head dev` |
+| Close issues for a **main** PR (if needed) | **Local** | `bash scripts/close-linked-issues.sh --pr N` |
+| Self-hosted runner (Podman) | **Local** | `bash scripts/self-hosted-runner/run-runner.sh start` |
+| GitHub Actions `ci` / `release` / `gitleaks` | **Manual** | `workflow_dispatch` (optional) |
+| Auto-close on **main** merge | **Actions** | `close-issues-on-merge.yml` (self-hosted) |
 
 Remote CI is **not** required for day-to-day development or for publishing a release.
 Pushing a tag does **not** auto-run release jobs (avoids the v0.6.0 remote flakiness).

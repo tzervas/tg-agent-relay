@@ -1,0 +1,35 @@
+# GitHub Actions self-hosted runner image (Podman).
+# Official runner binary; no workflow code baked in — registration at start.
+FROM docker.io/library/ubuntu:24.04
+
+ARG RUNNER_VERSION=2.323.0
+ARG TARGETARCH=x64
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUNNER_HOME=/opt/actions-runner \
+    RUNNER_ALLOW_RUNASROOT=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git jq tar gzip libicu74 libssl3 \
+        python3 python3-venv bash build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Optional toolchains used by local-ci (installed at image build so jobs stay fast)
+RUN curl -fsSL https://astral.sh/uv/install.sh | sh \
+    && ln -sf /root/.local/bin/uv /usr/local/bin/uv
+
+# Bake runner into a seed dir; runtime volume may mount over RUNNER_HOME.
+RUN mkdir -p /opt/actions-runner-seed \
+    && cd /opt/actions-runner-seed \
+    && curl -fsSL -o actions-runner.tar.gz \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${TARGETARCH}-${RUNNER_VERSION}.tar.gz" \
+    && tar xzf actions-runner.tar.gz \
+    && rm actions-runner.tar.gz \
+    && ./bin/installdependencies.sh \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p "${RUNNER_HOME}"
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

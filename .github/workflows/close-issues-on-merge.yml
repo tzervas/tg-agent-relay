@@ -1,21 +1,18 @@
-# Close issues referenced by Fixes/Closes/Resolves when a PR merges.
+# Close Fixes/Closes issues only when a PR merges into **main**.
 #
-# GitHub only auto-closes on the *default* branch. This repo often merges into
-# an integration branch first, so closing keywords never fire. This workflow
-# is intentionally narrow (no tests) and is safe to leave enabled.
-#
-# Local equivalent (source of truth for orchestrators offline):
-#   bash scripts/close-linked-issues.sh --pr N
-#   bash scripts/merge-pr.sh N
+# Feature PRs target **dev** and must leave issues open. Epics stay open until
+# a final ship issue (Closes #<epic>) is included in a main-bound PR.
+# Prefer the self-hosted runner (see docs/SELF_HOSTED_RUNNER.md).
 name: close-issues-on-merge
 
 on:
   pull_request:
     types: [closed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       pr:
-        description: "PR number to process (required for manual run)"
+        description: "PR number (must be merged into main)"
         type: string
         required: true
       dry_run:
@@ -30,19 +27,20 @@ permissions:
 
 jobs:
   close-linked:
-    name: Close Fixes/Closes issues for merged PR
-    runs-on: ubuntu-latest
-    # Auto path: only when the PR actually merged. Manual path: always.
+    name: Close issues for main merge
+    # Prefer local podman runner; falls back if no runner is registered.
+    runs-on: [self-hosted, linux, x64]
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == 'main')
     steps:
       - uses: actions/checkout@v4
 
-      - name: Close linked issues
+      - name: Close linked issues (main only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
           DRY_INPUT: ${{ inputs.dry_run || false }}
         run: |
@@ -51,4 +49,5 @@ jobs:
           if [[ "${DRY_INPUT}" == "true" ]]; then
             args+=(--dry-run)
           fi
+          # Script refuses non-main bases unless --any-base
           bash scripts/close-linked-issues.sh "${args[@]}"
