@@ -14,18 +14,12 @@ Shell implementations remain as fallback and explicit opt-out:
 bash tg-send.sh "hello"
 bash tg-poll.sh
 
-# Force legacy shell paths (noisy: stderr + metrics log python_fallback):
+# Force legacy shell (debug / bisect):
 export RELAY_PYTHON_SEND=0
 export RELAY_PYTHON_POLL=0
-# If Python import fails without opt-out, shell still runs but prints why
-# and records metrics: tg-send/tg-poll  python_fallback  failed: …
-
-# Adversarial / dynamic recovery knobs (lib/python_fallback.sh):
-#   RELAY_PYTHON_FALLBACK_TTL=60   sticky shell after failure (cap 3600s)
-#   RELAY_PYTHON_STICKY=0          always re-probe (costly under outage)
-#   RELAY_PYTHON_PROBE_TIMEOUT=5   import probe bound (cap 30s)
-#   RELAY_PYTHON_FALLBACK_QUIET=1  metric only (tests)
-# Hostile RELAY_PYTHON values are rejected; error text is secret-redacted.
+# On unexpected import failure, shell still runs; stderr + metrics note it.
+# Optional: RELAY_PYTHON_FALLBACK_TTL, RELAY_PYTHON_PROBE_TIMEOUT
+# (see SETUP.md, docs/DECISIONS.md).
 
 # Or call entry points directly:
 uv run tg-relay-send "hello"

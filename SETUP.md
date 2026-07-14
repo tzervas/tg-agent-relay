@@ -22,24 +22,23 @@ export RELAY_PYTHON_SEND=0
 export RELAY_PYTHON_POLL=0
 ```
 
-If the package fails to import (missing `tg_agent_relay/`, wrong Python, broken
-deps), the shell path still runs but is **never silent**: stderr explains the
-failure and recovery, and `.metrics.log` gets a `python_fallback` line.
+If the package fails to import, the shell path still runs. The first failure
+prints a short recovery note on stderr and records a `python_fallback` metric;
+later hooks may stay on shell for a short TTL so a broken install does not
+re-probe on every event (`lib/python_fallback.sh`). Optional knobs:
 
-**Adversarial recovery** (`lib/python_fallback.sh`):
+| Variable | Default | Role |
+|---|---|---|
+| `RELAY_PYTHON_FALLBACK_TTL` | `60` | Seconds to prefer shell after a failure (max 3600) |
+| `RELAY_PYTHON_PROBE_TIMEOUT` | `5` | Import probe bound (max 30) |
+| `RELAY_PYTHON_STICKY` | `1` | Set `0` to re-probe every time |
+| `RELAY_PYTHON_FALLBACK_QUIET` | `0` | `1` = metrics only (tests) |
 
-| Guard | Behavior |
-|---|---|
-| Secret redaction | `BOT_TOKEN`, Telegram token shapes, `sk-`, `Bearer`, `xai-`, GitHub pats stripped before stderr/metrics |
-| Safe interpreter | `RELAY_PYTHON` with shell metacharacters / `..` / non-python names is rejected |
-| Sticky window | After a failure, hooks skip re-probe for `RELAY_PYTHON_FALLBACK_TTL` (default 60s, max 1h) |
-| Probe timeout | Import probe bounded (`RELAY_PYTHON_PROBE_TIMEOUT`, default 5s) so a wedged Python cannot hang hooks |
-| Noisy vs quiet sticky | Real failures print recovery steps; sticky hits are metric-only unless `RELAY_PYTHON_STICKY_VERBOSE=1` |
+Design notes: [`docs/DECISIONS.md`](docs/DECISIONS.md). Release path:
+[`docs/RELEASING.md`](docs/RELEASING.md) § Python package path.
 
 Claude Code hooks prefer `providers/claude` via Python when available
 (`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).
-
-Details: [`docs/RELEASING.md`](docs/RELEASING.md) § Python package path.
 
 **Preferred: Python 3.14** (see `.python-version`). Use **uv** for the
 project env and **ruff** for lint/format:

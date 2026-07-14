@@ -58,11 +58,9 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Python poll is the **default** (epic #18 / issue #67). Opt out to shell:
-#   RELAY_PYTHON_POLL=0  bash tg-poll.sh
-# Falls back to this shell body if Python/package is unavailable — **noisy**
-# on real failure (stderr + metrics), sticky under outage, secret-redacted
-# reasons. See lib/python_fallback.sh.
+# Python poll is the default (#67). Opt out: RELAY_PYTHON_POLL=0.
+# If the package cannot be imported, this shell body continues (see
+# lib/python_fallback.sh and docs/DECISIONS.md).
 _PY_POLL_FALLBACK_REASON=""
 _PY_POLL_FALLBACK_KIND=""  # failed | forced | sticky
 # shellcheck disable=SC1091
@@ -123,8 +121,7 @@ fi
 [[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
 
-# Never-silent Python→shell recovery (after emit_metric is available).
-# RELAY_PYTHON_FALLBACK_QUIET=1 → metric only (offline test suite).
+# Fallback notice once emit_metric is available (QUIET=1 → metrics only).
 if [[ -n "${_PY_POLL_FALLBACK_KIND:-}" ]]; then
     if declare -f relay_py_announce_fallback >/dev/null 2>&1; then
         relay_py_announce_fallback "tg-poll" "$_PY_POLL_FALLBACK_KIND" "$_PY_POLL_FALLBACK_REASON"

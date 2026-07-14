@@ -16,8 +16,9 @@ set -u
 
 # relay_python_resolve → sets RELAY_PYTHON to an absolute or PATH command.
 # Preference: RELAY_PYTHON override → project .venv (uv) → python3.14 → 3.13 → python3
-# Internal: reject shell metacharacters / traversal in RELAY_PYTHON (defense-in-depth;
-# python_fallback.sh also enforces before exec).
+#
+# _relay_python_looks_safe rejects metacharacters / path tricks in RELAY_PYTHON
+# so a bad override is not treated as a valid interpreter name.
 _relay_python_looks_safe() {
     local b="${1:-}"
     [[ -n "$b" ]] || return 1
@@ -36,7 +37,7 @@ relay_python_resolve() {
             && { command -v "$RELAY_PYTHON" >/dev/null 2>&1 || [[ -x "$RELAY_PYTHON" ]]; }; then
             return 0
         fi
-        # Invalid or hostile override — fall through and re-resolve
+        # Invalid override — fall through and re-resolve from the environment.
         RELAY_PYTHON=""
     fi
 

@@ -1,27 +1,13 @@
 #!/usr/bin/env python3
-"""tts_plain_text.py - strip markdown/HTML to clean spoken prose for TTS.
+"""Strip markdown/HTML into clean spoken prose for TTS engines.
 
-Reads the message text on stdin, writes a plain-text transcript on stdout
-for piper/espeak. The SENT Telegram text is never changed — only the voice
-input is stripped (lib/tts.sh / tg-send.sh).
+Reads message text on stdin and writes a plain-text transcript on stdout
+for piper/espeak. Callers leave the Telegram message body unchanged; only
+the voice input is transformed (see lib/tts.sh).
 
-Never voiced (replaced with short refs or removed):
-  - inline code: `...`  (and ``...``, any equal-length backtick run)
-  - fenced code: ```lang ... ``` / ~~~
-  - HTML <pre>/<code>
-  - URLs (http(s), www, file://, bare domain-ish paths)
-  - call / tool / request IDs (UUIDs, call_*, toolu_*, long hex ids, …)
-  - markdown chrome: # headers, * _ ** emphasis, > quotes, list markers,
-    [k/n] page headers, leftover backticks/asterisks
-  - emoji and pictographs (🔔 ✅ 🚀 flags, skin tones, ZWJ sequences, …)
-    — engines often misread these as "emoji" / code points or skip oddly;
-    the on-screen Telegram text is unchanged
-
-Code/links become short references (defaults: "ref. the message for the
-code" / "ref. the message for the link"); adjacent identical refs collapse
-into one. --speak-code reads code bodies verbatim (escape hatch).
-
-Never-fatal: on any error, echoes stdin so voice still speaks.
+Strips formatting chrome, code/URLs (replaced by short refs unless
+``--speak-code``), opaque call IDs, and emoji/pictographs. On unexpected
+errors the CLI echoes stdin so a voice note can still be attempted.
 """
 
 from __future__ import annotations
@@ -33,7 +19,18 @@ import sys
 
 
 def collapse_adjacent_refs(text: str, *phrases: str) -> str:
-    """Collapse consecutive identical reference phrases into one."""
+    """Collapse consecutive identical reference phrases into one.
+
+    Multiple fenced blocks in one message would otherwise produce
+    "ref… code. ref… code." in a row; one spoken cue is enough.
+
+    Args:
+        text: Spoken transcript after code/link substitution.
+        *phrases: Reference phrases to collapse (longer first).
+
+    Returns:
+        Text with adjacent duplicate phrases reduced to a single copy.
+    """
     if not text or not phrases:
         return text
     ordered = sorted({p for p in phrases if p}, key=len, reverse=True)
@@ -77,9 +74,9 @@ _RE_URL = re.compile(r"(?i)\b(?:https?://|ftp://|file://|www\.)[^\s<>\[\]()\"']+
 # Angle-bracket autolinks <https://...>
 _RE_ANGLE_URL = re.compile(r"<(?i:https?://|ftp://|file://|www\.)[^>\s]+>")
 
-# Emoji / pictographs for voiceover (stdlib-only; no third-party emoji pack).
-# Ranges are deliberate (no mega-spans into CJK/letters). ASCII + normal
-# prose Unicode (accents, curly quotes) stay. Orphan ZWJ/VS/skin tones drop.
+# Explicit emoji ranges (stdlib only). Keep ranges tight so CJK letters and
+# normal punctuation are not swept up; orphans (ZWJ / VS / skin tone) cleaned
+# after multi-codepoint sequences are removed.
 _RE_EMOJI = re.compile(
     "["
     "\U0001f600-\U0001f64f"  # emoticons
@@ -123,30 +120,45 @@ _RE_EMOJI = re.compile(
     "\U0000fe00-\U0000fe0f"  # variation selectors
     "\U0000200d"  # ZWJ
     "\U000020e3"  # keycap combiner
-    # Tag chars U+E0020–U+E007F — must be exactly 8 hex digits after \U
-    # (a 9-digit form is parsed as \Uxxxxxxxx + leftover and can create
-    # an ASCII-swallowing range like '0'-…).
+    # Tag chars: use 8 hex digits after \\U (U+E0020–U+E007F). A 9-digit
+    # form is parsed as \\Uxxxxxxxx + leftover and can form an ASCII range.
     "\U000e0020-\U000e007f"
     "\U0001f3fb-\U0001f3ff"  # skin tone modifiers
     "]+"
 )
-# Isolated leftover joiners / VS after partial multi-codepoint emoji removal
 _RE_EMOJI_ORPHANS = re.compile("[\u200d\ufe0e\ufe0f\u20e3\U0001f3fb-\U0001f3ff]+")
 
 
 def _strip_ids(text: str) -> str:
-    """Remove call IDs / UUIDs / opaque tokens the voice should never spell out."""
+    """Drop call/session IDs that engines would spell out character-wise.
+
+    Args:
+        text: Partial transcript after code/URL handling.
+
+    Returns:
+        Text with UUIDs, toolu_/call_ tokens, and similar opaque IDs removed.
+    """
     text = _RE_LABELED_ID.sub(" ", text)
     text = _RE_CALL_PREFIX.sub(" ", text)
     text = _RE_UUID.sub(" ", text)
     text = _RE_LONG_HEX.sub(" ", text)
-    # Avoid nuking normal long words: only slash/plus heavy tokens (ids/hashes)
+    # Require a separator so ordinary long words are kept.
     text = re.sub(r"\b(?=[A-Za-z0-9_+/-]*[_+/-])[A-Za-z0-9_+/.-]{24,}={0,2}\b", " ", text)
     return text
 
 
 def strip_emoji(text: str) -> str:
-    """Remove emoji/pictographs from spoken prose. Pure; never raises."""
+    """Remove emoji and pictographs from spoken prose.
+
+    Piper/espeak often misread these glyphs; the on-screen Telegram text is
+    prepared separately and is not modified here. See docs/DECISIONS.md (D3).
+
+    Args:
+        text: Candidate spoken transcript.
+
+    Returns:
+        Text with emoji ranges replaced by spaces (caller normalizes ws).
+    """
     if not text:
         return text
     text = _RE_EMOJI.sub(" ", text)
@@ -161,11 +173,25 @@ def strip_formatting(
     speak_code: bool = False,
     collapse_refs: bool = True,
 ) -> str:
-    """Return `text` as clean spoken prose. Pure; never raises for normal input."""
+    """Return ``text`` as clean spoken prose for a TTS engine.
 
-    # 0. Explicit fenced code blocks FIRST (``` … ```), including flattened
-    #    single-line form: ```lang code here```. Prefer this over the generic
-    #    equal-run rule so fences never leak as spoken ticks + code.
+    Code and links become short spoken references so the engine does not
+    read source or URLs aloud. Markdown/HTML chrome and emoji are removed.
+    Does not raise for ordinary string input.
+
+    Args:
+        text: Raw message (markdown and/or HTML fragments).
+        code_ref: Spoken stand-in for a code span or fence.
+        link_ref: Spoken stand-in for a URL (optionally after a link label).
+        speak_code: If True, read code bodies instead of ``code_ref``.
+        collapse_refs: If True, merge adjacent identical ref phrases.
+
+    Returns:
+        Single-line-ish spoken transcript suitable for synthesis.
+    """
+
+    # Fenced blocks first (including flat ```lang code```) so the generic
+    # equal-run backtick rule does not leave ticks + code in the voice path.
     def _bt_fence(m: re.Match[str]) -> str:
         body = m.group("body") or ""
         # drop optional language tag on first line of body
@@ -246,16 +272,14 @@ def strip_formatting(
     text = text.replace("#", " ")
     text = re.sub(r"(?<!\w)~(?!\w)", " ", text)
 
-    # 8. Emoji / pictographs — never spoken (engines misread or spell code points)
+    # Emoji after chrome so decorative markers on headers are gone too.
     text = strip_emoji(text)
 
-    # 9. Whitespace → one flowing prose line
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\s*\n\s*", " ", text)
     text = re.sub(r"\s{2,}", " ", text)
     text = text.strip()
 
-    # 10. Collapse adjacent identical refs
     if collapse_refs and not speak_code:
         text = collapse_adjacent_refs(text, code_ref, link_ref, f"link, {link_ref}")
     return text

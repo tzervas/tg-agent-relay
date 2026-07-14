@@ -215,7 +215,7 @@ clear_recorded "$BRIDGE2"
 rm -rf "$BRIDGE2"
 
 # ============================================================================
-echo "== lib/python_fallback.sh: adversarial recovery (redact / safe-bin / sticky) =="
+echo "== lib/python_fallback.sh: redact / safe-bin / sticky =="
 # shellcheck disable=SC1091
 source "$REPO_ROOT/lib/python_fallback.sh"
 

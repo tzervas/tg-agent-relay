@@ -3,7 +3,7 @@
 Canonical process for **tg-agent-relay** and related work.  
 Goal: **high velocity + high quality at lower cost** — small, exclusive-file agents do implementation; a thin orchestrator owns joins, board hygiene, and merges.
 
-Related: [EPICS.md](EPICS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md)
+Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md](GROK_HOOKS.md) · [AGENT_INTERFACES.md](AGENT_INTERFACES.md) · [TOOLING.md](TOOLING.md) · [RELEASING.md](RELEASING.md)
 
 ---
 
@@ -175,24 +175,21 @@ uv run ruff format <paths>
 | Python ports | Landed (send/poll/format/routing/tts/hooks/…) |
 | Live default | **Python** via `tg-send.sh` / `tg-poll.sh` exec (package import) |
 | Opt-out shell | `RELAY_PYTHON_SEND=0` · `RELAY_PYTHON_POLL=0` |
-| Recovery | `lib/python_fallback.sh` — redacted, sticky, bounded probe (see SETUP) |
+| Recovery helpers | `lib/python_fallback.sh` (see SETUP / [DECISIONS.md](DECISIONS.md)) |
 | Claude hooks | Prefer `provider_hook` when Python works (`CLAUDE_USE_PROVIDER_HOOK=0` to force shell) |
 
 Details: [RELEASING.md](RELEASING.md) § Python package path.
 
 ---
 
-## 7b. Adversarial / performance principles (product code)
+## 7b. Docs and design notes
 
-When changing runtime paths (hooks, send/poll, config, providers), default to:
-
-1. **Never-silent failure** — recover, but say *why* + how to fix (stderr + metrics). Tests may set `*_QUIET=1`.
-2. **Assume hostile env** — `RELAY_PYTHON`, paths, and error strings may contain shell metacharacters or secrets; validate before `exec`, redact before log.
-3. **Fail closed on auth, fail open on UX** — allowlist/token mistakes must not send; formatting/TTS/highlight may degrade with a metric.
-4. **Dynamic cost under outage** — sticky / TTL / timeouts so a missing package does not fork-probe Python on every hook.
-5. **Bounded work** — probe timeouts, TTL caps, reason length caps; no unbounded retries on the hot path.
-6. **Private runtime state** — stamp/lock files mode `0600` when possible; never commit `.env`, tokens, sticky stamps.
-7. **Same contracts on fallback** — shell recovery must preserve allowlist, routing, format, and TTS semantics.
+- **User-facing** (README, SETUP): short, practical, humble. Show behavior;
+  avoid slogans and internal process language.
+- **Code comments / Python docstrings**: Google style. Explain the *why*
+  for non-trivial logic; skip restating the obvious.
+- **Design decisions** (implemented choices, trade-offs, rejected
+  alternatives): [DECISIONS.md](DECISIONS.md).
 
 ---
 

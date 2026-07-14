@@ -48,11 +48,9 @@ declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"
 # Convert a formatted message (the raw markdown tg-send.sh receives, or the
 # HTML lib/format.sh emits - both are handled) into clean plain-text PROSE
 # for the TTS engine, so the voice reads WORDS, never the formatting SYMBOLS
-# (`#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ```` code, `<b>`/`<pre>`
-# tags, `&lt;` entities, `>` quotes, `[k/n]` page headers, list markers,
-# emoji/pictographs). Prints the stripped text to stdout. The SENT text
-# message is NEVER touched - only this spoken copy is stripped (the caller
-# passes the result to tts_send_voice; the text send uses the original $MSG).
+# (`#` headers, `*`/`_` emphasis, code fences, HTML tags, list markers,
+# emoji). Prints the stripped text to stdout. The sent text message is
+# unchanged; only this spoken copy is passed to tts_send_voice.
 #
 # Code and links are, by the maintainer's choice, referenced rather than
 # read: a code span/block -> `[tts].voice_code_ref` (default "code, see the

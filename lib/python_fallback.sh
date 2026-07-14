@@ -1,34 +1,27 @@
 #!/bin/bash
-# lib/python_fallback.sh — shared adversarial-safe Python→shell recovery.
+# lib/python_fallback.sh — Python default path with shell recovery.
 #
-# Sourced by tg-send.sh / tg-poll.sh (never execute). Provides:
-#   - secret-aware redaction of error text (no tokens in metrics/stderr)
-#   - safe interpreter selection (no shell metacharacters in RELAY_PYTHON)
-#   - sticky failure window (avoid re-probing import on every hook under outage)
-#   - never-silent recovery for real failures; sticky is metric-only by default
-#   - bounded import probe (timeout) so a wedged interpreter cannot hang hooks
+# Sourced by tg-send.sh / tg-poll.sh (do not execute). Shared helpers for:
+#   - redacting secrets from error text before stderr/metrics
+#   - validating RELAY_PYTHON before exec
+#   - sticky failure window (skip re-probe while an outage is ongoing)
+#   - bounded import probe
+#   - fallback notices + metrics
 #
-# Env:
-#   RELAY_PYTHON_FALLBACK_TTL     seconds to sticky-shell after failure (default 60, max 3600)
-#   RELAY_PYTHON_FALLBACK_QUIET   1 = metric only (tests)
-#   RELAY_PYTHON_STICKY=0         disable sticky (always re-probe — costly under outage)
-#   RELAY_PYTHON_STICKY_VERBOSE=1 also print sticky hits to stderr (default: metric only)
-#   RELAY_PYTHON_PROBE_TIMEOUT    seconds for import probe (default 5, max 30)
-#
-# Adversarial model (summary):
-#   - Hostile RELAY_PYTHON (`; rm -rf`, spaces, `..`) must never reach exec
-#   - Import/stderr may echo BOT_TOKEN / sk- / Bearer → redact before log
-#   - Hook storms during outage must not fork-probe Python every event
-#   - Sticky stamp file is private (0600), kind-validated, atomic write
-#   - TTL is capped so a typo cannot pin shell forever
+# Environment:
+#   RELAY_PYTHON_FALLBACK_TTL     sticky shell duration after failure (default 60, max 3600)
+#   RELAY_PYTHON_FALLBACK_QUIET   1 = metrics only (used by the offline suite)
+#   RELAY_PYTHON_STICKY=0         always re-probe (higher cost when Python is down)
+#   RELAY_PYTHON_STICKY_VERBOSE=1 print sticky hits to stderr (default: metric only)
+#   RELAY_PYTHON_PROBE_TIMEOUT    import probe seconds (default 5, max 30)
 set -u
 
-# relay_redact_secrets <text> → stdout redacted, truncated
+# relay_redact_secrets <text>
+# Writes a single-line, truncated form of text with common token shapes masked.
+# Import and runtime errors can echo credentials; logs should not retain them.
 relay_redact_secrets() {
     local s="${1:-}"
-    # Collapse whitespace / control noise
     s="$(printf '%s' "$s" | tr '\n\r\t' ' ' | tr -s ' ')"
-    # Common secret shapes (defense-in-depth; never log raw tokens)
     s="$(printf '%s' "$s" | sed -E \
         -e 's/BOT_TOKEN[=:][[:space:]]*[A-Za-z0-9:_-]{8,}/BOT_TOKEN=***REDACTED***/g' \
         -e 's/[0-9]{8,12}:[A-Za-z0-9_-]{20,}/TELEGRAM_TOKEN=***REDACTED***/g' \
@@ -39,36 +32,36 @@ relay_redact_secrets() {
         -e 's/ghp_[A-Za-z0-9]{20,}/ghp_***REDACTED***/g' \
         -e 's/gho_[A-Za-z0-9]{20,}/gho_***REDACTED***/g' \
         -e 's/github_pat_[A-Za-z0-9_]{20,}/github_pat_***REDACTED***/g')"
-    # Cap length (metrics + stderr)
     if [[ ${#s} -gt 360 ]]; then
         s="${s:0:357}..."
     fi
     printf '%s' "$s"
 }
 
-# relay_py_bin_is_safe <path-or-name> → 0 if acceptable for exec
-# Rejects shell metacharacters / injection in RELAY_PYTHON override.
+# relay_py_bin_is_safe <path-or-name>
+# Returns 0 if the value is acceptable for exec (absolute executable or bare
+# python* name on PATH). Rejects shell metacharacters, whitespace, and `..`
+# so RELAY_PYTHON cannot be interpreted as a compound command.
 relay_py_bin_is_safe() {
     local b="${1:-}"
     [[ -n "$b" ]] || return 1
-    # No whitespace, no shell metacharacters, no path traversal
     case "$b" in
         *[!A-Za-z0-9/_.+-]* | *..* | *' '* | *$'\t'* | *$'\n'* | *';'* | *'|'* | *'&'* | *'$'* | *'`'* | *'('* | *')'* | *"'"* | *'"'*) return 1 ;;
     esac
-    # Must be absolute path or single PATH component name (no relative ./ tricks)
     if [[ "$b" == /* ]]; then
-        # Reject non-regular (e.g. unexpected dirs) and require executable
         [[ -f "$b" && -x "$b" ]] || return 1
         return 0
     fi
-    # bare name: python3.14, python3, etc. — not paths
+    # Relative paths are ambiguous in hooks; only bare interpreter names.
     [[ "$b" != */* ]] || return 1
     [[ "$b" == python* ]] || return 1
     command -v "$b" >/dev/null 2>&1 || return 1
     return 0
 }
 
-# relay_py_resolve_safe → sets RELAY_PY_BIN (safe) or empty
+# relay_py_resolve_safe
+# Sets RELAY_PY_BIN to a validated interpreter, or leaves it empty.
+# Invalid RELAY_PYTHON overrides are dropped so resolution can continue.
 relay_py_resolve_safe() {
     RELAY_PY_BIN=""
     local override_was="${RELAY_PYTHON:-}"
@@ -77,7 +70,6 @@ relay_py_resolve_safe() {
             RELAY_PY_BIN="$RELAY_PYTHON"
             return 0
         fi
-        # Hostile/invalid override: do not use it; fall through to resolve
         RELAY_PYTHON=""
     fi
     if declare -f relay_python_resolve >/dev/null 2>&1; then
@@ -94,7 +86,6 @@ relay_py_resolve_safe() {
             return 0
         fi
     done
-    # Preserve signal that override was rejected (callers may include in reason)
     if [[ -n "$override_was" ]]; then
         RELAY_PY_OVERRIDE_REJECTED=1
     else
@@ -103,8 +94,9 @@ relay_py_resolve_safe() {
     return 1
 }
 
-# Bounded import probe: avoids hung python freezing hooks/monitors.
-# relay_py_probe_import <bin> <module> → sets RELAY_PY_PROBE_RC, RELAY_PY_PROBE_ERR
+# relay_py_probe_import <bin> <module>
+# Sets RELAY_PY_PROBE_RC / RELAY_PY_PROBE_ERR. Uses `timeout` when available so
+# a wedged interpreter does not block the hook indefinitely.
 relay_py_probe_import() {
     local bin="$1" mod="$2" t_raw t err rc=0
     RELAY_PY_PROBE_RC=0
@@ -116,10 +108,9 @@ relay_py_probe_import() {
     if [[ "$t" -gt 30 ]]; then t=30; fi
     if ! relay_py_bin_is_safe "$bin"; then
         RELAY_PY_PROBE_RC=127
-        RELAY_PY_PROBE_ERR="unsafe interpreter path rejected"
+        RELAY_PY_PROBE_ERR="interpreter path rejected"
         return 1
     fi
-    # Prefer coreutils timeout when present; else bare probe (still safer than hang forever for most cases)
     if command -v timeout >/dev/null 2>&1; then
         err="$(timeout "$t" "$bin" -c "import ${mod}" 2>&1)" || rc=$?
         if [[ "$rc" -eq 124 ]]; then
@@ -134,8 +125,7 @@ relay_py_probe_import() {
 }
 
 # Sticky stamp: BRIDGE_DIR/.python-<kind>-fallback  (kind=send|poll)
-# Line: epoch\treason
-# kind must be [a-z0-9_]{1,16} — no path separators
+# One line: epoch<TAB>reason. Kind is restricted to keep the path under BRIDGE_DIR.
 _relay_py_kind_ok() {
     local k="${1:-}"
     [[ "$k" =~ ^[a-z0-9_]{1,16}$ ]]
@@ -153,24 +143,23 @@ _relay_py_sticky_path() {
 _relay_py_sticky_ttl() {
     local t="${RELAY_PYTHON_FALLBACK_TTL:-60}"
     [[ "$t" =~ ^[0-9]+$ ]] || t=60
-    # Cap TTL (adversarial: huge TTL would stick forever)
+    # Cap so a mis-set env cannot pin shell recovery for days.
     if [[ "$t" -gt 3600 ]]; then
         t=3600
     fi
     printf '%s' "$t"
 }
 
-# relay_py_sticky_active <kind> → sets RELAY_PY_STICKY_REASON if active
+# relay_py_sticky_active <kind>
+# Returns 0 and sets RELAY_PY_STICKY_REASON when a recent failure stamp is live.
 relay_py_sticky_active() {
-    local kind="$1" path age now epoch reason ttl
+    local kind="$1" path age now epoch reason ttl mode last
     RELAY_PY_STICKY_REASON=""
     [[ "${RELAY_PYTHON_STICKY:-1}" == "0" ]] && return 1
     _relay_py_kind_ok "$kind" || return 1
     path="$(_relay_py_sticky_path "$kind")" || return 1
     [[ -f "$path" ]] || return 1
-    # Refuse world-writable stamps (tamper signal → ignore + clear, re-probe)
-    # Last octal digit & 2 ⇒ others-write.
-    local mode last
+    # Ignore world-writable stamps (untrusted); clear and re-probe.
     mode="$(stat -c '%a' "$path" 2>/dev/null || echo 600)"
     last="${mode: -1}"
     if [[ "$last" =~ ^[0-7]$ ]] && (( last & 2 )); then
@@ -180,7 +169,7 @@ relay_py_sticky_active() {
     now="$(date +%s)"
     IFS=$'\t' read -r epoch reason <"$path" || return 1
     [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
-    # Future-dated stamp (clock skew / tamper) → clear
+    # Far-future timestamps are not trustworthy; drop them.
     if [[ "$epoch" -gt $((now + 60)) ]]; then
         rm -f "$path" 2>/dev/null || true
         return 1
@@ -191,29 +180,27 @@ relay_py_sticky_active() {
         RELAY_PY_STICKY_REASON="sticky: prior Python failure ${age}s ago (TTL=${ttl}s); ${reason:-unknown}"
         return 0
     fi
-    # Expired: best-effort clear so next success path stays clean
     rm -f "$path" 2>/dev/null || true
     return 1
 }
 
 # relay_py_sticky_set <kind> <reason>
+# Records a failure so subsequent hooks can skip the import probe for a while.
 relay_py_sticky_set() {
-    local kind="$1" reason="$2" path tmp dir
+    local kind="$1" reason="$2" path tmp
     _relay_py_kind_ok "$kind" || return 1
     path="$(_relay_py_sticky_path "$kind")" || return 1
     reason="$(relay_redact_secrets "$reason")"
-    dir="$(dirname "$path")"
     tmp="${path}.tmp.$$"
-    # Atomic write: temp in same dir then rename
     { printf '%s\t%s\n' "$(date +%s)" "$reason" >"$tmp" && mv -f "$tmp" "$path"; } 2>/dev/null || {
         rm -f "$tmp" 2>/dev/null || true
         return 0
     }
-    # Best-effort private file (owner read/write only)
     chmod 600 "$path" 2>/dev/null || true
 }
 
-# relay_py_sticky_clear <kind>  — call when Python path succeeds
+# relay_py_sticky_clear <kind>
+# Removes the failure stamp after a successful Python path.
 relay_py_sticky_clear() {
     local kind="$1" path
     _relay_py_kind_ok "$kind" || return 0
@@ -223,7 +210,9 @@ relay_py_sticky_clear() {
 
 # relay_py_announce_fallback <source> <kind> <reason>
 # kind: failed | forced | sticky
-# source: tg-send | tg-poll  (also accepts tg-send.sh / tg-poll.sh)
+# source: tg-send | tg-poll (also accepts *.sh names)
+# Real failures print recovery context; sticky hits stay metric-only by default
+# so high-frequency hooks do not flood stderr with the same outage notice.
 relay_py_announce_fallback() {
     local source="$1" kind="$2" reason="$3" env_key
     reason="$(relay_redact_secrets "$reason")"
@@ -238,16 +227,15 @@ relay_py_announce_fallback() {
                 {
                     printf '%s: ERROR — Python default path failed; recovering via shell.\n' "$source"
                     printf '  reason:   %s\n' "$reason"
-                    printf '  recovery: continuing with shell %s (same UX contracts: allowlist/format/TTS).\n' "$source"
-                    printf '  fix:      deploy tg_agent_relay/ + Python 3.14 (uv sync / safe RELAY_PYTHON=…);\n'
-                    printf '            sticky shell ~%ss avoids re-probe storms (RELAY_PYTHON_FALLBACK_TTL).\n' "$(_relay_py_sticky_ttl)"
+                    printf '  recovery: continuing with shell %s (allowlist/format/TTS unchanged).\n' "$source"
+                    printf '  fix:      deploy tg_agent_relay/ + Python 3.14 (uv sync / RELAY_PYTHON=…);\n'
+                    printf '            shell sticks for ~%ss (RELAY_PYTHON_FALLBACK_TTL) then re-probes.\n' "$(_relay_py_sticky_ttl)"
                     printf '            set RELAY_PYTHON_%s=0 only if shell is intentional.\n' "$env_key"
                 } >&2
                 ;;
             sticky)
-                # Default: quiet on stderr (hooks fire often). Metric still records.
                 if [[ "${RELAY_PYTHON_STICKY_VERBOSE:-0}" == "1" ]]; then
-                    printf '%s: still on shell (sticky Python failure window) — %s\n' "$source" "$reason" >&2
+                    printf '%s: still on shell (sticky failure window) — %s\n' "$source" "$reason" >&2
                 fi
                 ;;
             forced)
@@ -263,11 +251,10 @@ relay_py_announce_fallback() {
     fi
 }
 
-# relay_py_try_exec <kind> <module> [args…]
-# kind: send|poll
-# module: tg_agent_relay.send | tg_agent_relay.poll
-# Returns 0 and execs on success; returns 1 with RELAY_PY_FALLBACK_KIND/REASON set on shell path.
-# Caller sources this after BRIDGE_DIR is set; must not have heavy state yet (exec replaces process).
+# relay_py_try_default <kind> <module> [args…]
+# kind: send|poll; module: e.g. tg_agent_relay.send
+# On success: exec's the module (does not return). On shell path: returns 1 and
+# sets RELAY_PY_FALLBACK_KIND / RELAY_PY_FALLBACK_REASON for the caller.
 relay_py_try_default() {
     local kind="$1" mod="$2"
     shift 2
@@ -286,7 +273,7 @@ relay_py_try_default() {
         return 1
     fi
 
-    # Dynamic performance: skip resolve+import entirely during sticky window
+    # Sticky hit: skip resolve + import for the remainder of the TTL.
     if relay_py_sticky_active "$kind"; then
         RELAY_PY_FALLBACK_KIND="sticky"
         RELAY_PY_FALLBACK_REASON="${RELAY_PY_STICKY_REASON}"
@@ -298,7 +285,7 @@ relay_py_try_default() {
     if ! relay_py_resolve_safe; then
         RELAY_PY_FALLBACK_KIND="failed"
         if [[ "${RELAY_PY_OVERRIDE_REJECTED:-0}" == "1" ]]; then
-            RELAY_PY_FALLBACK_REASON="no safe Python interpreter (RELAY_PYTHON override rejected as unsafe)"
+            RELAY_PY_FALLBACK_REASON="no usable Python interpreter (RELAY_PYTHON override rejected)"
         else
             RELAY_PY_FALLBACK_REASON="no Python interpreter found (need 3.14 preferred, ≥3.11)"
         fi
@@ -316,7 +303,6 @@ relay_py_try_default() {
         return 1
     fi
 
-    # Success path: clear any prior sticky and exec
     relay_py_sticky_clear "$kind"
     exec "$RELAY_PY_BIN" -m "$mod" "$@"
 }
