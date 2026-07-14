@@ -4,10 +4,13 @@
   "cwd": "/tmp/proj",
   "workspaceRoot": "/tmp/proj",
   "toolName": "run_terminal_command",
+  "tool_name": "run_terminal_command",
   "toolInput": {
     "command": "false"
   },
   "toolUseId": "call_def456uvw000",
   "error": "command exited with code 1",
-  "message": "command exited with code 1"
+  "error_message": "command exited with code 1",
+  "message": "command exited with code 1",
+  "exitCode": 1
 }

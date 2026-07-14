@@ -4,9 +4,11 @@
   "cwd": "/tmp/proj",
   "workspaceRoot": "/tmp/proj",
   "toolName": "run_terminal_command",
+  "tool_name": "run_terminal_command",
   "toolInput": {
     "command": "rm -rf /"
   },
   "toolUseId": "call_ghi789rst111",
-  "reason": "dangerous command blocked by policy"
+  "reason": "dangerous command blocked by policy",
+  "message": "dangerous command blocked by policy"
 }

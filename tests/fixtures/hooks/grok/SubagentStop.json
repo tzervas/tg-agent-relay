@@ -5,6 +5,8 @@
   "workspaceRoot": "/tmp/proj",
   "agent_type": "explore",
   "agentType": "explore",
+  "agent_id": "sub_agent_aa11",
+  "agentId": "sub_agent_aa11",
   "last_assistant_message": "Found 3 matching files. Done.",
   "message": "Found 3 matching files. Done."
 }
