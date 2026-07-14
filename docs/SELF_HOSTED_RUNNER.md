@@ -2,38 +2,51 @@
 
 This repo does **not** vendor a runner controller. Use the standalone MIT project:
 
-**[tzervas/gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)** · [v0.1.0](https://github.com/tzervas/gha-runner-ctl/releases/tag/v0.1.0)
+**[tzervas/gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl)** · **[v0.2.0](https://github.com/tzervas/gha-runner-ctl/releases/tag/v0.2.0)**
 
-One Podman runner on the workstation; every consumer repo uses the same labels.
-GitHub queues jobs and dispatches them — you do not run one instance per repo.
+One Podman runner on the workstation. GitHub queues jobs; you do not run one instance per repo.
 
-## Host (once)
+## Install from release (no cargo; works while Actions runner is down)
 
 ```bash
-git clone https://github.com/tzervas/gha-runner-ctl.git
-cd gha-runner-ctl
-bash packaging/install-ctl.sh
+VER=0.2.0
+TARGET=x86_64-unknown-linux-gnu
+BASE="https://github.com/tzervas/gha-runner-ctl/releases/download/v${VER}"
+
+curl -fsSL -o "gha-runner-ctl-${VER}-${TARGET}.tar.gz" \
+  "${BASE}/gha-runner-ctl-${VER}-${TARGET}.tar.gz"
+curl -fsSL -o "SHA256SUMS-${VER}.txt" \
+  "${BASE}/SHA256SUMS-${VER}.txt"
+sha256sum -c "SHA256SUMS-${VER}.txt"
+tar xzf "gha-runner-ctl-${VER}-${TARGET}.tar.gz"
+cd "gha-runner-ctl-${VER}-${TARGET}"
+bash install.sh
 export PATH="$HOME/.local/bin:$PATH"
-
 gha-runner-ctl prepare
+```
 
-# Single-repo (personal account)
-GHA_SCOPE=repo GHA_REPO=tzervas/tg-agent-relay \
-  gha-runner-ctl listen --interval 30 --idle-secs 180
+## Listen modes
 
-# Shared across an organization (recommended for many repos)
-# GHA_SCOPE=org GHA_OWNER=your-org gha-runner-ctl listen --interval 30 --idle-secs 180
+```bash
+# This checkout only (auto owner/repo from git / gh)
+cd /path/to/tg-agent-relay
+gha-runner-ctl --scope repo --auto listen --interval 30 --idle-secs 180
+
+# Batch all personal tzervas repos (one process; re-registers per demand)
+gha-runner-ctl --scope user --user tzervas listen --interval 30 --idle-secs 180
+
+# Org (repos must live under that org — not personal tzervas/* outside it)
+# gha-runner-ctl --scope org --owner vectorweighttechnologies listen --interval 30 --idle-secs 180
 ```
 
 ## This repo’s workflows
-
-Use labels that match the host:
 
 ```yaml
 runs-on: [self-hosted, linux, x64, podman]
 ```
 
-See `.github/workflows/close-issues-on-merge.yml` and [gha-runner-ctl docs/CONSUMERS.md](https://github.com/tzervas/gha-runner-ctl/blob/main/docs/CONSUMERS.md).
+See `.github/workflows/close-issues-on-merge.yml` and
+[gha-runner-ctl docs/CONSUMERS.md](https://github.com/tzervas/gha-runner-ctl/blob/main/docs/CONSUMERS.md).
 
 ## License
 
