@@ -3,5 +3,6 @@
   "sessionId": "sess_grok_prompt_002",
   "cwd": "/tmp/proj",
   "workspaceRoot": "/tmp/proj",
-  "prompt": "List files in the project root"
+  "prompt": "List files in the project root",
+  "text": "List files in the project root"
 }

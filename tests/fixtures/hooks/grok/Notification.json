@@ -5,5 +5,7 @@
   "workspaceRoot": "/tmp/proj",
   "notification_type": "idle_prompt",
   "notificationType": "idle_prompt",
-  "message": "Waiting for your input"
+  "type": "idle_prompt",
+  "message": "Waiting for your input",
+  "text": "Waiting for your input"
 }

@@ -4,8 +4,13 @@
   "cwd": "/tmp/proj",
   "workspaceRoot": "/tmp/proj",
   "toolName": "run_terminal_command",
+  "tool_name": "run_terminal_command",
   "toolInput": {
     "command": "ls"
   },
-  "toolUseId": "call_abc123xyz999"
+  "tool_input": {
+    "command": "ls"
+  },
+  "toolUseId": "call_abc123xyz999",
+  "tool_use_id": "call_abc123xyz999"
 }

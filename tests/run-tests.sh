@@ -2648,6 +2648,28 @@ printf '%s' '{"hookEventName":"stop","message":"nope"}' | bash "$GDIR/adapters/g
 assert_empty "grok Stop disabled -> no send" "$(recorded "$GDIR")"
 rm -rf "$GDIR"
 
+# --- grok adapter e2e (issue #63): fixtures + config + smart dispatch ---
+echo "== grok adapter e2e (issue #63): fixtures + config overrides + smart dispatch =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_grok_adapter_e2e.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_grok_adapter_e2e.py"
+    else
+        fail "relay_python tests/test_grok_adapter_e2e.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_hook_fixtures.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_hook_fixtures.py"
+    else
+        fail "relay_python tests/test_hook_fixtures.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping grok adapter e2e\n'
+fi
+# --- end grok adapter e2e (issue #63) ---
+
 # install-grok-hooks dry-run writes nothing
 GHOOKS="$(mktemp -d)"
 OUT="$(bash "$REPO_ROOT/install-grok-hooks.sh" --hooks-file "$GHOOKS/tg.json" --dry-run 2>&1)"

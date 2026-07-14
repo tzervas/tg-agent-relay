@@ -6,5 +6,6 @@
   "agent_type": "explore",
   "agentType": "explore",
   "agent_id": "sub_agent_aa11",
-  "agentId": "sub_agent_aa11"
+  "agentId": "sub_agent_aa11",
+  "name": "explore"
 }
