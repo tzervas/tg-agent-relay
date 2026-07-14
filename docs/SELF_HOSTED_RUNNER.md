@@ -46,29 +46,34 @@ GitHub shows the classic install steps (download tarball → `./config.sh` →
 Do **not** paste one-off UI tokens into git, scripts, or chat. If a token was
 exposed, ignore it — the controller mints a new one each `up`.
 
-## Quick start
+## Install (what you actually run)
+
+`config.sh` is **not** how you install our tooling. It is the official
+runner’s *internal* “register with GitHub” script, and `gha-runner-ctl`
+invokes that for you inside Podman.
 
 ```bash
-# Build controller
-cargo build -p gha_runner_ctl --release
-export PATH="$PWD/target/release:$PATH"
+# Needs: cargo (MSRV 1.96), podman, gh (logged in)
+bash scripts/self-hosted-runner/install-ctl.sh
+export PATH="$HOME/.local/bin:$PATH"   # if not already
 
-# Auth: gh login (or GH_TOKEN with Administration: read/write on this repo)
-gh auth status
+gh auth status                         # must be able to admin this repo
 
-# Once: image + volume snapshot (warm baseline, runner 2.335.1)
-gha-runner-ctl prepare
+gha-runner-ctl prepare                 # once: image + volume snapshot
+gha-runner-ctl up                      # register + start the one runner
+gha-runner-ctl status                  # expect status=online
+```
 
-# On demand (manual) — auto-registers, no UI token
+Ignore `scripts/actions-runner/` if you downloaded the UI tarball by hand —
+that path is gitignored; the controller uses the Podman snapshot instead.
+
+### Day-to-day
+
+```bash
 gha-runner-ctl up
-gha-runner-ctl status
 gha-runner-ctl down
-
-# Or: listen for queued self-hosted jobs / idle timeout
-gha-runner-ctl listen --interval 15 --idle-secs 120
-# Optional local poke (loopback only):
-# gha-runner-ctl listen --wake-port 7099
-# curl -X POST http://127.0.0.1:7099/wake
+gha-runner-ctl listen --interval 15 --idle-secs 120   # auto up/down
+# Optional: curl -X POST http://127.0.0.1:7099/wake   # with --wake-port 7099
 ```
 
 Resources default to **5 CPUs / 8 GiB** (`--cpus` / `--memory` or `GHA_CPUS` /
