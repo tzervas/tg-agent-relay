@@ -70,7 +70,6 @@ if [[ "${RELAY_PYTHON_POLL:-1}" == "0" ]]; then
 else
     # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
-    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
     # Resolve interpreter once (exec cannot run shell functions).
     if [[ -z "${RELAY_PYTHON:-}" ]] && declare -f relay_python_resolve >/dev/null 2>&1; then
         relay_python_resolve || true
