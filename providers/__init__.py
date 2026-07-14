@@ -17,6 +17,7 @@ Shell adapters remain thin entry points that call into this package.
 from __future__ import annotations
 
 # Eager known packages (stable import order for tests) + full discovery.
+from providers import adk as _adk  # noqa: F401
 from providers import aider as _aider  # noqa: F401
 from providers import claude as _claude  # noqa: F401
 from providers import gemini as _gemini  # noqa: F401

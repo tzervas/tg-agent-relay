@@ -61,14 +61,15 @@ def true(name: str, cond: bool, detail: str = "") -> None:
 
 # --- schemas / tools/list ---------------------------------------------------
 tools = list_tools()
-eq("list_tools count is 3", 3, len(tools))
 names = {t["name"] for t in tools}
-eq(
-    "list_tools names",
-    {"relay_send", "relay_list_projects", "relay_usage_summary"},
-    names,
-)
-true("TOOL_NAMES frozenset matches", names == TOOL_NAMES)
+# Core Bot API tools always present
+for core in ("relay_send", "relay_list_projects", "relay_usage_summary"):
+    true(f"list_tools includes {core}", core in names)
+# Extension bus (no model) tools
+true("list_tools includes relay_call_extension", "relay_call_extension" in names)
+true("list_tools includes relay_ext_list", "relay_ext_list" in names)
+true("TOOL_NAMES is core-only subset", TOOL_NAMES <= names)
+true("list_tools has more than core 3", len(tools) >= 3)
 
 for t in tools:
     n = t["name"]
@@ -90,7 +91,7 @@ true(
 
 bundle = tools_list_result()
 true("tools_list_result has tools key", "tools" in bundle)
-eq("tools_list_result length", 3, len(bundle["tools"]))
+true("tools_list_result length >= 3", len(bundle["tools"]) >= 3)
 
 # --- McpFacade dry_run send (no network) ------------------------------------
 cfg = {
@@ -147,7 +148,7 @@ rpc = facade.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list", 
 true("jsonrpc tools/list has result", rpc is not None and "result" in rpc)
 eq("jsonrpc tools/list id", 1, rpc.get("id"))
 rpc_tools = rpc["result"]["tools"]
-eq("jsonrpc tools/list count", 3, len(rpc_tools))
+true("jsonrpc tools/list count >= 3", len(rpc_tools) >= 3)
 
 # initialize
 init = facade.handle_jsonrpc(
@@ -196,7 +197,7 @@ with redirect_stdout(buf):
     rc = main([])
 eq("main() exit 0", 0, rc)
 dumped = json.loads(buf.getvalue())
-eq("main() dumps 3 tools", 3, len(dumped.get("tools", [])))
+true("main() dumps tools >= 3", len(dumped.get("tools", [])) >= 3)
 
 print()
 print(f"Total: {PASS + FAIL}   Pass: {PASS}   Fail: {FAIL}")

@@ -35,6 +35,7 @@ no Claude/Grok-style global hook bus. That is expected and supported.
 | `ollama` | Ollama + llama.cpp | delivery + usage | `[ollama]` / `[backends.*]` |
 | `gemini` | Google Gemini API | delivery | `[gemini]` |
 | `aider` | Aider coding agent | delivery | `[aider]` |
+| `adk` | Google Agent Development Kit (optional) | delivery | `[adk]` — see [ADK_MCP.md](ADK_MCP.md) |
 | `generic` | Free-text / label | delivery | `[generic]` |
 
 ```bash

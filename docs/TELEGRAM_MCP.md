@@ -115,4 +115,5 @@ As the core moves to Python (`tg_agent_relay` package, progressive strangler), t
 - **Ship:** native Bot API path (current + Python port).
 - **Document:** this file.
 - **Stub (opt-in, #37):** `tg_agent_relay.mcp_stub` — tool schemas + dry-run dispatch over our modules.
+- **Extensions + ADK:** see [ADK_MCP.md](ADK_MCP.md) — extension bus (no model), Google ADK optional, MCP tool host for agents/IDEs.
 - **Later:** production MCP packaging if agent clients need it; evaluate community Bot MCP only as a dependency of that facade if it reduces code — never Telethon as the default security path.

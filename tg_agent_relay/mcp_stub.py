@@ -137,12 +137,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
-TOOL_NAMES = frozenset(t["name"] for t in TOOL_DEFINITIONS)
+def _core_tool_names() -> frozenset[str]:
+    return frozenset(t["name"] for t in TOOL_DEFINITIONS)
+
+
+# Backward-compatible name for core Bot API tools only (not extensions).
+TOOL_NAMES = _core_tool_names()
 
 
 def list_tools() -> list[dict[str, Any]]:
-    """Return MCP tools/list ``tools`` array (schemas only; no network)."""
-    return [dict(t) for t in TOOL_DEFINITIONS]
+    """Return MCP tools/list ``tools`` array (core + extension bus; no network)."""
+    from tg_agent_relay.extensions import ensure_builtin_extensions, mcp_tool_definitions
+
+    ensure_builtin_extensions()
+    # Core relay Bot API tools first, then extension-bus tools (no model required).
+    core = [dict(t) for t in TOOL_DEFINITIONS]
+    seen = {t["name"] for t in core}
+    for t in mcp_tool_definitions():
+        if t["name"] not in seen:
+            core.append(t)
+            seen.add(t["name"])
+    return core
 
 
 def tools_list_result() -> dict[str, Any]:
@@ -204,14 +219,27 @@ class McpFacade:
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """Dispatch a tools/call. Returns MCP-shaped content result."""
         args = dict(arguments or {})
-        if name not in TOOL_NAMES:
-            return _text_content(f"unknown tool: {name!r}", is_error=True)
         if name == "relay_send":
             return self._tool_relay_send(args)
         if name == "relay_list_projects":
             return self._tool_relay_list_projects(args)
         if name == "relay_usage_summary":
             return self._tool_relay_usage_summary(args)
+        # Extension bus + ADK probes (no model required)
+        from tg_agent_relay.extensions import (
+            dispatch_mcp_extension_tool,
+            ensure_builtin_extensions,
+            get_extension,
+        )
+
+        ensure_builtin_extensions()
+        if name == "relay_call_extension" or get_extension(name) is not None:
+            return dispatch_mcp_extension_tool(name, args)
+        known = _core_tool_names() | {
+            t["name"] for t in self.list_tools()
+        }
+        if name not in known:
+            return _text_content(f"unknown tool: {name!r}", is_error=True)
         return _text_content(f"unhandled tool: {name!r}", is_error=True)
 
     def _tool_relay_send(self, args: dict[str, Any]) -> dict[str, Any]:

@@ -22,6 +22,7 @@ SCRIPT_SUITES = [
     "test_tts_package.py",
     "test_project_bind.py",
     "test_providers_plugplay.py",
+    "test_extensions_adk.py",
 ]
 
 

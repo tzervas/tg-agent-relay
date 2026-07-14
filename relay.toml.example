@@ -906,6 +906,22 @@
 # prefixes = ["@aider", "aider:"]
 # # runs in RELAY_CWD from project worktree
 #
+# --- Google ADK (optional: uv pip install google-adk) — docs/ADK_MCP.md ---
+# [backends.adk]
+# type = "adk"
+# delivery = "cmd"
+# prefixes = ["@adk", "adk:"]
+# tag = "adk"
+# # ADK_AGENT=…  RELAY_CWD=project root
+# # MCP tools: python -m tg_agent_relay.mcp_stub --stdio
+#
+# Zero-token extension bus (no model):
+# [commands.ext]
+# keyword = "ext"
+# slash = "/ext"
+# mode = "relay"
+# handler = "handlers/ext.sh"
+#
 # [[chats]]
 # chat_id = -1001111111111
 # backend = "claude"
