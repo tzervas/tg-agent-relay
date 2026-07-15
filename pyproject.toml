@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tg-agent-relay"
+version = "0.6.2.dev0"
+description = "Harness-agnostic Telegram relay for agent status + inbound commands"
+readme = "README.md"
+# Prefer 3.14 (see .python-version + lib/python.sh). 3.13 only if hard-required.
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [{ name = "tg-agent-relay contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+highlight = ["pygments>=2.17"]
+dashboard = ["matplotlib>=3.8"]
+# Google Agent Development Kit — optional; soft-imported via tg_agent_relay.adk_bridge
+adk = ["google-adk>=1.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+tg-relay-send = "tg_agent_relay.cli:main_send"
+tg-relay-poll = "tg_agent_relay.cli:main_poll"
+tg-relay-hook = "tg_agent_relay.cli:main_hook"
+tg-relay = "tg_agent_relay.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "pygments>=2.17",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tg_agent_relay", "providers"]
+
+[tool.uv]
+# Package is installable editable; agents use: uv sync && uv run …
+package = true
+
+[tool.uv.pip]
+python-version = "3.14"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["tg_agent_relay", "providers", "lib", "tests"]
+extend-exclude = [
+    ".git",
+    ".venv",
+    "voices",
+    "docs/assets",
+    "**/__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # bugbear
+    "UP",     # pyupgrade
+    "SIM",    # simplify
+    "RUF",    # ruff-specific
+]
+ignore = [
+    "E501",   # line length — formatter handles soft wrap; long shell-adjacent strings OK
+    "B008",   # function calls in defaults (argparse-style OK)
+    "RUF001", # emoji status prefixes (ℹ️ ✅) are intentional Telegram copy
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]
+"lib/**" = ["E402", "SIM102", "SIM105", "RUF012"]
+"providers/**/usage.py" = ["E402"]
+"providers/**/hooks.py" = ["RUF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tg_agent_relay", "providers"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# Pure-Python unit tests: `uv run pytest` (issue #29).
+# Shell/e2e smoke remains optional: `bash tests/run-tests.sh` (do not delete).
+[tool.pytest.ini_options]
+# Script-style harness suites (SystemExit on run) are exercised via
+# tests/test_script_suites_pytest.py subprocess wrappers + run-tests.sh.
+
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+pythonpath = [".", "lib"]
+addopts = [
+    "-q",
+    "--strict-markers",
+    "--ignore=tests/test_send.py",
+    "--ignore=tests/test_poll.py",
+    "--ignore=tests/test_mcp_stub.py",
+    "--ignore=tests/test_tts_package.py",
+    "--ignore=tests/test_project_bind.py",
+    "--ignore=tests/test_providers_plugplay.py",
+    "--ignore=tests/test_extensions_adk.py",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

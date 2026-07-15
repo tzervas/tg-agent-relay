@@ -6,6 +6,57 @@ harness — see the repo [README](README.md)). Everything lives under
 `~/.claude/telegram-bridge/` (mode 0700, kept at this path deliberately —
 see the README's repo/directory note) — no other repo is touched.
 
+### Python version & tooling
+
+#### Python is the default send/poll path
+
+`tg-send.sh` and `tg-poll.sh` **exec the Python package by default** when
+`tg_agent_relay` is importable. Shell bodies remain as fallback.
+
+```bash
+# Default — no env required
+bash tg-send.sh "hello"
+
+# Force legacy shell (debug / bisect only — logs python_fallback to stderr + metrics)
+export RELAY_PYTHON_SEND=0
+export RELAY_PYTHON_POLL=0
+```
+
+If the package fails to import, the shell path still runs. The first failure
+prints a short recovery note on stderr and records a `python_fallback` metric;
+later hooks may stay on shell for a short TTL so a broken install does not
+re-probe on every event (`lib/python_fallback.sh`). Optional knobs:
+
+| Variable | Default | Role |
+|---|---|---|
+| `RELAY_PYTHON_FALLBACK_TTL` | `60` | Seconds to prefer shell after a failure (max 3600) |
+| `RELAY_PYTHON_PROBE_TIMEOUT` | `5` | Import probe bound (max 30) |
+| `RELAY_PYTHON_STICKY` | `1` | Set `0` to re-probe every time |
+| `RELAY_PYTHON_FALLBACK_QUIET` | `0` | `1` = metrics only (tests) |
+
+Design notes: [`docs/DECISIONS.md`](docs/DECISIONS.md). Release path:
+[`docs/RELEASING.md`](docs/RELEASING.md) § Python package path.
+
+Claude Code hooks prefer `providers/claude` via Python when available
+(`CLAUDE_USE_PROVIDER_HOOK=0` forces the legacy shell formatter).
+
+**Preferred: Python 3.14** (see `.python-version`). Use **uv** for the
+project env and **ruff** for lint/format:
+
+```bash
+# install uv: https://docs.astral.sh/uv/
+bash scripts/dev.sh sync     # uv sync → .venv on 3.14 + ruff/pytest
+bash scripts/dev.sh check    # ruff + offline tests
+```
+
+Runtime scripts resolve Python via [`lib/python.sh`](lib/python.sh):
+project `.venv` → `python3.14` → `python3.13` → `python3` (≥3.11 for
+tomllib). Override with `RELAY_PYTHON=…`. Full notes: [`docs/TOOLING.md`](docs/TOOLING.md).
+
+**Rust** (optional crates later): **MSRV 1.96** — `rust-toolchain.toml` +
+`Cargo.toml` `rust-version = "1.96"`, with rustfmt, clippy, rust-src,
+rust-analyzer (`bash scripts/dev.sh rust-check`).
+
 ## How it stays token-frugal
 
 - **Outbound status pings (phone <- agent) cost ZERO model tokens.** They
@@ -86,6 +137,40 @@ events), enable them in `relay.toml`'s `[claude_code.<Event>]` tables and
 run `~/.claude/telegram-bridge/install-hooks.sh` to sync
 `~/.claude/settings.json` to match — see the
 [README's "Installing hooks" section](README.md#installing-hooks-for-more-events).
+
+**Grok Build / Grok CLI** — wire Telegram pings the same way as Claude,
+but into Grok’s own hook store (not `~/.claude/settings.json`):
+
+1. **(Optional) pick a profile** in `relay.toml` under `[grok.<Event>]`.
+   **Quiet** (shipped defaults): `Stop`, `StopFailure`, `SubagentStop`,
+   `Notification`, `PostToolUseFailure`. **Full** adds lifecycle events
+   such as `SessionStart` / `SessionEnd` / `SubagentStart` /
+   `PermissionDenied` / compact — still leave `PreToolUse` /
+   `PostToolUse` off unless you want high-volume tool spam. Snippets and
+   the full 14-event table: [`docs/PROVIDERS.md`](docs/PROVIDERS.md#grok-build-telegram-hooks).
+2. **Install** (idempotent; merge-safe; writes only
+   `~/.grok/hooks/tg-agent-relay.json`):
+   ```bash
+   bash install-grok-hooks.sh --dry-run   # preview enabled events
+   bash install-grok-hooks.sh
+   ```
+3. **Folder trust** — only if you also keep project-local hooks under
+   `<repo>/.grok/hooks/`. Global `~/.grok/hooks/*.json` is always trusted;
+   project hooks are skipped until you grant trust (`/hooks-trust` or
+   launch with `--trust`). Recorded in `~/.grok/trusted_folders.toml`.
+4. **Restart the Grok session** (new session or reload) so hooks reload.
+   Confirm in the Hooks UI: `Ctrl+L` (or `/hooks` on VS Code family) →
+   Hooks tab should list the relay entry for the enabled events.
+5. **Verify a Stop ping** — finish a short turn in Grok; Telegram should
+   get a one-line `🏁` (or your configured prefix) summary. No ping:
+   check `.env` has `BOT_TOKEN` + allowlist, that install wrote the hooks
+   file, and that you restarted after install.
+
+Official Grok hook semantics (14 events, trust, matchers):
+`~/.grok/docs/user-guide/10-hooks.md`. Operator detail, quiet vs full,
+and troubleshooting (misrouted as Claude “unknown”, hooks not firing,
+wrong chat): [`docs/PROVIDERS.md`](docs/PROVIDERS.md#grok-build-telegram-hooks).
+Multi-backend isolation: [`docs/ROUTING.md`](docs/ROUTING.md).
 
 **Any other agent/harness:** either call
 [`relay-notify.sh`](relay-notify.sh) directly wherever you want a status
@@ -231,26 +316,51 @@ hook_voice = true       # v0.5.1+, default true. A ping tagged
                         # voice even when long/paginated, where max_chars
                         # above would otherwise skip it — this is what
                         # actually fixes "hook pings never get voice".
-hook_voice_max_chars = 1500  # how much of a long hook ping is SPOKEN —
-                        # a sensible read-through, not the whole report.
-                        # The TEXT send always carries the full message
-                        # regardless; only the voice note is capped.
-# --- clean spoken transcript (v0.5.2) ---
+# --- spoken length (short is the default) ---
+spoken_mode = "short"   # DEFAULT: one voice clip, truncated at a word
+                        # boundary to spoken_max_chars. Text bubble stays
+                        # full/unabridged either way.
+spoken_max_chars = 600  # short-mode spoken-char cap (after strip)
+# --- clean spoken transcript (v0.5.2+) ---
 speak_code = false      # a code span/block is REFERENCED in the voice, not
                         # read char-by-char; true reads the code verbatim.
-voice_code_ref = "code, see the text message"   # spoken in place of code
-voice_link_ref = "see the text message"          # a [label](url) → "label,
+voice_code_ref = "ref. the message for the code"  # spoken in place of code
+voice_link_ref = "ref. the message for the link"  # a [label](url) → "label,
                         # <ref>"; a bare URL → "link, <ref>". The URL chars
                         # are never voiced.
+collapse_adjacent_refs = true  # DEFAULT true — consecutive identical
+                        # code/link refs collapse to one spoken phrase.
 ```
+
+#### Full-mode user recipe
+
+Default voice is **short** (one clipped note). To have the whole message
+read aloud — chunked into ordered clips instead of truncated — opt in:
+
+```toml
+[tts]
+mode = "text+voice"
+spoken_mode = "full"
+clip_max_chars = 1500   # per-clip length (spoken chars after strip);
+                        # 0 = one unbounded clip. hook_voice_max_chars is
+                        # the legacy alias when clip_max_chars is unset.
+collapse_adjacent_refs = true
+voice_code_ref = "ref. the message for the code"
+voice_link_ref = "ref. the message for the link"
+```
+
+Multi-clip sends log `tts hook_voice_chunked` to `.metrics.log`; short-mode
+truncation logs `tts hook_voice_truncated`.
 
 Before any voice note is synthesized, the message is stripped to plain-text
 prose (`lib/tts_plain_text.py`) so the engine reads **words, not formatting
 symbols** (`##`, `*`, `` ` ``, ```` ``` ````, `<b>`/`<pre>`, `&lt;`, `>`,
-`[k/n]`, list markers) — and code + links are referenced back to the text
-message rather than read aloud. **The sent text message keeps its full
-formatting; only the voice's input is stripped.** The `hook_voice_max_chars`
-cap counts the *spoken* (post-strip) characters.
+`[k/n]`, list markers). **Call/tool/request IDs** (UUIDs, `call_*`,
+`toolu_*`, long hex tokens, …), **URLs**, and **code/backticks** are not
+spoken — code and links become short spoken references; IDs are dropped.
+**The sent text message keeps its full formatting and full length; only
+the voice's input is stripped.** `spoken_max_chars` / `clip_max_chars`
+count the *spoken* (post-strip) characters.
 
 See `relay.toml.example`'s `[tts]` comments for the full schema, and
 `lib/tts.sh`'s header for the engine-selection/transcode/pitch/cadence/send

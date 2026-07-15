@@ -128,7 +128,12 @@ fi
 declare -f cfg_get >/dev/null 2>&1 || cfg_get() { printf '%s' "$2"; }  # lib missing -> default-only shim
 # shellcheck disable=SC1091
 [[ -f "$_IMG_LIB_DIR/relay-common.sh" ]] && source "$_IMG_LIB_DIR/relay-common.sh"
-declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }
+if [[ -f "$_IMG_LIB_DIR/python.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$_IMG_LIB_DIR/python.sh"
+fi
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }  # lib missing -> no-op shim
 # This file EXTENDS lib/format.sh's fenced-code handling - it needs
 # format.sh's shared fence regex (see this file's header). Guard the same
 # way (format.sh carries no top-level mutable state, so re-sourcing it is
@@ -156,9 +161,9 @@ _img_available() {
         return "$_IMG_AVAILABLE"
     fi
     _IMG_AVAILABLE_CHECKED=1
-    if command -v python3 >/dev/null 2>&1 \
+    if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 \
         && [[ -f "$_IMG_LIB_DIR/code_highlight.py" ]] \
-        && python3 -c 'import pygments, pygments.formatters' >/dev/null 2>&1; then
+        && relay_python -c 'import pygments, pygments.formatters' >/dev/null 2>&1; then
         _IMG_AVAILABLE=0
     else
         _IMG_AVAILABLE=1
@@ -189,7 +194,7 @@ _img_handle_fence() {
     [[ "$line_numbers" == "true" ]] && ln_flag=(--line-numbers)
 
     local render_out
-    render_out="$(printf '%s' "$body" | python3 "$_IMG_LIB_DIR/code_highlight.py" \
+    render_out="$(printf '%s' "$body" | relay_python "$_IMG_LIB_DIR/code_highlight.py" \
         "$lang" "$doc" "--theme=${theme}" "--max-lines=${max_lines}" \
         "${ln_flag[@]}" 2>/dev/null)"
 

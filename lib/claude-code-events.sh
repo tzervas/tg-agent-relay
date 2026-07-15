@@ -1,10 +1,10 @@
 #!/bin/bash
-# lib/claude-code-events.sh - Single source of truth for the documented
-# Claude Code hook event set: names + install-time default enabled/disabled
-# + default prefix. Sourced by BOTH adapters/claude-code.sh (the runtime
-# per-event enable/prefix/format gate) and install-hooks.sh (which events to
-# wire into ~/.claude/settings.json by default) so the two can never drift
-# apart. Sourced, never executed directly (no shebang execution path).
+# lib/claude-code-events.sh - Shell catalog for the documented Claude Code
+# hook event set: names + install-time default enabled/disabled + default
+# prefix. Sourced by adapters/claude-code.sh (runtime per-event
+# enable/prefix/format gate). install-hooks.sh prefers providers/claude via
+# lib/provider_catalog.py and uses this file only as a no-Python fallback so
+# shell and catalog defaults stay aligned. Sourced, never executed directly.
 #
 # The full documented Claude Code hook event set (verified against
 # code.claude.com/docs/en/hooks-guide.md + hooks.md, checked 2026-07-12):

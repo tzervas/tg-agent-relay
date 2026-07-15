@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "SubagentStop",
+  "agent_type": "general-purpose",
+  "last_assistant_message": "Task done.\nAll green.",
+  "cwd": "/tmp/proj"
+}

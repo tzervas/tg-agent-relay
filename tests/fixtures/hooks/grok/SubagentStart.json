@@ -1,0 +1,11 @@
+{
+  "hookEventName": "subagent_start",
+  "sessionId": "sess_grok_substart_010",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "agent_type": "explore",
+  "agentType": "explore",
+  "agent_id": "sub_agent_aa11",
+  "agentId": "sub_agent_aa11",
+  "name": "explore"
+}

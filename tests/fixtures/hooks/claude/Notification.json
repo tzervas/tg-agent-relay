@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "Notification",
+  "notification_type": "idle_prompt",
+  "message": "Waiting for your input",
+  "cwd": "/tmp/proj"
+}

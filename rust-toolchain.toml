@@ -1,0 +1,7 @@
+# Full Rust toolchain for optional hotspots (see epic #22 / docs/EPICS.md).
+# MSRV = 1.96 (channel 1.96.x; rustup installs the latest patch on that minor).
+# Install: rustup show  (this file pins the channel + components)
+[toolchain]
+channel = "1.96"
+components = ["rustfmt", "clippy", "rust-src", "rust-analyzer"]
+profile = "default"

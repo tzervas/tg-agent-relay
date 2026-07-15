@@ -1,0 +1,13 @@
+# Token usage dashboard legend (text fallback)
+
+Use ONLY without vision. With vision, use docs/assets/usage-example.png only.
+
+[usage] enabled = true (opt-in). Local transcripts only; gitignored .usage/ cache.
+
+Sources: claude-code (recursive ~/.claude/projects/**/*.jsonl),
+  grok (context-peak proxy — not API billing), multi/auto.
+
+Windows: today | all | lifetime (local retained) | <N>h|d|w|m|y
+
+Panels: total tokens, by model, by provider share, by project, optional trend.
+Privacy: never leave the machine except the allowlisted Telegram chat.

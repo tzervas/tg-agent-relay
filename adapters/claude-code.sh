@@ -86,13 +86,87 @@ source "$BRIDGE_DIR/lib/relay-config.sh"
 source "$BRIDGE_DIR/lib/relay-common.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/claude-code-events.sh"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/routing.sh" ]] && source "$BRIDGE_DIR/lib/routing.sh"
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
 PAYLOAD="$(cat 2>/dev/null || true)"
 [[ -z "$PAYLOAD" ]] && exit 0
 
-EVENT=$(printf '%s' "$PAYLOAD" | jq -r '.hook_event_name // "unknown"' 2>/dev/null)
+# Claude uses hook_event_name (snake). If we only see Grok's hookEventName
+# (or GROK_* env), re-dispatch to the Grok provider — never "Claude Code
+# event: unknown" for Grok payloads. (No `exec` after a pipe: it does not
+# stop this shell; always exit after re-dispatch.)
+_HE_CLAUDE="$(printf '%s' "$PAYLOAD" | jq -r '.hook_event_name // empty' 2>/dev/null)"
+_HE_GROK="$(printf '%s' "$PAYLOAD" | jq -r '.hookEventName // empty' 2>/dev/null)"
+if [[ -z "$_HE_CLAUDE" || "$_HE_CLAUDE" == "null" ]]; then
+    if [[ ( -n "$_HE_GROK" && "$_HE_GROK" != "null" ) || -n "${GROK_HOOK_EVENT:-}" ]]; then
+        if [[ -f "$BRIDGE_DIR/adapters/grok.sh" ]]; then
+            printf '%s' "$PAYLOAD" | bash "$BRIDGE_DIR/adapters/grok.sh"
+            exit 0
+        fi
+    fi
+fi
+EVENT="${_HE_CLAUDE:-unknown}"
+[[ -z "$EVENT" || "$EVENT" == "null" ]] && EVENT="unknown"
+
+# Prefer providers/claude via provider_hook when Python is available (issue #59).
+# Force shell case: CLAUDE_USE_PROVIDER_HOOK=0 (or PROVIDER_HOOK=0).
+# Force Python:    CLAUDE_USE_PROVIDER_HOOK=1
+_CC_USE_PY="${CLAUDE_USE_PROVIDER_HOOK:-${PROVIDER_HOOK:-}}"
+if [[ -z "$_CC_USE_PY" ]]; then
+    if [[ -f "$BRIDGE_DIR/lib/provider_hook.py" ]]; then
+        # shellcheck disable=SC1091
+        [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+        declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+        if relay_python -c "import providers.claude" >/dev/null 2>&1; then
+            _CC_USE_PY=1
+        else
+            _CC_USE_PY=0
+        fi
+    else
+        _CC_USE_PY=0
+    fi
+fi
+if [[ "$_CC_USE_PY" == "1" ]]; then
+    # shellcheck disable=SC1091
+    [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    if [[ -f "$BRIDGE_DIR/lib/provider_hook.py" ]]; then
+        _CC_CFG_JSON="$(mktemp)"
+        if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+            printf '%s' "$RELAY_CONFIG_JSON" | jq -c '{claude_code: (.claude_code // {})}' \
+                >"$_CC_CFG_JSON" 2>/dev/null || printf '%s\n' '{}' >"$_CC_CFG_JSON"
+        else
+            printf '%s\n' '{}' >"$_CC_CFG_JSON"
+        fi
+        _CC_OUT="$(printf '%s' "$PAYLOAD" | relay_python "$BRIDGE_DIR/lib/provider_hook.py" claude \
+            --config-json "$_CC_CFG_JSON" 2>/dev/null)" || _CC_OUT=""
+        rm -f "$_CC_CFG_JSON"
+        _CC_LINE1="$(printf '%s\n' "$_CC_OUT" | head -1)"
+        case "$_CC_LINE1" in
+            SKIP:*)
+                emit_metric "hook" "${EVENT}_skip" "${_CC_LINE1#SKIP:}"
+                exit 0
+                ;;
+            OK:*)
+                SUMMARY="${_CC_LINE1#OK:}"
+                emit_metric "hook" "$EVENT" "provider"
+                export RELAY_BACKEND="${RELAY_BACKEND:-claude}"
+                if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1; then
+                    _cc_cwd="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)"
+                    [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+                    RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
+                    [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
+                fi
+                [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                exit 0
+                ;;
+        esac
+        # Fall through to shell formatting if provider path failed.
+    fi
+fi
 
 # pf <jq-filter> - read one field off $PAYLOAD, "" on any parse failure.
 pf() {
@@ -366,6 +440,15 @@ esac
 # tg-send.sh with no extra plumbing on either script's part. tg-send.sh
 # uses it to give hook pings a voice read-through even when long/
 # paginated (see its header's "Hook audio" section, relay.toml [tts]).
+# RELAY_BACKEND / RELAY_PROJECT for multi-chat reverse-lookup (harmless when
+# routing is unset — relay-notify only tags when routing is configured).
+export RELAY_BACKEND="${RELAY_BACKEND:-claude}"
+if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1; then
+    _cc_cwd="$(pf '.cwd // empty')"
+    [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
+    [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
+fi
 [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
 
 exit 0

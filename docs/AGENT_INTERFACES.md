@@ -1,0 +1,97 @@
+# Agent interfaces (swarm join contracts)
+
+Orchestrator-owned APIs. **Implement against these — do not invent parallel shapes.**
+
+**How we work:** [WORKFLOW.md](WORKFLOW.md) — decompose issues, swarm with **Grok Build** (cheaper), keep flagship models for thin orchestration only.
+
+Python: **3.14** via **uv** + **ruff** (see [`docs/TOOLING.md`](TOOLING.md)).  
+Runtime fallback: `lib/python.sh` / `RELAY_PYTHON` (prefers `.venv` from `uv sync`).
+
+```bash
+uv sync --all-groups
+uv run ruff check --fix <paths>
+uv run ruff format <paths>
+bash scripts/dev.sh check
+```
+
+Rust: full toolchain via `rust-toolchain.toml` (**MSRV 1.96** + rustfmt/clippy/rust-src/rust-analyzer).
+
+## Package
+
+```
+tg_agent_relay/
+  protocols.py   # RouteResult, FormatResult, SendRequest, Protocols
+  config.py      # load_config, cfg_get
+  routing.py     # resolve → RouteResult
+  metrics.py     # emit_metric
+  tts.py         # strip_formatting (+ chunk helpers)
+  hooks.py       # dispatch_hook(provider_id, payload) → (OK|SKIP, body)
+  format_api.py  # format_message → FormatResult (HTML parity)
+  send.py        # EnvSender / pagination (#26)
+  poll.py        # inbound loop (#27)
+  cli.py         # tg-relay version | hook | route | format
+providers/       # provider extensions (hooks + usage)
+```
+
+## Quick use
+
+```bash
+source lib/python.sh
+relay_python -c "from tg_agent_relay import __version__; print(__version__)"
+relay_python -m tg_agent_relay.cli version
+printf '%s' '{"hookEventName":"stop","message":"hi"}' \
+  | relay_python -m tg_agent_relay.cli hook grok
+```
+
+## Issue → module map
+
+| Issue | Module | Protocol | Status |
+|---|---|---|---|
+| #24 routing | `tg_agent_relay/routing.py` | `Router` | **done** |
+| #25 format | `tg_agent_relay/format_api.py` | `Formatter` | **done** |
+| #26 send | `tg_agent_relay/send.py` | `Sender` | in progress |
+| #27 poll | `tg_agent_relay/poll.py` | poll loop | in progress |
+| #28 TTS | `tg_agent_relay/tts.py` | strip/chunk | in progress |
+| #30 Claude hooks | `providers/claude/hooks.py` | `format_hook` | **done** |
+| #31 usage registry | `lib/usage_ingest.py` + providers | `UsageCollector` | **done** |
+| #40 fixtures | `tests/fixtures/hooks/{grok,claude}/` | JSON stdin | **done** |
+
+**Ruff note:** always `except (A, B) as _exc:` — bare `except (A, B):` is corrupted by ruff 0.15 format.
+
+## RouteResult pipe format (stable)
+
+```
+backend|project|text|match_kind
+```
+
+`match_kind` ∈ `chat` | `prefix` | `default` | `none` | `legacy`
+
+## Hook dispatch (stable)
+
+```python
+status, body = dispatch_hook("grok", payload_dict, config=cfg)
+# status == "OK" → body is one-line summary for Telegram
+# status == "SKIP" → body is reason (disabled, empty, …)
+```
+
+## Config dict shape
+
+Same as `relay.toml` → JSON via tomllib:
+
+```json
+{
+  "routing": { "default_backend": "claude" },
+  "backends": { "claude": { "prefixes": ["@claude"], "tag": "claude" } },
+  "chats": [{ "chat_id": -1001, "project": "mycelium" }],
+  "projects": { "mycelium": { "root": "/path" } },
+  "grok": { "Stop": { "enabled": true } },
+  "claude_code": { "SubagentStop": { "enabled": true } }
+}
+```
+
+## Do not
+
+- Change `.env` secrets
+- Call live Telegram from unit tests
+- Load both visual and text hybrid context for the same id
+- Voice: call IDs, URLs, backticks (see `tts.strip_formatting`)

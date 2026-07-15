@@ -1,0 +1,82 @@
+# Remote release helper — DISABLED for automatic runs (maintainer: Actions off).
+#
+# Preferred path is LOCAL (this workstation):
+#   bash scripts/local-ci.sh --release
+#   bash scripts/release.sh vX.Y.Z
+#
+# workflow_dispatch only — never on tag push.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to package (e.g. v0.6.1). Must already exist."
+        required: true
+        type: string
+      run_tests:
+        description: "Run offline tests before attaching assets"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+
+      - name: Install uv + Python 3.14
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Sync + offline tests
+        if: ${{ inputs.run_tests }}
+        run: |
+          uv python install 3.14
+          uv sync --all-groups
+          export RELAY_PYTHON="$(pwd)/.venv/bin/python"
+          bash tests/run-tests.sh
+
+      - name: Package source archive
+        run: |
+          TAG="${{ inputs.tag }}"
+          VER="${TAG#v}"
+          git archive --format=tar.gz --prefix="tg-agent-relay-${VER}/" \
+            -o "/tmp/tg-agent-relay-${VER}.tar.gz" "$TAG"
+          echo "ARCHIVE=/tmp/tg-agent-relay-${VER}.tar.gz" >> "$GITHUB_ENV"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Upload / refresh GitHub Release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES=$(mktemp)
+          {
+            echo "## TG Agent Relay ${TAG}"
+            echo
+            echo "Remote workflow asset refresh (manual). Preferred: \`scripts/release.sh\` on a workstation."
+            echo
+            echo "### Upgrade local deploy"
+            echo
+            echo '```bash'
+            echo "git fetch --tags && git checkout ${TAG}"
+            echo "bash scripts/deploy-local.sh --ref ${TAG}"
+            echo '```'
+          } > "$NOTES"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARCHIVE" --clobber
+          else
+            gh release create "$TAG" \
+              --title "TG Agent Relay ${TAG}" \
+              --notes-file "$NOTES" \
+              "$ARCHIVE"
+          fi

@@ -1,0 +1,20 @@
+# Workspace root for optional Rust crates (after Python core).
+# Self-hosted GHA runner: https://github.com/tzervas/gha-runner-ctl (separate MIT repo)
+# Agents: do not add crates without benchmarks (docs/AGENT_INTERFACES.md + epic #22).
+[workspace]
+resolver = "2"
+members = []
+# Future: members = ["crates/tg_relay_format", ...]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.96"
+license = "MIT"
+repository = "https://github.com/tzervas/tg-agent-relay"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

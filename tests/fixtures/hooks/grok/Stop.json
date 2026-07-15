@@ -1,0 +1,10 @@
+{
+  "hookEventName": "stop",
+  "sessionId": "sess_grok_stop_007",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "message": "all green",
+  "last_assistant_message": "all green",
+  "stop_reason": "end_turn",
+  "stopReason": "end_turn"
+}

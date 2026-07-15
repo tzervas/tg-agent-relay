@@ -1,16 +1,18 @@
 #!/bin/bash
 # install-hooks.sh - One-command Claude Code hook installer/sync.
 #
-# Reads which Claude Code hook events are ENABLED for THIS bridge
-# (relay.toml's [claude_code.<Event>].enabled, or - when relay.toml does not
-# say - that event's install-time default from lib/claude-code-events.sh)
-# and reconciles the matching `hooks.<Event>` entries in
-# ~/.claude/settings.json (or --settings <path>) so each points at THIS
-# bridge's hook-notify.sh. Re-run any time relay.toml changes to sync
-# settings.json to match: newly-enabled events get wired in, newly-disabled
-# ones get their relay-owned entry removed. `--uninstall` is the same sync
-# with the wanted set forced empty - it removes every hook entry this
-# script ever added and touches nothing else.
+# Event list is the providers/claude catalog (via lib/provider_catalog.py) so it
+# cannot drift from the Python provider / adapters/claude-code.sh. enabled flags
+# still come from relay.toml [claude_code.<Event>].enabled (default = provider
+# catalog HookEvent.default_enabled; shell lib/claude-code-events.sh is only a
+# fallback if the catalog is unavailable).
+#
+# Reconciles matching `hooks.<Event>` entries in ~/.claude/settings.json (or
+# --settings <path>) so each points at THIS bridge's hook-notify.sh. Re-run any
+# time relay.toml changes to sync settings.json to match: newly-enabled events
+# get wired in, newly-disabled ones get their relay-owned entry removed.
+# `--uninstall` is the same sync with the wanted set forced empty - it removes
+# every hook entry this script ever added and touches nothing else.
 #
 # Idempotent + merge-not-clobber, by construction:
 #   - Only the ONE relay-owned hook entry per event - identified by its
@@ -40,7 +42,10 @@ BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-config.sh"
 # shellcheck disable=SC1091
-source "$BRIDGE_DIR/lib/claude-code-events.sh"
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/claude-code-events.sh" ]] && source "$BRIDGE_DIR/lib/claude-code-events.sh"
 
 SETTINGS_PATH="${CLAUDE_SETTINGS_JSON:-$HOME/.claude/settings.json}"
 UNINSTALL=0
@@ -61,7 +66,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h | --help)
-            sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -84,8 +89,32 @@ HOOK_CMD="$BRIDGE_DIR/hook-notify.sh"
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
+# All event names from provider catalog (providers/claude); shell array fallback.
+mapfile -t ALL_EVENTS < <(relay_python "$BRIDGE_DIR/lib/provider_catalog.py" events claude --names-only 2>/dev/null)
+if [[ ${#ALL_EVENTS[@]} -eq 0 ]]; then
+    # Fallback to shell catalog when Python / providers package is unavailable.
+    if declare -p CLAUDE_CODE_EVENTS >/dev/null 2>&1; then
+        ALL_EVENTS=("${CLAUDE_CODE_EVENTS[@]}")
+    fi
+fi
+if [[ ${#ALL_EVENTS[@]} -eq 0 ]]; then
+    printf 'install-hooks.sh: no Claude events from provider_catalog or claude-code-events.sh\n' >&2
+    exit 1
+fi
+
 is_event_enabled() {
-    cfg_get ".claude_code.\"$1\".enabled" "$(cc_event_default_enabled "$1")"
+    local ev="$1" def
+    # Provider.hook_events.default_enabled via catalog (mirror install-grok-hooks).
+    def="$(relay_python -c "
+import sys
+sys.path.insert(0, '$BRIDGE_DIR')
+from providers.base import get_provider
+import providers
+p=get_provider('claude')
+print('true' if p and p.default_enabled('$ev') else 'false')
+" 2>/dev/null)"
+    [[ -z "$def" ]] && def="$(cc_event_default_enabled "$ev" 2>/dev/null || echo true)"
+    cfg_get ".claude_code.\"$ev\".enabled" "$def"
 }
 
 # The set of events to WIRE. Forced empty under --uninstall - the sync
@@ -93,7 +122,8 @@ is_event_enabled() {
 # nothing, which IS uninstall; no separate code path needed.
 WANT_EVENTS=()
 if (( UNINSTALL == 0 )); then
-    for ev in "${CLAUDE_CODE_EVENTS[@]}"; do
+    for ev in "${ALL_EVENTS[@]}"; do
+        [[ -z "$ev" ]] && continue
         [[ "$(is_event_enabled "$ev")" == "true" ]] && WANT_EVENTS+=("$ev")
     done
 fi
@@ -118,7 +148,7 @@ json_array_from_lines() {
 }
 
 WANT_JSON="$(printf '%s\n' "${WANT_EVENTS[@]}" | json_array_from_lines)"
-ALL_EVENTS_JSON="$(printf '%s\n' "${CLAUDE_CODE_EVENTS[@]}" | json_array_from_lines)"
+ALL_EVENTS_JSON="$(printf '%s\n' "${ALL_EVENTS[@]}" | json_array_from_lines)"
 
 # Reconcile every DOCUMENTED event (not just the wanted ones, so a
 # newly-disabled event's stale relay entry gets cleaned up too) against

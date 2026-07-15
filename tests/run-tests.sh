@@ -1,5 +1,15 @@
 #!/bin/bash
-# tests/run-tests.sh - Offline unit tests for TG Agent Relay.
+# tests/run-tests.sh - Offline shell + e2e smoke for TG Agent Relay.
+#
+# Pure-Python unit tests are primary under pytest (issue #29):
+#
+#   uv run pytest
+#   uv run pytest tests/ -q
+#
+# This bash runner remains the optional shell/install-hooks/adapter smoke
+# suite (mock tg-send, no network). It still dual-invokes the Python modules
+# via relay_python for backward compatibility — prefer pytest for day-to-day
+# Python work. Do not delete this file.
 #
 # NO network calls. Every test that would otherwise hit Telegram swaps in a
 # mock tg-send.sh that records its message to a file instead of curling out
@@ -12,7 +22,19 @@
 # about a failure.
 set -u
 
+# Production default is Python send/poll (#67). This suite validates the
+# shell e2e path with PATH-stubbed curl — force shell bodies here.
+# Quiet stderr spam; metrics still record python_fallback=forced.
+export RELAY_PYTHON_SEND=0
+export RELAY_PYTHON_POLL=0
+export RELAY_PYTHON_FALLBACK_QUIET=1
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Prefer Python 3.14 for unit tests / helpers
+# shellcheck disable=SC1091
+[[ -f "$REPO_ROOT/lib/python.sh" ]] && source "$REPO_ROOT/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+[[ -n "${RELAY_PYTHON:-}" ]] || RELAY_PYTHON=python3
 PASS=0
 FAIL=0
 FAILED_NAMES=()
@@ -59,14 +81,23 @@ setup_temp_bridge() {
     local dir
     dir="$(mktemp -d)"
     ln -s "$REPO_ROOT/hook-notify.sh" "$dir/hook-notify.sh"
+    ln -s "$REPO_ROOT/hook-notify-grok.sh" "$dir/hook-notify-grok.sh"
     ln -s "$REPO_ROOT/relay-notify.sh" "$dir/relay-notify.sh"
     ln -s "$REPO_ROOT/install-hooks.sh" "$dir/install-hooks.sh"
+    ln -s "$REPO_ROOT/install-grok-hooks.sh" "$dir/install-grok-hooks.sh"
     mkdir -p "$dir/adapters" "$dir/lib" "$dir/handlers"
     ln -s "$REPO_ROOT/adapters/claude-code.sh" "$dir/adapters/claude-code.sh"
+    ln -s "$REPO_ROOT/adapters/grok.sh" "$dir/adapters/grok.sh"
     ln -s "$REPO_ROOT/lib/relay-config.sh" "$dir/lib/relay-config.sh"
     ln -s "$REPO_ROOT/lib/relay-common.sh" "$dir/lib/relay-common.sh"
     ln -s "$REPO_ROOT/lib/claude-code-events.sh" "$dir/lib/claude-code-events.sh"
+    ln -s "$REPO_ROOT/lib/grok-events.sh" "$dir/lib/grok-events.sh"
+    ln -s "$REPO_ROOT/lib/routing.sh" "$dir/lib/routing.sh"
+    ln -s "$REPO_ROOT/lib/provider_hook.py" "$dir/lib/provider_hook.py"
+    ln -s "$REPO_ROOT/lib/provider_catalog.py" "$dir/lib/provider_catalog.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/providers" "$dir/providers"
     ln -s "$REPO_ROOT/lib/metrics_agg.py" "$dir/lib/metrics_agg.py"
     ln -s "$REPO_ROOT/lib/dashboard_render.py" "$dir/lib/dashboard_render.py"
     ln -s "$REPO_ROOT/lib/usage_ingest.py" "$dir/lib/usage_ingest.py"
@@ -79,6 +110,7 @@ setup_temp_bridge() {
     ln -s "$REPO_ROOT/handlers/uptime.sh" "$dir/handlers/uptime.sh"
     ln -s "$REPO_ROOT/handlers/help.sh" "$dir/handlers/help.sh"
     ln -s "$REPO_ROOT/handlers/usage.sh" "$dir/handlers/usage.sh"
+    ln -s "$REPO_ROOT/handlers/project.sh" "$dir/handlers/project.sh"
 
     cat > "$dir/tg-send.sh" <<'MOCK'
 #!/bin/bash
@@ -107,7 +139,7 @@ for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh go-live.sh \
          watch-go-live.sh install-hooks.sh \
          adapters/claude-code.sh adapters/generic-example.sh \
          lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
-         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
+         handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh handlers/project.sh; do
     if bash -n "$REPO_ROOT/$f" 2>/tmp/synerr; then
         ok "syntax: $f"
     else
@@ -120,7 +152,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     for f in tg-send.sh tg-poll.sh hook-notify.sh relay-notify.sh install-hooks.sh \
              adapters/claude-code.sh adapters/generic-example.sh \
              lib/relay-common.sh lib/relay-config.sh lib/claude-code-events.sh lib/tts.sh lib/format.sh lib/code_highlight.sh \
-             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh; do
+             handlers/dashboard.sh handlers/stats.sh handlers/uptime.sh handlers/help.sh handlers/usage.sh handlers/project.sh; do
         if out="$(shellcheck "$REPO_ROOT/$f" 2>&1)"; then
             ok "shellcheck: $f"
         else
@@ -181,6 +213,88 @@ assert_eq "Notification prefix overridden via relay.toml" \
 clear_recorded "$BRIDGE2"
 
 rm -rf "$BRIDGE2"
+
+# ============================================================================
+echo "== lib/python_fallback.sh: redact / safe-bin / sticky =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/python_fallback.sh"
+
+# Redaction: secrets must never appear in reason strings
+_RED="$(relay_redact_secrets 'fail BOT_TOKEN=1234567890:AAH-deadbeef_secret_token_value_here and sk-abc1234567890xyz Bearer xyzsecret99')"
+assert_eq "redact: BOT_TOKEN gone" "0" "$(printf '%s' "$_RED" | grep -c 'deadbeef' || true)"
+assert_eq "redact: sk- gone" "0" "$(printf '%s' "$_RED" | grep -c 'sk-abc' || true)"
+assert_eq "redact: Bearer gone" "0" "$(printf '%s' "$_RED" | grep -c 'xyzsecret99' || true)"
+assert_eq "redact: markers present" "1" "$(printf '%s' "$_RED" | grep -c 'REDACTED' || true)"
+# Telegram raw token shape
+_RED2="$(relay_redact_secrets 'err 7123456789:AAHxxxxxxxxxxxxxxxxxxxxYYYY and done')"
+assert_eq "redact: telegram token shape" "0" "$(printf '%s' "$_RED2" | grep -c 'AAH' || true)"
+
+# Safe bin: injection / traversal rejected
+relay_py_bin_is_safe 'python3; rm -rf /' && _SAFE_BAD=0 || _SAFE_BAD=1
+assert_eq "safe-bin: rejects shell metacharacters" "1" "$_SAFE_BAD"
+relay_py_bin_is_safe '/tmp/../etc/passwd' && _SAFE_TRAV=0 || _SAFE_TRAV=1
+assert_eq "safe-bin: rejects path traversal" "1" "$_SAFE_TRAV"
+relay_py_bin_is_safe 'python3' && _SAFE_OK=0 || _SAFE_OK=1
+# python3 usually present in CI; if missing, skip with honest pass via command -v
+if command -v python3 >/dev/null 2>&1; then
+    assert_eq "safe-bin: accepts bare python3" "0" "$_SAFE_OK"
+else
+    ok "safe-bin: accepts bare python3 (SKIP: no python3)"
+fi
+relay_py_bin_is_safe 'node' && _SAFE_NODE=0 || _SAFE_NODE=1
+assert_eq "safe-bin: rejects non-python bare names" "1" "$_SAFE_NODE"
+
+# Sticky window: set → active → clear; kind injection rejected
+_FB_TMP="$(mktemp -d)"
+BRIDGE_DIR="$_FB_TMP"
+export BRIDGE_DIR
+relay_py_sticky_set send "import failed BOT_TOKEN=1234567890:AAHxxxxxxxxxxxxxxxxxxxxSECRET"
+if [[ -f "$_FB_TMP/.python-send-fallback" ]]; then
+    ok "sticky: stamp file created"
+    # mode best-effort 600
+    _mode="$(stat -c '%a' "$_FB_TMP/.python-send-fallback" 2>/dev/null || echo '?')"
+    if [[ "$_mode" == "600" || "$_mode" == "640" || "$_mode" == "400" ]]; then
+        ok "sticky: stamp mode private-ish ($_mode)"
+    else
+        # Some FS ignore chmod; never-silent
+        ok "sticky: stamp mode $_mode (chmod may be noop on this FS)"
+    fi
+    # reason redacted on disk
+    if grep -q 'SECRET\|AAH' "$_FB_TMP/.python-send-fallback" 2>/dev/null; then
+        fail "sticky: stamp must not store raw token" "$(cat "$_FB_TMP/.python-send-fallback")"
+    else
+        ok "sticky: stamp reason redacted on disk"
+    fi
+else
+    fail "sticky: stamp file created" "missing $_FB_TMP/.python-send-fallback"
+fi
+if relay_py_sticky_active send; then
+    ok "sticky: active within TTL"
+    assert_eq "sticky: reason non-empty" "1" "$([[ -n "${RELAY_PY_STICKY_REASON:-}" ]] && echo 1 || echo 0)"
+else
+    fail "sticky: active within TTL" "not active"
+fi
+# kind path injection
+if relay_py_sticky_set '../etc/passwd' 'x' 2>/dev/null; then
+    if [[ -f "$_FB_TMP/.python-../etc/passwd-fallback" ]] || [[ -f /etc/passwd.fallback ]]; then
+        fail "sticky: kind injection rejected" "wrote outside"
+    else
+        ok "sticky: kind injection rejected (no write)"
+    fi
+else
+    ok "sticky: kind injection rejected"
+fi
+relay_py_sticky_clear send
+if [[ -f "$_FB_TMP/.python-send-fallback" ]]; then
+    fail "sticky: clear removes stamp" "still present"
+else
+    ok "sticky: clear removes stamp"
+fi
+# TTL cap: absurd TTL still numeric and <= 3600
+_ttl="$(RELAY_PYTHON_FALLBACK_TTL=999999 _relay_py_sticky_ttl)"
+assert_eq "sticky: TTL capped at 3600" "3600" "$_ttl"
+rm -rf "$_FB_TMP"
+unset BRIDGE_DIR
 
 # ============================================================================
 echo "== lib/relay-common.sh: render_template() (shared {placeholder} engine) =="
@@ -373,6 +487,51 @@ rm -f "$BAD_SETTINGS"
 
 rm -f "$SETTINGS_FIXTURE" /tmp/install_hooks_out /tmp/install_hooks_out2 /tmp/install_hooks_bad
 rm -rf "$BRIDGE_IH"
+
+# Catalog-driven install: event list + defaults come from provider_catalog
+# (providers/claude), not a hard-coded duplicate in install-hooks.sh.
+echo "== install-hooks.sh: provider_catalog drives event list / defaults =="
+BRIDGE_CAT="$(setup_temp_bridge)"
+# No relay.toml overrides → pure catalog defaults (5 default-enabled events).
+rm -f "$BRIDGE_CAT/relay.toml"
+SETTINGS_CAT="$(mktemp)"
+printf '%s\n' '{}' > "$SETTINGS_CAT"
+# Catalog must list the full Claude set (parity with providers/claude).
+CAT_COUNT="$(relay_python "$REPO_ROOT/lib/provider_catalog.py" events claude --names-only 2>/dev/null | grep -c . || true)"
+assert_eq "provider_catalog events claude --names-only: 30 events" "30" "$CAT_COUNT"
+CAT_ON="$(relay_python "$REPO_ROOT/lib/provider_catalog.py" events claude --enabled-only --names-only 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" >/tmp/install_hooks_cat 2>&1
+CAT_RC=$?
+if [[ $CAT_RC -eq 0 ]]; then
+    ok "install-hooks.sh (catalog defaults): exits 0"
+else
+    fail "install-hooks.sh (catalog defaults): exits 0" "$(cat /tmp/install_hooks_cat)"
+fi
+# Each catalog default-enabled event must be wired; default-disabled must not.
+for ev in PostToolUseFailure Stop StopFailure SubagentStop Notification; do
+    if jq -e --arg e "$ev" --arg cmd "$BRIDGE_CAT/hook-notify.sh" \
+        '.hooks[$e] // [] | any(.[].hooks[]?; .command == $cmd)' "$SETTINGS_CAT" >/dev/null 2>&1; then
+        ok "install-hooks.sh wires catalog default-on event: $ev"
+    else
+        fail "install-hooks.sh wires catalog default-on event: $ev" "$(jq -c . "$SETTINGS_CAT")"
+    fi
+done
+assert_empty "install-hooks.sh does NOT wire catalog default-off PreToolUse" \
+    "$(jq -r --arg cmd "$BRIDGE_CAT/hook-notify.sh" '.hooks.PreToolUse // [] | map(select(.hooks[]?.command == $cmd)) | .[]' "$SETTINGS_CAT" 2>/dev/null)"
+# --dry-run still works against an already-synced file (idempotent no-op path).
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" --dry-run >/tmp/install_hooks_cat_dry 2>&1
+if grep -qE 'no changes|dry-run' /tmp/install_hooks_cat_dry; then
+    ok "install-hooks.sh catalog path: --dry-run / no-op still reports status"
+else
+    fail "install-hooks.sh catalog path: --dry-run / no-op still reports status" "$(cat /tmp/install_hooks_cat_dry)"
+fi
+"$BRIDGE_CAT/install-hooks.sh" --settings "$SETTINGS_CAT" --uninstall >/dev/null 2>&1
+assert_empty "install-hooks.sh --uninstall clears catalog-wired Notification" \
+    "$(jq -r --arg cmd "$BRIDGE_CAT/hook-notify.sh" '.hooks.Notification // [] | map(select(.hooks[]?.command == $cmd)) | .[]' "$SETTINGS_CAT" 2>/dev/null)"
+# shellcheck disable=SC2034  # CAT_ON kept for never-silent diagnostics on failure
+: "${CAT_ON:=}"
+rm -f "$SETTINGS_CAT" /tmp/install_hooks_cat /tmp/install_hooks_cat_dry
+rm -rf "$BRIDGE_CAT"
 
 # ============================================================================
 echo "== relay-notify.sh: generic harness-agnostic entry point =="
@@ -787,6 +946,7 @@ setup_tts_bridge() {
     ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
 ALLOWED_USER_ID=999
@@ -814,6 +974,7 @@ setup_format_bridge() {
     ln -s "$REPO_ROOT/lib/code_highlight.sh" "$dir/lib/code_highlight.sh"
     ln -s "$REPO_ROOT/lib/code_highlight.py" "$dir/lib/code_highlight.py"
     ln -s "$REPO_ROOT/lib/toml_to_json.py" "$dir/lib/toml_to_json.py"
+    ln -s "$REPO_ROOT/lib/python.sh" "$dir/lib/python.sh"
     cat > "$dir/.env" <<'ENV'
 BOT_TOKEN=TEST_TOKEN_123
 ALLOWED_USER_ID=999
@@ -1059,9 +1220,13 @@ else
 fi
 rm -rf "$TTS11" "$STUB11" "$LOG11"
 
-# -- 12: hook_voice_max_chars truncates the SPOKEN text (piper stdin) but
-# -- leaves the sent TEXT message completely unabridged, and logs the
-# -- truncation (never-silent).
+# -- 12: hook_voice_max_chars CHUNKS the SPOKEN text (v0.5.3 - it no longer
+# -- truncates) into multiple ordered voice notes that together cover the
+# -- WHOLE message, while the sent TEXT message stays completely
+# -- unabridged; the chunking is logged (never-silent). This replaces the
+# -- pre-v0.5.3 "hook_voice_truncated" behavior this same test used to
+# -- assert - see tests 18-20 below for the dedicated chunking-coverage,
+# -- ordering, and unbounded-opt-out regressions.
 TTS12="$(setup_tts_bridge)"
 cat > "$TTS12/relay.toml" <<'TOML'
 [tts]
@@ -1069,6 +1234,8 @@ mode = "text+voice"
 engine = "espeak"
 max_chars = 600
 hook_voice = true
+spoken_mode = "full"
+clip_max_chars = 20
 hook_voice_max_chars = 20
 # formatting off -> the sent text is byte-identical to $MSG (no soft-wrap
 # line breaks), so this test's substring checks aren't entangled with the
@@ -1096,17 +1263,26 @@ chmod +x "$STUB12/espeak-ng"
 write_stub_ffmpeg "$STUB12"
 LONG_MSG12="a message that is much longer than the twenty-char hook_voice_max_chars cap configured above"
 PATH="$STUB12" TG_SEND_SOURCE=hook "$TTS12/tg-send.sh" "$LONG_MSG12" >/dev/null 2>&1
+ESPEAK_CALLS12="$(grep -c '^-w ' "$ESPEAK_LOG12" 2>/dev/null || echo 0)"
 if grep -qF "$LONG_MSG12" "$LOG12" 2>/dev/null \
+    && [[ "$ESPEAK_CALLS12" -gt 1 ]] \
     && grep -q "a message that" "$ESPEAK_LOG12" 2>/dev/null \
+    && grep -q "above" "$ESPEAK_LOG12" 2>/dev/null \
     && ! grep -qF "$LONG_MSG12" "$ESPEAK_LOG12" 2>/dev/null; then
-    ok "hook_voice_max_chars: TEXT sends the full message; spoken text is truncated to the cap"
+    ok "hook_voice_max_chars: TEXT sends the full message; SPOKEN text is chunked (first AND last words both present), never truncated"
 else
-    fail "hook_voice_max_chars: text full / voice truncated" "curl=$(cat "$LOG12" 2>/dev/null) espeak=$(cat "$ESPEAK_LOG12" 2>/dev/null)"
+    fail "hook_voice_max_chars: text full / voice chunked, covers whole message" "calls=$ESPEAK_CALLS12 curl=$(cat "$LOG12" 2>/dev/null) espeak=$(cat "$ESPEAK_LOG12" 2>/dev/null)"
 fi
-if grep -q "$(printf '\ttts\thook_voice_truncated\t')" "$TTS12/.metrics.log" 2>/dev/null; then
-    ok "hook_voice_max_chars: truncation is logged to .metrics.log (never-silent)"
+if grep -q "$(printf '\ttts\thook_voice_chunked\t')" "$TTS12/.metrics.log" 2>/dev/null; then
+    ok "hook_voice_max_chars: chunking is logged to .metrics.log (never-silent)"
 else
-    fail "hook_voice_max_chars: truncation logged" "$(cat "$TTS12/.metrics.log" 2>/dev/null)"
+    fail "hook_voice_max_chars: chunking logged" "$(cat "$TTS12/.metrics.log" 2>/dev/null)"
+fi
+# spoken_mode=full must not emit the short-mode truncation metric.
+if ! grep -q "hook_voice_truncated" "$TTS12/.metrics.log" 2>/dev/null; then
+    ok "spoken_mode=full: short-mode truncation metric does not fire"
+else
+    fail "spoken_mode=full: truncation metric must not appear" "$(cat "$TTS12/.metrics.log" 2>/dev/null)"
 fi
 rm -rf "$TTS12" "$STUB12" "$LOG12" "$ESPEAK_LOG12"
 
@@ -1184,9 +1360,9 @@ if [[ -n "$SPOKEN14" ]] \
 else
     fail "spoken transcript: symbols stripped" "spoken=[$SPOKEN14]"
 fi
-# Code + link are REFERENCED, not read aloud.
-if [[ "$SPOKEN14" == *'see the text message'* ]]; then
-    ok "spoken transcript: code + links say 'see the text message' (referenced, not voiced)"
+# Code + link are REFERENCED, not read aloud (default natural refs).
+if [[ "$SPOKEN14" == *'ref. the message for the code'* ]] || [[ "$SPOKEN14" == *'ref. the message for the link'* ]] || [[ "$SPOKEN14" == *'see the text message'* ]]; then
+    ok "spoken transcript: code + links use reference phrases (referenced, not voiced)"
 else
     fail "spoken transcript: code/link reference present" "spoken=[$SPOKEN14]"
 fi
@@ -1243,7 +1419,9 @@ write_stub_ffmpeg "$STUB15"
 MSG15="$(printf 'run `make build` now')"
 PATH="$STUB15" TG_SEND_SOURCE=hook "$TTS15/tg-send.sh" "$MSG15" >/dev/null 2>&1
 SPOKEN15="$(cat "$ESPEAK_LOG15" 2>/dev/null)"
-if [[ "$SPOKEN15" == *'make build'* ]] && [[ "$SPOKEN15" != *'`'* ]] && [[ "$SPOKEN15" != *'see the text message'* ]]; then
+if [[ "$SPOKEN15" == *'make build'* ]] && [[ "$SPOKEN15" != *'`'* ]] \
+    && [[ "$SPOKEN15" != *'see the text message'* ]] \
+    && [[ "$SPOKEN15" != *'ref. the message for the code'* ]]; then
     ok "speak_code=true: code body IS read verbatim (backticks still stripped), no reference substituted"
 else
     fail "speak_code=true: code read verbatim" "spoken=[$SPOKEN15]"
@@ -1252,7 +1430,7 @@ rm -rf "$TTS15" "$STUB15" "$LOG15" "$ESPEAK_LOG15"
 
 # -- 16: the hook_voice_max_chars cap counts SPOKEN (post-strip) chars, not
 # -- raw markup - a message whose markup is long but whose stripped prose is
-# -- short is NOT truncated.
+# -- short stays a SINGLE voice clip (no chunking needed).
 TTS16="$(setup_tts_bridge)"
 cat > "$TTS16/relay.toml" <<'TOML'
 [tts]
@@ -1260,6 +1438,8 @@ mode = "text+voice"
 engine = "espeak"
 max_chars = 600
 hook_voice = true
+spoken_mode = "full"
+clip_max_chars = 40
 hook_voice_max_chars = 40
 TOML
 STUB16="$(mktemp -d)"; tts_essential_path "$STUB16" >/dev/null
@@ -1269,8 +1449,8 @@ write_stub_espeak "$STUB16"; write_stub_ffmpeg "$STUB16"
 # ("Hi there code, see the text message" ~ 35 chars) is under the cap.
 MSG16="$(printf 'Hi there\n```python\n%s\n```' "$(python3 -c "print('x=1; '*40)")")"
 PATH="$STUB16" TG_SEND_SOURCE=hook "$TTS16/tg-send.sh" "$MSG16" >/dev/null 2>&1
-if ! grep -q "hook_voice_truncated" "$TTS16/.metrics.log" 2>/dev/null; then
-    ok "hook cap counts SPOKEN chars: long-markup/short-prose message is NOT truncated (cap applied after stripping)"
+if ! grep -q "hook_voice_chunked" "$TTS16/.metrics.log" 2>/dev/null && ! grep -q "hook_voice_truncated" "$TTS16/.metrics.log" 2>/dev/null; then
+    ok "hook cap counts SPOKEN chars: long-markup/short-prose message is neither chunked nor truncated (cap applied after stripping)"
 else
     fail "hook cap counts spoken chars" "$(cat "$TTS16/.metrics.log" 2>/dev/null)"
 fi
@@ -1317,13 +1497,202 @@ if [[ -n "$SPOKEN17" ]] \
     && [[ "$SPOKEN17" != *'make build'* ]] \
     && [[ "$SPOKEN17" != *'other_cmd'* ]] \
     && [[ "$SPOKEN17" != *'http'* ]] \
-    && [[ "$SPOKEN17" == *'see the text message'* ]] \
+    && { [[ "$SPOKEN17" == *'see the text message'* ]] || [[ "$SPOKEN17" == *'ref. the message for the code'* ]] || [[ "$SPOKEN17" == *'ref. the message for the link'* ]]; } \
     && [[ "$SPOKEN17" == *'Results here'* ]]; then
     ok "flattened single-line + double-backtick: spoken text is clean, code referenced (live-test regression)"
 else
     fail "flattened single-line + double-backtick clean" "spoken=[$SPOKEN17]"
 fi
 rm -rf "$TTS17" "$STUB17" "$LOG17" "$ESPEAK_LOG17"
+
+echo "== tg-send.sh + lib/tts.sh: full-message voice via chunking, never a silent truncation (v0.5.3) =="
+# The maintainer-reported defect: a long hook ping's voice note used to read
+# only its FIRST ~hook_voice_max_chars characters (a hard bash-substring
+# truncation) - "one part" of the message, not the whole thing. These tests
+# prove the fix: every chunk together covers the WHOLE spoken text, sent as
+# multiple ordered voice notes BEFORE the text pages, and hook_voice_max_chars
+# = 0 opts all the way out to a single unbounded clip.
+
+# -- 18: a hook ping whose spoken prose is MUCH longer than hook_voice_max_chars
+# -- gets voice notes covering the ENTIRE message (first word AND last word
+# -- both present, split across several ordered espeak calls - none of which
+# -- individually contains the whole message) - and the voice call(s) happen
+# -- BEFORE the text sendMessage call (ordering: voice first).
+TTS18="$(setup_tts_bridge)"
+cat > "$TTS18/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+spoken_mode = "full"
+clip_max_chars = 30
+hook_voice_max_chars = 30
+[format]
+enabled = false
+TOML
+STUB18="$(mktemp -d)"; tts_essential_path "$STUB18" >/dev/null
+LOG18="$(mktemp -u)"; write_stub_curl "$STUB18" "$LOG18"
+ESPEAK_LOG18="$(mktemp -u)"
+cat > "$STUB18/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG18"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB18/espeak-ng"
+write_stub_ffmpeg "$STUB18"
+MSG18="agent finished the task and here is a very long summary of everything that happened during this long agent run so the listener can hear the whole thing read back to them in full without any part of it being silently cut off partway through the end"
+PATH="$STUB18" TG_SEND_SOURCE=hook "$TTS18/tg-send.sh" "$MSG18" >/dev/null 2>&1
+ESPEAK_CALLS18="$(grep -c '^-w ' "$ESPEAK_LOG18" 2>/dev/null || echo 0)"
+# No single chunk may exceed the configured cap (30 chars of spoken text).
+OVERLONG_CHUNK18=0
+while IFS= read -r CHUNK_LINE; do
+    CHUNK_TEXT="$(printf '%s' "$CHUNK_LINE" | sed -E 's/^-w [^ ]+ //')"
+    (( ${#CHUNK_TEXT} > 30 )) && OVERLONG_CHUNK18=1
+done < "$ESPEAK_LOG18"
+if [[ "$ESPEAK_CALLS18" -gt 1 ]] \
+    && grep -q "agent finished" "$ESPEAK_LOG18" \
+    && grep -q "the end" "$ESPEAK_LOG18" \
+    && [[ "$OVERLONG_CHUNK18" -eq 0 ]] \
+    && ! grep -qF "$MSG18" "$ESPEAK_LOG18"; then
+    ok "chunking: first AND last words of a long hook ping both reach the voice engine, no chunk over the cap"
+else
+    fail "chunking: whole-message coverage" "calls=$ESPEAK_CALLS18 overlong=$OVERLONG_CHUNK18 espeak=$(cat "$ESPEAK_LOG18" 2>/dev/null)"
+fi
+# Ordering: the first sendAudio/sendVoice line in the curl log precedes the
+# first sendMessage line (voice sent before the text pages).
+FIRST_VOICE18="$(grep -n 'sendAudio\|sendVoice' "$LOG18" | head -1 | cut -d: -f1)"
+FIRST_TEXT18="$(grep -n 'sendMessage' "$LOG18" | head -1 | cut -d: -f1)"
+if [[ -n "$FIRST_VOICE18" && -n "$FIRST_TEXT18" ]] && (( FIRST_VOICE18 < FIRST_TEXT18 )); then
+    ok "ordering: voice note(s) are sent BEFORE the text pages (v0.5.3 ordering decision)"
+else
+    fail "ordering: voice before text" "voice_line=$FIRST_VOICE18 text_line=$FIRST_TEXT18 log=$(cat "$LOG18" 2>/dev/null)"
+fi
+# The sent TEXT is still the complete, unabridged message regardless.
+if grep -qF "$MSG18" "$LOG18" 2>/dev/null; then
+    ok "chunking: the sent TEXT message stays completely unabridged"
+else
+    fail "chunking: sent text unabridged" "$(cat "$LOG18" 2>/dev/null)"
+fi
+rm -rf "$TTS18" "$STUB18" "$LOG18" "$ESPEAK_LOG18"
+
+# -- 19: hook_voice_max_chars = 0 opts OUT of chunking entirely - ONE
+# -- unbounded voice clip covers the whole (long) message, never split.
+TTS19="$(setup_tts_bridge)"
+cat > "$TTS19/relay.toml" <<'TOML'
+[tts]
+mode = "text+voice"
+engine = "espeak"
+max_chars = 600
+hook_voice = true
+spoken_mode = "full"
+clip_max_chars = 0
+hook_voice_max_chars = 0
+[format]
+enabled = false
+TOML
+STUB19="$(mktemp -d)"; tts_essential_path "$STUB19" >/dev/null
+LOG19="$(mktemp -u)"; write_stub_curl "$STUB19" "$LOG19"
+ESPEAK_LOG19="$(mktemp -u)"
+cat > "$STUB19/espeak-ng" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$ESPEAK_LOG19"
+OUT=""
+while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+        -w) OUT="\$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[[ -n "\$OUT" ]] && printf 'RIFF_FAKE_WAV_DATA' > "\$OUT"
+exit 0
+STUB
+chmod +x "$STUB19/espeak-ng"
+write_stub_ffmpeg "$STUB19"
+MSG19="agent finished the task and here is a very long summary of everything that happened during this long agent run so the listener can hear the whole thing read back to them in full without any part of it being silently cut off partway through the end"
+PATH="$STUB19" TG_SEND_SOURCE=hook "$TTS19/tg-send.sh" "$MSG19" >/dev/null 2>&1
+ESPEAK_CALLS19="$(grep -c '^-w ' "$ESPEAK_LOG19" 2>/dev/null || echo 0)"
+if [[ "$ESPEAK_CALLS19" -eq 1 ]] && grep -qF "$MSG19" "$ESPEAK_LOG19" 2>/dev/null; then
+    ok "hook_voice_max_chars=0: chunking opt-out - ONE unbounded clip carries the whole message verbatim"
+else
+    fail "hook_voice_max_chars=0: single unbounded clip" "calls=$ESPEAK_CALLS19 espeak=$(cat "$ESPEAK_LOG19" 2>/dev/null)"
+fi
+if ! grep -q "hook_voice_chunked" "$TTS19/.metrics.log" 2>/dev/null; then
+    ok "hook_voice_max_chars=0: no chunking event logged (there was nothing to chunk)"
+else
+    fail "hook_voice_max_chars=0: no chunking event" "$(cat "$TTS19/.metrics.log" 2>/dev/null)"
+fi
+rm -rf "$TTS19" "$STUB19" "$LOG19" "$ESPEAK_LOG19"
+
+echo "== lib/tts.sh: _tts_chunk_text() unit tests (word-boundary chunking, v0.5.3) =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/tts.sh"
+
+# -- 20: short text under the cap comes back as exactly one chunk, byte-identical.
+declare -a CHUNKS20
+_tts_chunk_text CHUNKS20 "short text" 100
+assert_eq "_tts_chunk_text: text under max_chars -> exactly 1 chunk" "1" "${#CHUNKS20[@]}"
+assert_eq "_tts_chunk_text: the single chunk is byte-identical" "short text" "${CHUNKS20[0]:-}"
+
+# -- 21: max_chars <= 0 (or non-numeric) means unbounded - always 1 chunk,
+# -- however long the text.
+LONG_TEXT21="$(python3 -c "print('word ' * 200)" 2>/dev/null || printf 'word %.0s' {1..200})"
+declare -a CHUNKS21A CHUNKS21B
+_tts_chunk_text CHUNKS21A "$LONG_TEXT21" 0
+_tts_chunk_text CHUNKS21B "$LONG_TEXT21" "not-a-number"
+assert_eq "_tts_chunk_text: max_chars=0 -> unbounded, 1 chunk" "1" "${#CHUNKS21A[@]}"
+assert_eq "_tts_chunk_text: non-numeric max_chars -> unbounded, 1 chunk" "1" "${#CHUNKS21B[@]}"
+
+# -- 22: every chunk respects the cap, splits ONLY on whitespace (no word cut
+# -- in half), and every word of the original text is recoverable somewhere
+# -- across the chunks, in order (full coverage - the core fix guarantee).
+declare -a CHUNKS22
+_tts_chunk_text CHUNKS22 "$LONG_TEXT21" 37
+OVER22=0
+for C in "${CHUNKS22[@]}"; do
+    (( ${#C} > 37 )) && OVER22=1
+done
+assert_eq "_tts_chunk_text: no chunk exceeds max_chars" "0" "$OVER22"
+RECONSTRUCTED22="$(printf '%s ' "${CHUNKS22[@]}")"
+RECONSTRUCTED22="$(printf '%s' "$RECONSTRUCTED22" | tr -s ' ')"
+ORIGINAL22="$(printf '%s' "$LONG_TEXT21" | tr -s ' ')"
+assert_eq "_tts_chunk_text: chunks concatenate back to the original text (full coverage, no drop)" \
+    "${ORIGINAL22% }" "${RECONSTRUCTED22% }"
+if (( ${#CHUNKS22[@]} > 1 )); then
+    ok "_tts_chunk_text: a long text over max_chars produces more than 1 chunk"
+else
+    fail "_tts_chunk_text: long text should chunk" "num=${#CHUNKS22[@]}"
+fi
+
+# -- 23: a single word longer than max_chars is hard-split as a last-resort
+# -- fallback (never left as one oversized, unsendable chunk).
+declare -a CHUNKS23
+LONGWORD23="supercalifragilisticexpialidocioussupercalifragilisticexpialidocious"
+_tts_chunk_text CHUNKS23 "hi $LONGWORD23 bye" 10
+OVER23=0
+for C in "${CHUNKS23[@]}"; do
+    (( ${#C} > 10 )) && OVER23=1
+done
+assert_eq "_tts_chunk_text: an oversized single word is hard-split, no chunk exceeds max_chars" "0" "$OVER23"
+JOINED23="$(printf '%s' "${CHUNKS23[@]}")"
+if [[ "$JOINED23" == *"$LONGWORD23"* ]]; then
+    ok "_tts_chunk_text: the oversized word's full content survives the hard-split, unchanged"
+else
+    fail "_tts_chunk_text: oversized word content preserved" "chunks=${CHUNKS23[*]}"
+fi
+
+# -- 24: empty text -> zero chunks (nothing to chunk, nothing to send).
+declare -a CHUNKS24
+_tts_chunk_text CHUNKS24 "" 10
+assert_eq "_tts_chunk_text: empty text -> 0 chunks" "0" "${#CHUNKS24[@]}"
 
 echo "== lib/tts.sh: tts_select_engine() unit tests (engine preference/fallback) =="
 # shellcheck disable=SC1091
@@ -2044,7 +2413,11 @@ cat > "$IMG5/relay.toml" <<'TOML'
 [code_highlight]
 mode = "html-doc"
 TOML
-PATH="$STUB_IMG5" "$IMG5/tg-send.sh" '```myc
+# Force RELAY_PYTHON through the stub so a parent env that points at a
+# project .venv (with pygments installed via uv) cannot bypass the probe.
+# The stub fails only the `import pygments` probe; other python work uses
+# the real interpreter.
+PATH="$STUB_IMG5" RELAY_PYTHON="$STUB_IMG5/python3" "$IMG5/tg-send.sh" '```myc
 nodule example
 ```'
 if ! grep -q 'sendDocument' "$LOG_IMG5" && grep -q 'language-rust' "$LOG_IMG5" \
@@ -2101,12 +2474,12 @@ rm -rf "$IMG7" "$STUB_IMG7" "$LOG_IMG7"
 # ============================================================================
 echo "== lib/metrics_agg.py + lib/dashboard_render.py: Python unit tests (aggregation + image/fallback) =="
 if command -v python3 >/dev/null 2>&1; then
-    PY_OUT="$(python3 "$REPO_ROOT/tests/test_metrics_agg.py" 2>&1)"
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_metrics_agg.py" 2>&1)"
     PY_RC=$?
     if [[ $PY_RC -eq 0 ]]; then
-        ok "python3 tests/test_metrics_agg.py"
+        ok "relay_python tests/test_metrics_agg.py"
     else
-        fail "python3 tests/test_metrics_agg.py" "$PY_OUT"
+        fail "relay_python tests/test_metrics_agg.py" "$PY_OUT"
     fi
 else
     printf 'SKIP  python3 not installed - skipping aggregation unit tests (never-silent: this line IS the record)\n'
@@ -2114,25 +2487,38 @@ fi
 
 echo "== lib/usage_ingest.py + lib/dashboard_render.py: Python unit tests (opt-in token-usage aggregation, SYNTHETIC fixtures only) =="
 if command -v python3 >/dev/null 2>&1; then
-    PY_OUT="$(python3 "$REPO_ROOT/tests/test_usage_ingest.py" 2>&1)"
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_usage_ingest.py" 2>&1)"
     PY_RC=$?
     if [[ $PY_RC -eq 0 ]]; then
-        ok "python3 tests/test_usage_ingest.py"
+        ok "relay_python tests/test_usage_ingest.py"
     else
-        fail "python3 tests/test_usage_ingest.py" "$PY_OUT"
+        fail "relay_python tests/test_usage_ingest.py" "$PY_OUT"
     fi
 else
     printf 'SKIP  python3 not installed - skipping usage-ingest unit tests (never-silent: this line IS the record)\n'
 fi
 
-echo "== lib/code_highlight.py: Python unit tests (pygments render + native MyceliumLexer) =="
+echo "== usage registry (ADAPTERS from providers/*, issue #31) =="
 if command -v python3 >/dev/null 2>&1; then
-    PY_OUT="$(python3 "$REPO_ROOT/tests/test_code_highlight.py" 2>&1)"
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_usage_registry.py" 2>&1)"
     PY_RC=$?
     if [[ $PY_RC -eq 0 ]]; then
-        ok "python3 tests/test_code_highlight.py"
+        ok "relay_python tests/test_usage_registry.py"
     else
-        fail "python3 tests/test_code_highlight.py" "$PY_OUT"
+        fail "relay_python tests/test_usage_registry.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping usage-registry unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== lib/code_highlight.py: Python unit tests (pygments render + native MyceliumLexer) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_code_highlight.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_code_highlight.py"
+    else
+        fail "relay_python tests/test_code_highlight.py" "$PY_OUT"
     fi
 else
     printf 'SKIP  python3 not installed - skipping code-highlight unit tests (never-silent: this line IS the record)\n'
@@ -2140,15 +2526,362 @@ fi
 
 echo "== lib/tts_plain_text.py: Python unit tests (markdown/HTML -> clean spoken prose, v0.5.2) =="
 if command -v python3 >/dev/null 2>&1; then
-    PY_OUT="$(python3 "$REPO_ROOT/tests/test_tts_plain_text.py" 2>&1)"
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_tts_plain_text.py" 2>&1)"
     PY_RC=$?
     if [[ $PY_RC -eq 0 ]]; then
-        ok "python3 tests/test_tts_plain_text.py"
+        ok "relay_python tests/test_tts_plain_text.py"
     else
-        fail "python3 tests/test_tts_plain_text.py" "$PY_OUT"
+        fail "relay_python tests/test_tts_plain_text.py" "$PY_OUT"
     fi
 else
     printf 'SKIP  python3 not installed - skipping tts-plain-text unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== tg_agent_relay.tts: spoken_mode short/full strip+chunk (issue #28) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_tts_package.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_tts_package.py"
+    else
+        fail "relay_python tests/test_tts_package.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping tts package unit tests (never-silent: this line IS the record)\n'
+fi
+
+echo "== providers/grok + providers/claude (Python unit tests) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_grok.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_providers_grok.py"
+    else
+        fail "relay_python tests/test_providers_grok.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_claude.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_providers_claude.py"
+    else
+        fail "relay_python tests/test_providers_claude.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_providers_plugplay.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_providers_plugplay.py"
+    else
+        fail "relay_python tests/test_providers_plugplay.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping provider unit tests\n'
+fi
+
+echo "== tg_agent_relay package interfaces (Python unit tests) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_package_interfaces.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_package_interfaces.py"
+    else
+        fail "relay_python tests/test_package_interfaces.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_routing_tables.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_routing_tables.py"
+    else
+        fail "relay_python tests/test_routing_tables.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_mcp_stub.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_mcp_stub.py"
+    else
+        fail "relay_python tests/test_mcp_stub.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_extensions_adk.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_extensions_adk.py"
+    else
+        fail "relay_python tests/test_extensions_adk.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_highlight_docs.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_highlight_docs.py"
+    else
+        fail "relay_python tests/test_highlight_docs.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_project_bind.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_project_bind.py"
+    else
+        fail "relay_python tests/test_project_bind.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping package interface unit tests\n'
+fi
+
+echo "== adapters/grok.sh + lib/grok-events.sh + lib/routing.sh =="
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/grok-events.sh"
+assert_eq "grok_normalize_event pre_tool_use" "PreToolUse" "$(grok_normalize_event pre_tool_use)"
+assert_eq "grok_normalize_event SubagentEnd" "SubagentStop" "$(grok_normalize_event SubagentEnd)"
+assert_eq "grok default Stop enabled" "true" "$(grok_event_default_enabled Stop)"
+assert_eq "grok default PreToolUse disabled" "false" "$(grok_event_default_enabled PreToolUse)"
+
+GDIR="$(setup_temp_bridge)"
+printf '%s' '{"hookEventName":"stop","message":"all green"}' | bash "$GDIR/adapters/grok.sh"
+assert_eq "grok Stop adapter summary" "🏁 Grok turn finished — all green" "$(recorded "$GDIR")"
+rm -rf "$GDIR"
+
+GDIR="$(setup_temp_bridge)"
+# disabled event should not send
+cat > "$GDIR/relay.toml" <<'EOF'
+[grok.Stop]
+enabled = false
+EOF
+printf '%s' '{"hookEventName":"stop","message":"nope"}' | bash "$GDIR/adapters/grok.sh"
+assert_empty "grok Stop disabled -> no send" "$(recorded "$GDIR")"
+rm -rf "$GDIR"
+
+# --- grok adapter e2e (issue #63): fixtures + config + smart dispatch ---
+echo "== grok adapter e2e (issue #63): fixtures + config overrides + smart dispatch =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_grok_adapter_e2e.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_grok_adapter_e2e.py"
+    else
+        fail "relay_python tests/test_grok_adapter_e2e.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_hook_fixtures.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_hook_fixtures.py"
+    else
+        fail "relay_python tests/test_hook_fixtures.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping grok adapter e2e\n'
+fi
+# --- end grok adapter e2e (issue #63) ---
+
+# install-grok-hooks dry-run writes nothing
+GHOOKS="$(mktemp -d)"
+OUT="$(bash "$REPO_ROOT/install-grok-hooks.sh" --hooks-file "$GHOOKS/tg.json" --dry-run 2>&1)"
+if [[ "$OUT" == *"--dry-run"* ]] && [[ ! -f "$GHOOKS/tg.json" ]]; then
+    ok "install-grok-hooks.sh --dry-run leaves file absent"
+else
+    fail "install-grok-hooks.sh --dry-run leaves file absent" "$OUT"
+fi
+bash "$REPO_ROOT/install-grok-hooks.sh" --hooks-file "$GHOOKS/tg.json" >/dev/null 2>&1
+if [[ -f "$GHOOKS/tg.json" ]] && jq -e '.hooks.Stop' "$GHOOKS/tg.json" >/dev/null 2>&1; then
+    ok "install-grok-hooks.sh writes Stop (default-on)"
+else
+    fail "install-grok-hooks.sh writes Stop (default-on)" "$(cat "$GHOOKS/tg.json" 2>/dev/null)"
+fi
+bash "$REPO_ROOT/install-grok-hooks.sh" --hooks-file "$GHOOKS/tg.json" --uninstall >/dev/null 2>&1
+if [[ ! -f "$GHOOKS/tg.json" ]]; then
+    ok "install-grok-hooks.sh --uninstall removes managed file"
+else
+    fail "install-grok-hooks.sh --uninstall removes managed file"
+fi
+rm -rf "$GHOOKS"
+
+# routing resolve
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/relay-config.sh"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/lib/routing.sh"
+RCFG="$(mktemp)"
+cat > "$RCFG" <<'EOF'
+[routing]
+default_backend = "claude"
+[backends.claude]
+tag = "claude"
+prefixes = ["@claude", "claude:"]
+project = "mycelium"
+[backends.grok]
+tag = "grok"
+prefixes = ["@grok"]
+project = "mycelium"
+[[chats]]
+chat_id = -1001
+backend = "claude"
+project = "mycelium"
+[[chats]]
+chat_id = -1002
+backend = "grok"
+project = "mycelium"
+EOF
+load_relay_config "$RCFG"
+assert_eq "route sticky chat" "claude|mycelium|hello|chat" "$(route_resolve -1001 '' 'hello')"
+assert_eq "route prefix" "grok|mycelium|review|prefix" "$(route_resolve 999 '' '@grok review')"
+assert_eq "route default" "claude|mycelium|plain|default" "$(route_resolve 999 '' 'plain')"
+assert_eq "route inbound tag" "[telegram:backend:claude:project:mycelium]" "$(route_inbound_tag claude mycelium)"
+assert_eq "route format tag" "[grok · mycelium]" "$(route_format_tag grok mycelium)"
+# no routing config -> legacy
+RELAY_CONFIG_JSON="{}"
+assert_eq "route legacy no config" "||hi|legacy" "$(route_resolve 1 '' 'hi')"
+rm -f "$RCFG"
+
+# Project-only room: sticky project, backend from prefix
+RCFG="$(mktemp)"
+cat > "$RCFG" <<'EOF'
+[routing]
+default_backend = "claude"
+[backends.claude]
+prefixes = ["@claude"]
+[backends.grok]
+prefixes = ["@grok"]
+[projects.mycelium]
+root = "/tmp/mycelium-proj"
+default_backend = "claude"
+[[chats]]
+chat_id = -100999
+thread_id = 3
+project = "mycelium"
+EOF
+load_relay_config "$RCFG"
+assert_eq "project-only + @grok" "grok|mycelium|hi|chat" "$(route_resolve -100999 3 '@grok hi')"
+assert_eq "project-only default backend" "claude|mycelium|hello|chat" "$(route_resolve -100999 3 'hello')"
+assert_eq "project_from_cwd" "mycelium" "$(project_from_cwd /tmp/mycelium-proj/src)"
+# Adapter contract: cwd → project → reverse-lookup room (forum topic)
+assert_eq "route_lookup_chat project-only room" "-100999|3" "$(route_lookup_chat claude mycelium)"
+rm -f "$RCFG"
+
+# ============================================================================
+echo "== handlers/project.sh: bind/unbind overlay (negative chat_id, merge) =="
+BRIDGE_PB="$(setup_temp_bridge)"
+cat > "$BRIDGE_PB/relay.toml" <<'EOF'
+[routing]
+default_backend = "claude"
+[backends.claude]
+prefixes = ["@claude"]
+tag = "claude"
+[backends.grok]
+prefixes = ["@grok"]
+tag = "grok"
+[projects.mycelium]
+root = "/tmp/mycelium-proj"
+default_backend = "claude"
+[[chats]]
+chat_id = -100
+backend = "claude"
+project = "from-toml"
+EOF
+# Forum topic bind with large negative supergroup id
+export RELAY_CHAT_ID="-1001234567890"
+export RELAY_THREAD_ID="7"
+"$BRIDGE_PB/handlers/project.sh" "/project bind mycelium" >/dev/null 2>&1
+OV="$BRIDGE_PB/.chats.d/bindings.json"
+if [[ -f "$OV" ]] && jq -e '.chats[] | select(.chat_id == -1001234567890 and .thread_id == 7 and .project == "mycelium")' "$OV" >/dev/null 2>&1; then
+    ok "project bind: negative chat_id + thread_id written to overlay"
+else
+    fail "project bind: negative chat_id + thread_id written to overlay" "$(cat "$OV" 2>/dev/null || echo missing)"
+fi
+# load_relay_config merge: overlay + static
+export RELAY_CHATS_OVERLAY="$OV"
+load_relay_config "$BRIDGE_PB/relay.toml"
+assert_eq "project bind: route_resolve sticky topic" \
+    "claude|mycelium|hello|chat" \
+    "$(route_resolve -1001234567890 7 'hello')"
+assert_eq "project bind: static [[chats]] still present" \
+    "claude|from-toml|x|chat" \
+    "$(route_resolve -100 '' 'x')"
+assert_eq "project bind: reverse lookup hits forum room" \
+    "-1001234567890|7" \
+    "$(route_lookup_chat grok mycelium)"
+# Re-bind same room → upsert project
+"$BRIDGE_PB/handlers/project.sh" "/project bind other" >/dev/null 2>&1
+assert_eq "project re-bind upserts project slug" \
+    "other" \
+    "$(jq -r '.chats[] | select(.chat_id == -1001234567890 and .thread_id == 7) | .project' "$OV")"
+# Group-level bind (no thread)
+export RELAY_THREAD_ID=""
+export RELAY_CHAT_ID="-100999"
+"$BRIDGE_PB/handlers/project.sh" "project bind group-proj" >/dev/null 2>&1
+if jq -e '.chats[] | select(.chat_id == -100999 and (.thread_id == null) and .project == "group-proj")' "$OV" >/dev/null 2>&1; then
+    ok "project bind: group-level thread_id null"
+else
+    fail "project bind: group-level thread_id null" "$(cat "$OV")"
+fi
+# Unbind forum topic only
+export RELAY_CHAT_ID="-1001234567890"
+export RELAY_THREAD_ID="7"
+"$BRIDGE_PB/handlers/project.sh" "/project unbind" >/dev/null 2>&1
+if jq -e '.chats | map(select(.chat_id == -1001234567890 and .thread_id == 7)) | length == 0' "$OV" >/dev/null 2>&1 \
+    && jq -e '.chats[] | select(.chat_id == -100999)' "$OV" >/dev/null 2>&1; then
+    ok "project unbind: removes only matching room"
+else
+    fail "project unbind: removes only matching room" "$(cat "$OV")"
+fi
+# Missing overlay: first bind creates it
+rm -rf "$BRIDGE_PB/.chats.d"
+export RELAY_CHAT_ID="-1"
+export RELAY_THREAD_ID=""
+"$BRIDGE_PB/handlers/project.sh" "/project bind fresh" >/dev/null 2>&1
+if [[ -f "$BRIDGE_PB/.chats.d/bindings.json" ]] \
+    && jq -e '.chats[0].project == "fresh" and .chats[0].chat_id == -1' "$BRIDGE_PB/.chats.d/bindings.json" >/dev/null 2>&1; then
+    ok "project bind: creates missing overlay"
+else
+    fail "project bind: creates missing overlay" "$(cat "$BRIDGE_PB/.chats.d/bindings.json" 2>/dev/null || echo missing)"
+fi
+# Corrupt overlay: refuse, leave file untouched
+printf '{bad' > "$BRIDGE_PB/.chats.d/bindings.json"
+BEFORE_CORRUPT="$(cat "$BRIDGE_PB/.chats.d/bindings.json")"
+clear_recorded "$BRIDGE_PB"
+export RELAY_CHAT_ID="-2"
+"$BRIDGE_PB/handlers/project.sh" "/project bind nope" >/dev/null 2>&1
+AFTER_CORRUPT="$(cat "$BRIDGE_PB/.chats.d/bindings.json")"
+REC="$(recorded "$BRIDGE_PB")"
+if [[ "$BEFORE_CORRUPT" == "$AFTER_CORRUPT" ]] && [[ "$REC" == *"corrupt"* || "$REC" == *"Corrupt"* || "$REC" == *"not a JSON"* ]]; then
+    ok "project bind: corrupt overlay refused, file unchanged"
+else
+    fail "project bind: corrupt overlay refused, file unchanged" "rec=[$REC] after=[$AFTER_CORRUPT]"
+fi
+# Invalid chat id
+clear_recorded "$BRIDGE_PB"
+printf '%s\n' '{"chats":[]}' > "$BRIDGE_PB/.chats.d/bindings.json"
+export RELAY_CHAT_ID="not-numeric"
+"$BRIDGE_PB/handlers/project.sh" "/project bind x" >/dev/null 2>&1
+if [[ "$(recorded "$BRIDGE_PB")" == *"Invalid chat_id"* ]]; then
+    ok "project bind: rejects non-numeric chat_id"
+else
+    fail "project bind: rejects non-numeric chat_id" "$(recorded "$BRIDGE_PB")"
+fi
+unset RELAY_CHAT_ID RELAY_THREAD_ID RELAY_CHATS_OVERLAY
+rm -rf "$BRIDGE_PB"
+
+# Hybrid context exclusive selection
+if command -v python3 >/dev/null 2>&1; then
+    VIS="$(python3 "$REPO_ROOT/lib/context_select.py" --vision --repo-root "$REPO_ROOT" 2>/dev/null)"
+    NOV="$(python3 "$REPO_ROOT/lib/context_select.py" --no-vision --repo-root "$REPO_ROOT" 2>/dev/null)"
+    if printf '%s' "$VIS" | jq -e '.mode=="visual" and ([.items[].modality]|unique==["image"] or ([.items[].modality]|unique|sort==["image","text"]))' >/dev/null 2>&1; then
+        # Allow text fallback only if image missing; check do_not_load present on image items
+        if printf '%s' "$VIS" | jq -e '[.items[]|select(.modality=="image")|.do_not_load|length]|all(.>0)' >/dev/null 2>&1; then
+            ok "context_select --vision: images list text twins in do_not_load"
+        else
+            fail "context_select --vision: images list text twins in do_not_load" "$VIS"
+        fi
+    else
+        fail "context_select --vision mode" "$VIS"
+    fi
+    if printf '%s' "$NOV" | jq -e '.mode=="text" and all(.items[]; .modality=="text") and all(.items[]; (.do_not_load|length)>0)' >/dev/null 2>&1; then
+        ok "context_select --no-vision: text only with image twins excluded"
+    else
+        fail "context_select --no-vision: text only with image twins excluded" "$NOV"
+    fi
+    # Double-dip guard: no path appears as both selected path and another item's path for same id
+    if printf '%s' "$VIS" | jq -e '[.items[] | .path as $p | .do_not_load[]? | select(.==$p)] | length == 0' >/dev/null 2>&1; then
+        ok "context_select: no path is both load and do_not_load"
+    else
+        fail "context_select: no path is both load and do_not_load"
+    fi
 fi
 
 # ============================================================================

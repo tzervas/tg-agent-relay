@@ -573,25 +573,44 @@
 #   pre-v0.5.1 shape (hook pings are effectively text-only, same as any
 #   other over-max_chars/paginated message).
 #
-# hook_voice_max_chars = 1500
-#   How much of a long/paginated hook ping is actually SPOKEN - a sensible
-#   read-through, not the whole report (piper/espeak-ng on a huge string
-#   is slow and not a good listen anyway). Only bounds what's passed to
-#   the TTS engine; irrelevant when hook_voice = false. A truncation is
-#   logged to .metrics.log ("tts hook_voice_truncated") - never silent.
-#   v0.5.2: the cap counts SPOKEN chars - it is applied AFTER the message
-#   is stripped to plain prose (below), so a message that is long in markup
-#   but short in spoken words is not needlessly truncated.
+# --- Spoken coverage (short default vs full-mode) -------------------------
+# spoken_mode = "short"
+#   DEFAULT "short": truncate spoken prose to spoken_max_chars at a word
+#   boundary and send ONE voice clip. A truncation is logged to
+#   .metrics.log ("tts hook_voice_truncated"). Use this for short chat-style
+#   notes; the TEXT bubble still goes out FULL / unabridged either way.
+# spoken_max_chars = 600
 #
-# --- Clean spoken transcript (v0.5.2) -------------------------------------
+# spoken_mode = "full"
+#   Opt-in full read-through: the ENTIRE spoken prose is covered, split at
+#   word boundaries into ordered clips of clip_max_chars (0 = one unbounded
+#   clip). A multi-clip event is logged to .metrics.log
+#   ("tts hook_voice_chunked"). Voice note(s) are generated ONCE from the
+#   complete pre-pagination message and sent BEFORE the text pages.
+#
+# --- Full-mode user recipe (copy into your relay.toml to opt in) ----------
+# spoken_mode = "full"
+# clip_max_chars = 1500
+# collapse_adjacent_refs = true  # default true — keep consecutive refs tidy
+# voice_code_ref = "ref. the message for the code"
+# voice_link_ref = "ref. the message for the link"
+#
+# clip_max_chars = 1500
+# hook_voice_max_chars = 1500
+#   Legacy alias for clip_max_chars when clip_max_chars is unset.
+#   Only used when spoken_mode = "full". Counts SPOKEN chars after strip.
+#   Set to 0 for a single unbounded clip instead of chunking.
+#
+# --- Clean spoken transcript (v0.5.2+) ------------------------------------
 # Before ANY voice note is synthesized, the message is stripped to plain-
 # text PROSE (lib/tts_plain_text.py) so the engine reads WORDS, never the
 # formatting SYMBOLS: `#` headers, `*`/`_` emphasis, `` ` ``/```` ``` ````
 # code, `<b>`/`<pre>`/`<code>` HTML tags, `&lt;`-style entities (unescaped
 # to the real char), `>` blockquotes, `[k/n]` page headers, and `-`/`*`/`N.`
-# list markers. The SENT text message keeps its FULL formatting - only the
-# voice's input is stripped. These knobs tune what the voice SAYS in place
-# of code and links (which are referenced, not read aloud):
+# list markers. Call/tool/request IDs (UUIDs, call_*, toolu_*, long hex
+# tokens, …) are stripped so the voice never spells them out. URLs and
+# code are referenced, not read aloud. The SENT text message keeps its
+# FULL formatting (and full length) - only the voice's input is stripped.
 #
 # speak_code = false
 #   Default false: a code span/block is replaced by voice_code_ref below
@@ -599,15 +618,20 @@
 #   character-by-character). Set true to read the code body verbatim (the
 #   surrounding markdown is still stripped either way).
 #
-# voice_code_ref = "code, see the text message"
+# voice_code_ref = "ref. the message for the code"
 #   What the voice says in place of a fenced OR inline code span (unless
 #   speak_code = true). Keep it short + natural so the read flows.
 #
-# voice_link_ref = "see the text message"
+# voice_link_ref = "ref. the message for the link"
 #   The spoken tail for a link. A Markdown link `[label](url)` is read as
-#   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped); a
-#   bare URL is read as "link, <voice_link_ref>". The URL characters are
+#   "<label>, <voice_link_ref>" (the link TEXT is kept, the URL dropped);
+#   a bare URL is read as "link, <voice_link_ref>". The URL characters are
 #   never voiced (no "h-t-t-p-s-colon-slash-slash..." spell-out).
+#
+# collapse_adjacent_refs = true
+#   DEFAULT true. Collapse consecutive identical code/link refs so three
+#   adjacent fences voice one "ref. the message for the code", not three
+#   in a row.
 
 # --------------------------------------------------------------------------
 # [dashboard] - shared config for the dashboard/stats relay-handled
@@ -644,7 +668,7 @@
 
 # source = "claude-code"
 #   Which adapter reads `projects_dir` below. Only "claude-code" ships
-#   today (see lib/usage_ingest.py's module docstring for the
+#   today; also "grok", "multi"/"auto" (see lib/usage_ingest.py's module docstring for the
 #   source-adapter contract) - an unrecognized value skip-gracefully
 #   disables collection (never fabricates numbers) rather than erroring.
 
@@ -658,8 +682,8 @@
 #   track usage from somewhere other than this machine's default.
 
 # window = "7d"
-#   How far back to aggregate: "today" (since local midnight), "all"
-#   (everything the source has), or "<N>d" / "<N>h" (e.g. "30d", "12h").
+#   How far back: "today", "all"/"lifetime" (local retained), or
+#   "<N>h|d|w|m|y" (e.g. "30d", "3m", "1y", "12h"). source also accepts
 #   An unrecognized value is never silently treated as "all" (which could
 #   balloon the read) - it clearly labels itself "(unrecognized -
 #   defaulted to 7d)" in the rendered output instead. `/usage` and
@@ -724,3 +748,236 @@
 # # replies that usage tracking is disabled rather than sending nothing.
 # # Optional trailing window override: "/usage 30d", "/usage today",
 # # "/usage all".
+#
+# [commands.project]
+# keyword = "project"
+# slash = "/project"
+# mode = "relay"
+# handler = "handlers/project.sh"
+# # Project-room binds: /project list · here · bind <slug> · unbind
+# # Writes gitignored .chats.d/bindings.json (merged over [[chats]]).
+# # See docs/ROUTING.md — forum topics OR one group per repo.
+
+# --------------------------------------------------------------------------
+# Grok Build provider — full hook catalog (providers/grok).
+# Install: bash install-grok-hooks.sh
+#   (writes ~/.grok/hooks/tg-agent-relay.json; --dry-run / --uninstall)
+# Adapter: adapters/grok.sh → lib/provider_hook.py grok
+# Official events/trust: ~/.grok/docs/user-guide/10-hooks.md
+# Operator guide: docs/PROVIDERS.md (Grok section) + SETUP.md step 5
+# Usage source: [usage] source = "grok" (or "multi")
+#
+# Optional matchers: [grok.<Event>].matcher = "regex" filters which tool
+# names (or notification types) fire that event. Empty/absent = match all.
+# Example: [grok.PreToolUse] enabled = true; matcher = "Shell|Bash"
+#
+# --- Quiet vs full-fidelity profiles ---------------------------------------
+# QUIET (shipped defaults — leave unset, or keep only these five enabled):
+#   PostToolUseFailure, Stop, StopFailure, Notification, SubagentStop
+#   Best for day-to-day phone pings without tool spam.
+#
+# FULL (recommended extras for higher fidelity — still not every tool call):
+#   quiet five + SessionStart, SessionEnd, SubagentStart, PermissionDenied,
+#   PreCompact, PostCompact
+#   Re-run install-grok-hooks.sh after changing enabled flags; restart Grok.
+#   Leave PreToolUse / PostToolUse / UserPromptSubmit off unless you want
+#   high-volume pings (opt-in explicitly below).
+#
+# Example — full profile (uncomment the blocks you want; quiet is default):
+#   [grok.SessionStart]
+#   enabled = true
+#   [grok.SessionEnd]
+#   enabled = true
+#   [grok.SubagentStart]
+#   enabled = true
+#   [grok.PermissionDenied]
+#   enabled = true
+#   [grok.PreCompact]
+#   enabled = true
+#   [grok.PostCompact]
+#   enabled = true
+#
+# --- [grok.*] full event tables (providers/grok catalog) ---
+# [grok.SessionStart]
+# enabled = false  # Session starts  (full profile: true)
+# prefix = "🟢"
+# # placeholders: {prefix} {event} {cwd} {session_id} {detail_suffix}
+#
+# [grok.UserPromptSubmit]
+# enabled = false  # User submits a prompt  (high volume — opt-in only)
+# prefix = "⌨️"
+# # placeholders: {prefix} {event} {prompt} {message} {detail_suffix}
+#
+# [grok.PreToolUse]
+# enabled = false  # Tool about to run (notify-only; high volume — opt-in only)
+# prefix = "🔧"
+# # Optional Grok-native tool-name matcher (regex). Exact key: matcher
+# # Empty/absent = match all (field omitted from hooks JSON). When set,
+# # install-grok-hooks.sh emits "matcher" into ~/.grok/hooks/tg-agent-relay.json.
+# # Applies to tool events (Pre/PostToolUse*, PermissionDenied) and Notification
+# # (notification type). Lifecycle events (Stop, Session*, …) reject a matcher.
+# # Notify-only remains — no PreToolUse deny/policy engine in this bridge.
+# # matcher = "Shell|Bash"
+# # placeholders: {prefix} {event} {tool} {verb} {tool_input}
+#
+# [grok.PostToolUse]
+# enabled = false  # Tool completed successfully  (high volume — opt-in only)
+# prefix = "🔧"
+# # matcher = "Edit|Write|MultiEdit"   # optional; same semantics as PreToolUse
+# # placeholders: {prefix} {event} {tool} {verb} {tool_input}
+#
+# [grok.PostToolUseFailure]
+# enabled = true  # Tool failed  (quiet + full)
+# prefix = "⚠️"
+# # placeholders: {prefix} {event} {tool} {message} {detail_suffix}
+#
+# [grok.PermissionDenied]
+# enabled = false  # Permission system denied a tool  (full profile: true)
+# prefix = "🚫"
+# # placeholders: {prefix} {event} {tool}
+#
+# [grok.Stop]
+# enabled = true  # Agent turn ended  (quiet + full) — use this to verify install
+# prefix = "🏁"
+# # placeholders: {prefix} {event} {message} {detail_suffix} {stop_reason}
+#
+# [grok.StopFailure]
+# enabled = true  # Turn ended due to API error  (quiet + full)
+# prefix = "🛑"
+# # placeholders: {prefix} {event} {error_type}
+#
+# [grok.Notification]
+# enabled = true  # Agent notification  (quiet + full)
+# prefix = "🔔"
+# # placeholders: {prefix} {event} {notification_type} {message} {detail_suffix}
+#
+# [grok.SubagentStart]
+# enabled = false  # Subagent started  (full profile: true)
+# prefix = "🚀"
+# # placeholders: {prefix} {event} {agent} {agent_id}
+#
+# [grok.SubagentStop]
+# enabled = true  # Subagent finished  (quiet + full)
+# prefix = "✅"
+# # placeholders: {prefix} {event} {agent} {message} {detail_suffix}
+#
+# [grok.PreCompact]
+# enabled = false  # Compaction about to run  (full profile: true)
+# prefix = "🗜️"
+# # placeholders: {prefix} {event} {trigger}
+#
+# [grok.PostCompact]
+# enabled = false  # Compaction finished  (full profile: true)
+# prefix = "📦"
+# # placeholders: {prefix} {event} {trigger}
+#
+# [grok.SessionEnd]
+# enabled = false  # Session ended  (full profile: true)
+# prefix = "🔴"
+# # placeholders: {prefix} {event} {reason}
+#
+
+# --------------------------------------------------------------------------
+# Multi-backend routing (docs/ROUTING.md) — optional. With no [backends] /
+# [[chats]], inbound/outbound stay single-chat legacy behavior.
+# [routing]
+# default_backend = "claude"
+# require_prefix = false
+# tag_style = "bracket"   # "[claude · proj] …" | "bare" | "none"
+#
+# [backends.claude]
+# type = "claude-code"
+# delivery = "stdout"     # stdout | fifo | cmd
+# tag = "claude"
+# prefixes = ["@claude", "/claude", "claude:"]
+# project = "mycelium"
+#
+# [backends.grok]
+# type = "grok"
+# delivery = "fifo"
+# fifo = "~/.grok/telegram-bridge/in.fifo"
+# tag = "grok"
+# prefixes = ["@grok", "/grok", "grok:"]
+# project = "mycelium"
+#
+# [backends.ollama]
+# type = "ollama"
+# delivery = "cmd"
+# model = "llama3.2"
+# cmd = ["bash", "-lc", "ollama run \"$RELAY_MODEL\" \"$RELAY_TEXT\""]
+# tag = "ollama"
+# prefixes = ["@ollama", "/ollama", "ollama:"]
+# project = "mycelium"
+#
+# [backends.llamacpp]
+# type = "llamacpp"
+# delivery = "cmd"
+# tag = "llamacpp"
+# prefixes = ["@llama", "/llama", "llamacpp:"]
+#
+# --- OpenAI / ChatGPT / OpenAI-compatible self-hosted (docs/PROVIDERS.md) ---
+# [backends.openai]
+# type = "openai"
+# delivery = "cmd"
+# model = "gpt-4o-mini"
+# tag = "openai"
+# prefixes = ["@openai", "@chatgpt", "openai:", "chatgpt:"]
+# # OPENAI_API_KEY must be in the poll environment
+# cmd = ["bash", "-lc", "openai api chat.completions.create -m \"$RELAY_MODEL\" -g user \"$RELAY_TEXT\" | RELAY_BACKEND=openai \"$HOME/.claude/telegram-bridge/relay-notify.sh\" --raw"]
+#
+# [backends.local]
+# type = "openai-compat"   # vLLM / LM Studio / LiteLLM / LocalAI / OpenRouter…
+# delivery = "cmd"
+# model = "local-model"
+# tag = "local"
+# prefixes = ["@local", "@oai", "oai:"]
+# # OPENAI_BASE_URL=http://127.0.0.1:1234/v1
+# cmd = ["bash", "-lc", "curl -sS \"${OPENAI_BASE_URL:-http://127.0.0.1:1234/v1}/chat/completions\" -H 'Content-Type: application/json' -H \"Authorization: Bearer ${OPENAI_API_KEY:-lm-studio}\" -d \"$(jq -n --arg m \\\"$RELAY_MODEL\\\" --arg p \\\"$RELAY_TEXT\\\" '{model:$m,messages:[{role:\\\"user\\\",content:$p}]}')\" | jq -r '.choices[0].message.content // empty' | RELAY_BACKEND=local \"$HOME/.claude/telegram-bridge/relay-notify.sh\" --raw"]
+#
+# [backends.gemini]
+# type = "gemini"
+# delivery = "cmd"
+# model = "gemini-2.0-flash"
+# prefixes = ["@gemini", "gemini:"]
+# # GEMINI_API_KEY in poll env — see: python lib/provider_catalog.py presets gemini
+#
+# [backends.aider]
+# type = "aider"
+# delivery = "cmd"
+# prefixes = ["@aider", "aider:"]
+# # runs in RELAY_CWD from project worktree
+#
+# --- Google ADK (optional: uv pip install google-adk) — docs/ADK_MCP.md ---
+# [backends.adk]
+# type = "adk"
+# delivery = "cmd"
+# prefixes = ["@adk", "adk:"]
+# tag = "adk"
+# # ADK_AGENT=…  RELAY_CWD=project root
+# # MCP tools: python -m tg_agent_relay.mcp_stub --stdio
+#
+# Zero-token extension bus (no model):
+# [commands.ext]
+# keyword = "ext"
+# slash = "/ext"
+# mode = "relay"
+# handler = "handlers/ext.sh"
+#
+# [[chats]]
+# chat_id = -1001111111111
+# backend = "claude"
+# project = "mycelium"
+# label = "claude/mycelium"
+#
+# [[chats]]
+# chat_id = -1002222222222
+# backend = "grok"
+# project = "mycelium"
+#
+# [projects.mycelium]
+# root = "~/work/mycelium"
+# allow_shared_worktree = false
+# [projects.mycelium.worktrees]
+# claude = "~/work/mycelium"
+# grok = "~/work/mycelium-wt-grok"
+# ollama = "~/work/mycelium-wt-ollama"

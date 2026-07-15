@@ -1,0 +1,10 @@
+{
+  "hookEventName": "stop_failure",
+  "sessionId": "sess_grok_stopfail_008",
+  "cwd": "/tmp/proj",
+  "workspaceRoot": "/tmp/proj",
+  "error_type": "api_error",
+  "errorType": "api_error",
+  "message": "upstream model request failed",
+  "error_message": "upstream model request failed"
+}

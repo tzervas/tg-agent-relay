@@ -1,0 +1,22 @@
+# Multi-backend + project rooms (text fallback)
+
+Use ONLY without vision. With vision, use docs/assets/context/routing.png only.
+
+Project-split chats (preferred isolation):
+  - Forum: one group + Topics; each project = topic (chat_id + thread_id)
+  - Groups: one group per project (chat_id only)
+  Bind with /project bind <slug> (writes .chats.d/bindings.json overlay)
+
+Backends ([backends.*]): claude-code | grok | ollama | llamacpp | generic
+  delivery: stdout | fifo | cmd
+  prefixes: @claude @grok @ollama …
+
+Inbound resolve order:
+  1. sticky [[chats]] / overlay (project required; backend optional)
+  2. if project-only room → backend from @prefix or project/global default
+  3. unified DM → prefix or [routing].default_backend
+
+Outbound reverse lookup: RELAY_PROJECT (+ RELAY_BACKEND) → project room,
+else ALLOWED_CHAT_ID.
+
+Never open unlisted group chats; always filter from.id == ALLOWED_USER_ID.

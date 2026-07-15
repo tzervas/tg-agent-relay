@@ -1,0 +1,53 @@
+# Close Fixes/Closes issues only when a PR merges into **main**.
+#
+# Feature PRs target **dev** and must leave issues open. Epics stay open until
+# a final ship issue (Closes #<epic>) is included in a main-bound PR.
+# Prefer the self-hosted runner (see docs/SELF_HOSTED_RUNNER.md).
+name: close-issues-on-merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number (must be merged into main)"
+        type: string
+        required: true
+      dry_run:
+        description: "List issues without closing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked:
+    name: Close issues for main merge
+    # Prefer local podman runner; falls back if no runner is registered.
+    runs-on: [self-hosted, linux, x64]
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == 'main')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Close linked issues (main only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          DRY_INPUT: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          args=(--pr "$PR_NUMBER")
+          if [[ "${DRY_INPUT}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          # Script refuses non-main bases unless --any-base
+          bash scripts/close-linked-issues.sh "${args[@]}"

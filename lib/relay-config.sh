@@ -10,6 +10,14 @@
 # its own - it can only ADD an override when a value is actually present.
 set -u
 
+_RELAY_CFG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Prefer Python 3.14 (see lib/python.sh).
+if [[ -f "$_RELAY_CFG_DIR/python.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$_RELAY_CFG_DIR/python.sh"
+fi
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+
 RELAY_CONFIG_JSON="{}"
 
 # load_relay_config [path-to-relay.toml]
@@ -20,14 +28,32 @@ load_relay_config() {
     local toml_file="${1:-}"
     RELAY_CONFIG_JSON="{}"
 
-    [[ -n "$toml_file" && -f "$toml_file" ]] || return 0
-    command -v python3 >/dev/null 2>&1 || return 0
-
-    local lib_dir
+    local lib_dir bridge_dir overlay
     lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local parsed
-    parsed="$(python3 "$lib_dir/toml_to_json.py" "$toml_file" 2>/dev/null)" || parsed="{}"
-    [[ -n "$parsed" ]] && RELAY_CONFIG_JSON="$parsed"
+    bridge_dir="$(cd "$lib_dir/.." && pwd)"
+
+    if [[ -n "$toml_file" && -f "$toml_file" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+        local parsed
+        parsed="$(relay_python "$lib_dir/toml_to_json.py" "$toml_file" 2>/dev/null)" || parsed="{}"
+        [[ -n "$parsed" ]] && RELAY_CONFIG_JSON="$parsed"
+    fi
+
+    # Merge project-chat overlay (.chats.d/bindings.json) — written by
+    # /project bind. Overlay entries override static [[chats]] rows with the
+    # same chat_id+thread_id; other static rows are kept.
+    overlay="${RELAY_CHATS_OVERLAY:-$bridge_dir/.chats.d/bindings.json}"
+    if [[ -f "$overlay" ]] && command -v jq >/dev/null 2>&1; then
+        RELAY_CONFIG_JSON="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -c --slurpfile ov "$overlay" '
+          def key($c): "\($c.chat_id // "")|\($c.thread_id // "")";
+          (.chats // []) as $base
+          | (($ov[0].chats // $ov[0] // []) | if type=="array" then . else [] end) as $over
+          | ($over | map(key(.)) | unique) as $okeys
+          | ($base | map(select((key(.) as $k | ($okeys | index($k) | not))))
+            ) as $kept
+          | .chats = ($kept + $over)
+        ' 2>/dev/null)" || true
+        [[ -z "$RELAY_CONFIG_JSON" ]] && RELAY_CONFIG_JSON="{}"
+    fi
     return 0
 }
 

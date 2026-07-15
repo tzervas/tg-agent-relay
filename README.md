@@ -7,10 +7,12 @@ the relay — zero model tokens either direction unless *you* start a
 conversation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![gitleaks](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
+[![local-ci](https://img.shields.io/badge/quality-local--ci-brightgreen)](docs/RELEASING.md)
+[![gitleaks](https://img.shields.io/badge/gitleaks-manual-lightgrey)](https://github.com/tzervas/tg-agent-relay/actions/workflows/gitleaks.yml)
 
-Built with pure `curl` + `jq` + `python3` stdlib — no framework, no external
-services, no listening port.
+Built with pure `curl` + `jq` + **Python 3.14** (preferred; 3.13 ok; ≥3.11
+minimum via `lib/python.sh` / `RELAY_PYTHON`) stdlib — no framework, no
+external services, no listening port.
 
 > **Repo/directory note:** this repo is named `tg-agent-relay` on GitHub
 > (renamed from `claude-telegram-bridge` — GitHub auto-redirects the old
@@ -128,6 +130,13 @@ bash go-live.sh
 Full walkthrough (including optional `relay.toml` config and wiring an
 adapter): see [`SETUP.md`](SETUP.md).
 
+**Releases & local upgrade (local-first):** [`docs/RELEASING.md`](docs/RELEASING.md) —
+`bash scripts/local-ci.sh` is the quality gate on this workstation;
+`bash scripts/release.sh vX.Y.Z` tags and publishes the GitHub Release via `gh`
+(no remote Actions required).  
+`scripts/deploy-local.sh [--ref vX.Y.Z]` updates `~/.claude/telegram-bridge`
+without touching `.env` / `relay.toml` / runtime state.
+
 ## In use
 
 ### (a) Wiring to Claude Code
@@ -151,7 +160,34 @@ it to `relay-notify.sh --raw`:
 events**, not just these two — see [Installing hooks](#installing-hooks-for-more-events)
 below to wire any of the rest.
 
-### (b) Wiring to ANY other agent/harness
+### (b) Wiring to Grok Build / Grok CLI (full provider)
+
+All **14 documented Grok Build hooks** are implemented as a provider
+extension ([`providers/grok`](providers/grok/), [`docs/PROVIDERS.md`](docs/PROVIDERS.md)):
+
+```bash
+# Defaults on: Stop, StopFailure, SubagentStop, Notification, PostToolUseFailure
+# Opt-in the rest via [grok.<Event>] enabled = true in relay.toml, then:
+bash install-grok-hooks.sh --dry-run
+bash install-grok-hooks.sh
+```
+
+Writes `~/.grok/hooks/tg-agent-relay.json`. Runtime:
+`hook-notify-grok.sh` → `adapters/grok.sh` → `lib/provider_hook.py grok`.
+Usage: `[usage] source = "grok"` or `"multi"`.
+
+### (c) Multi-backend + project rooms (one bot, many agents)
+
+Optional. Configure `[backends.*]` + `[[chats]]` / `/project bind` so:
+
+- **Project rooms** — forum topic *or* whole group per repo (`/project bind <slug>`)
+- **Backends** — sticky per room or via prefixes (`@claude …`, `@grok …`, `@ollama …`)
+- Replies tagged (`[claude · mycelium] …`) so you know who answered
+
+See **[`docs/ROUTING.md`](docs/ROUTING.md)**. Hybrid **agent** context (vision vs
+text, exclusive — no double-dip): [`docs/context/README.md`](docs/context/README.md).
+
+### (d) Wiring to ANY other agent/harness
 
 No adapter needed for plain text — call the generic entry point directly:
 
@@ -169,7 +205,7 @@ Claude Code's hook JSON), copy
 [`adapters/generic-example.sh`](adapters/generic-example.sh) and write a
 dedicated adapter — see [`adapters/README.md`](adapters/README.md).
 
-### (c) A status ping arriving on the phone
+### (e) A status ping arriving on the phone
 
 A `SubagentStop` hook firing produces a DM like:
 
@@ -499,44 +535,82 @@ routinely carry a full agent message and so are routinely over
 [tts]
 mode = "text+voice"
 hook_voice = true              # default; false restores the old hook-is-text-only shape
-hook_voice_max_chars = 1500    # how much of a long ping is actually SPOKEN
+spoken_mode = "short"          # default: one short voice clip (see below)
+spoken_max_chars = 600         # short-mode word-boundary cap (spoken chars after strip)
 ```
 
 The **text send is never affected** — every page still goes out
 unabridged, even in `mode = "voice-only"` (a hook ping always sends text;
-voice is purely additive). Only the *spoken* text is capped at
-`hook_voice_max_chars` — a sensible read-through, not the whole report; a
-truncation is logged to `.metrics.log` (`tts hook_voice_truncated`).
+voice is purely additive).
+
+### Spoken length: short default, full-mode recipe
+
+**Default `spoken_mode = "short"`** — after the plain-text strip, the
+spoken prose is truncated at a word boundary to `spoken_max_chars`
+(default 600) and sent as **one** voice clip. A truncation is logged to
+`.metrics.log` (`tts hook_voice_truncated`). The Telegram **text bubble
+always stays full and unabridged**; only the voice is shortened.
+
+**Opt in to a full read-through** with `spoken_mode = "full"` — the
+entire spoken prose is covered, split at word boundaries into ordered
+clips of `clip_max_chars` (default 1500; `hook_voice_max_chars` is the
+legacy alias when `clip_max_chars` is unset). Set `clip_max_chars = 0`
+for a single unbounded clip. Multi-clip events log
+`tts hook_voice_chunked`.
+
+#### Full-mode user recipe
+
+Copy this into your `relay.toml` when you want the whole message read
+aloud (maintainer-style personal config):
+
+```toml
+[tts]
+mode = "text+voice"
+spoken_mode = "full"
+clip_max_chars = 1500
+collapse_adjacent_refs = true                   # default true
+voice_code_ref = "ref. the message for the code"
+voice_link_ref = "ref. the message for the link"
+```
+
+**Ordering:** voice note(s) are generated once from the complete,
+pre-pagination message and sent **first**, then the (unabridged, formatted)
+text pages — hear the summary (or full read), then see pages for
+reference/detail (code, links, exact figures). The v0.5.1
+serialized-send guarantee (`flock` on `.tg-send.lock` +
+`[general].send_interval_ms`) still holds: one invocation's voice+pages
+always complete, in this order, before the next invocation begins.
+
 Writing your own adapter? Tag any unattended/automated event the same way
 — see `adapters/README.md` step 6.
 
-### The voice reads clean prose, not symbols (v0.5.2)
+### The voice reads clean prose, not symbols (v0.5.2+)
 
 Before any voice note is synthesized, the message is stripped to a
 plain-text transcript (`lib/tts_plain_text.py`) so the engine reads
 **words, never formatting symbols** — no `##` headers, `*`/`_` emphasis,
 `` ` ``/```` ``` ```` code, `<b>`/`<pre>` HTML tags, `&lt;`-style entities
 (unescaped to the real character), `>` quotes, `[k/n]` page headers, or
-`-`/`*`/`N.` list markers. **The sent text message keeps its full
-formatting** — only the voice's input is stripped.
-
-Code and links are **referenced, not read aloud** (reading code
-character-by-character, or spelling out `h-t-t-p-s-colon-slash-slash…`, is
-noise):
+`-`/`*`/`N.` list markers. **Call/tool/request IDs** (UUIDs, `call_*`,
+`toolu_*`, long hex tokens, …), **URLs**, and **code/backticks** are not
+spoken — code and links become short spoken references; IDs are dropped.
+**The sent text message keeps its full formatting and full length** —
+only the voice's input is stripped.
 
 ```toml
 [tts]
 speak_code = false                              # default; a code span/block becomes a spoken reference…
-voice_code_ref = "code, see the text message"   # …this phrase (set speak_code=true to read code verbatim)
-voice_link_ref = "see the text message"         # a [label](url) → "label, <ref>"; a bare URL → "link, <ref>"
+voice_code_ref = "ref. the message for the code"  # …this phrase (set speak_code=true to read code verbatim)
+voice_link_ref = "ref. the message for the link"  # a [label](url) → "label, <ref>"; a bare URL → "link, <ref>"
+collapse_adjacent_refs = true                   # default; consecutive identical refs collapse to one
 ```
 
 So `## Deploy done` · `see *the logs* at [dashboard](https://…)` · a
 ```` ```rust … ``` ```` block reads aloud as *"Deploy done … see the logs
-at dashboard, see the text message … code, see the text message"* — clean
-prose that points you back to the chat bubble for the code and the link.
-The `hook_voice_max_chars` cap counts these *spoken* characters (applied
-after stripping).
+at dashboard, ref. the message for the link … ref. the message for the
+code"* — clean prose that points you back to the chat bubble for the code
+and the link. `spoken_max_chars` / `clip_max_chars` count these *spoken*
+characters (applied after stripping).
 
 ### Guaranteed send ordering (v0.5.1)
 
@@ -611,7 +685,7 @@ define your own.
 | `lib/code_highlight.sh` | Host-highlighted code documents (`[code_highlight]`, v0.5.0) — extends `lib/format.sh`'s fenced-code handling: `mode = "html-doc"` additionally renders each fenced block to a self-contained HTML file via `lib/code_highlight.py`, sent with `sendDocument`, paired with a copyable `<pre>` caption; the always-on inline code box is unaffected either way. Default `mode = "inline-only"` is a no-op. |
 | `lib/code_highlight.py` | `pygments` → self-contained HTML document renderer (`HtmlFormatter(noclasses=True)`, optional dep, skip-graceful like `lib/tts.sh`'s piper/`lib/dashboard_render.py`'s matplotlib — no Pillow needed) — includes a native `MyceliumLexer` (`myc`/`mycelium`, a Declared best-effort lexical approximation) plus pygments' own `get_lexer_by_name` for everything else, with a plain-text fallback for an unrecognized tag. |
 | `lib/tts.sh` | Self-hosted TTS pipeline (text → WAV via piper/espeak-ng → OGG/OPUS via ffmpeg → `sendVoice`), skip-graceful with no engine/ffmpeg installed. Strips the message to clean spoken prose (`_tts_plain_text` → `lib/tts_plain_text.py`, v0.5.2) before synthesis. |
-| `lib/tts_plain_text.py` | Markdown/HTML → clean spoken-prose stripper (v0.5.2): removes formatting symbols + unescapes entities so the voice reads words, and references (never voices) code + URLs (`[tts].voice_code_ref`/`voice_link_ref`/`speak_code`). The sent text is unaffected; only the voice's input is stripped. |
+| `lib/tts_plain_text.py` | Markdown/HTML → clean spoken-prose stripper: removes formatting symbols, **emoji/pictographs**, unescapes entities so the voice reads words, and references (never voices) code + URLs (`[tts].voice_code_ref`/`voice_link_ref`/`speak_code`). The sent text is unaffected; only the voice's input is stripped. |
 | `fetch-voices.sh` | One-command piper voice model downloader (`.onnx` + `.onnx.json`, sha256-verified, skip-graceful); no args fetches the recommended default (`en_US-joe-medium`), `--list` shows the full recommended table. |
 | `tg-poll.sh` | Inbound long-poll; strict id-allowlist; emits `[telegram] <text>` (or `[telegram:cmd:<tag>] <text>` for a recognized command); reassembles a rapid burst into one event after a quiet gap; routes `mode = "relay"` commands to a `handlers/` script instead. |
 | `relay-notify.sh` | **Generic, harness-agnostic entry point** — any agent/script can send a status update through it directly. |
@@ -626,7 +700,10 @@ define your own.
 | `lib/toml_to_json.py` | `relay.toml` → JSON (Python stdlib `tomllib`; the only TOML-parsing code in the repo). |
 | `lib/metrics_agg.py` | Pure/stdlib metrics aggregation over `.metrics.log` (used by the dashboard/stats/uptime handlers, unit-tested independently of matplotlib). |
 | `lib/dashboard_render.py` | Renders the multi-panel dashboard PNG (matplotlib), degrading to the text renderer on any failure. Also renders the opt-in token-usage panels/image. |
-| `lib/usage_ingest.py` | **Opt-in** (`[usage].enabled`), pure/stdlib token-usage aggregation by provider/model/project over a harness's local session-transcript logs — source-adapter abstraction, one adapter ships today (Claude Code). See `docs/USAGE.md`'s "Token usage dashboard" section. |
+| `lib/usage_ingest.py` | **Opt-in** (`[usage].enabled`), pure/stdlib token-usage aggregation by provider/model/project — adapters: `claude-code` (recursive project JSONL), `grok` (context-peak proxy), `multi`/`auto`. Windows: `today`/`all`/`lifetime`/`Nd|h|w|m|y`. |
+| `lib/routing.sh` | Multi-backend route resolve (sticky chat, prefix, default) + outbound tags. |
+| `adapters/grok.sh` / `install-grok-hooks.sh` | Grok Build hook adapter + installer (`~/.grok/hooks/tg-agent-relay.json`). |
+| `docs/ROUTING.md` | Multi-backend / multi-chat / project-isolation guide. |
 | `handlers/` | Relay-handled-command scripts for `mode = "relay"` in `relay.toml` — `dashboard.sh`, `stats.sh`, `uptime.sh`, `help.sh`, `usage.sh` ship today; see [`docs/COMMANDS.md`](docs/COMMANDS.md) and [`handlers/README.md`](handlers/README.md). |
 | `.metrics.log` | **Local-only, gitignored, auto-created** — a TSV event log (`emit_metric`) that the dashboard/stats/uptime commands read. |
 | `.usage/` | **Local-only, gitignored, auto-created, opt-in** — the token-usage aggregate cache `handlers/usage.sh`/`dashboard.sh` write when `[usage].enabled = true`. Never committed; see the privacy note in `docs/USAGE.md`. |
@@ -647,9 +724,10 @@ define your own.
   (`getUpdates`) and *pushing out* (`sendMessage`/`sendPhoto`) — no
   inbound port is ever opened on this machine.
 - **Secret-scanned:** [gitleaks](https://github.com/gitleaks/gitleaks)
-  runs as a pre-commit hook (`.pre-commit-config.yaml`) and a CI check
-  (`.github/workflows/gitleaks.yml`) on every push/PR, including a
-  repo-specific rule for this bot token's exact shape (`.gitleaks.toml`).
+  runs as a pre-commit hook (`.pre-commit-config.yaml`) and optionally via
+  `bash scripts/local-ci.sh --with-gitleaks`. The GitHub workflow
+  (`.github/workflows/gitleaks.yml`) is **manual-only** (`workflow_dispatch`).
+  Repo-specific rule for bot token shape: `.gitleaks.toml`.
 
 See [`SETUP.md`](SETUP.md#security-model) for the full security model.
 

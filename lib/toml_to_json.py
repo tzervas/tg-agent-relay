@@ -13,6 +13,7 @@ a script-with-a-typo'd relay.toml wedging the whole bridge. The caller
 (cfg_get in relay-config.sh) then falls through to ITS OWN default, which
 is how every script stays behavior-identical to before relay.toml existed.
 """
+
 import json
 import sys
 
@@ -37,7 +38,7 @@ def main() -> int:
         with open(path, "rb") as f:
             data = tomllib.load(f)
         print(json.dumps(data))
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as _exc:
         print("{}")
 
     return 0

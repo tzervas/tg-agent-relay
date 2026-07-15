@@ -267,14 +267,64 @@ with ANY agent using ANY harness, maximum portability + usability.
   `${var//pat/repl}` replacement is treated as the matched text, turning
   `&lt;` into `{detail_suffix}lt;`) was fixed — that one also cleaned the
   **sent** text, not just the voice.
+- **Full-message voice — chunked, never silently truncated (v0.5.3,
+  live-defect fix).** Maintainer report: "the voice recording appears to
+  be getting truncated, reading only ONE PART of the message." Root
+  cause confirmed: `[tts].hook_voice_max_chars` (default 1500) was a hard
+  bash-substring cut (`${TEXT:0:MAX}`) applied to the spoken (post-strip)
+  text — any spoken prose past the cap was silently dropped, with only a
+  `.metrics.log` line (`tts hook_voice_truncated`) as a record. A long
+  hook ping's voice note therefore read only its first ~1500 characters,
+  never the rest — exactly the reported symptom. (The voice was already
+  generated once from the COMPLETE pre-pagination message, not per-page —
+  the truncation was the actual defect, not a page-fragment bug.) Fixed
+  in `lib/tts.sh`'s new `_tts_chunk_text`: the spoken text is split at
+  WORD boundaries (never mid-word) into one or more chunks, each up to
+  `hook_voice_max_chars`, and `tg-send.sh` sends every chunk as its own
+  ordered voice note — the full message is always read, split across
+  multiple voice notes if it's long, never truncated into silence. A
+  chunking event is logged (`tts hook_voice_chunked`, never silent) when
+  a ping needs more than one clip. `hook_voice_max_chars = 0` opts all
+  the way out of chunking (one unbounded clip for the whole message
+  instead) — an explicit, honest choice between "many bounded clips" and
+  "one long clip," never a silent drop. **Ordering also changed:** the
+  voice note(s) now send FIRST, before the (unabridged) text pages — "hear
+  the full message, then see it broken into pages for reference" — where
+  v0.5.1/v0.5.2 sent text first and voice last; the v0.5.1 serialized-send
+  guarantee (`flock` + `send_interval_ms`) still holds across the whole
+  voice-then-pages sequence per invocation, and across concurrent
+  invocations. A direct/manual (non-hook) send is unaffected — its
+  eligibility rule was never subject to this cap and stays a single clip.
 
-## Next
+## Next — tracked on GitHub (epics + swarm-ready issues)
 
-- **More adapters.** A generic-webhook adapter (accepts any POSTed JSON on
-  a local pipe/FIFO — still outbound-only, no listening port opened) and
-  a plain-log-tail adapter (watches a file, forwards new lines) would
-  cover most non-Claude-Code harnesses without a bespoke adapter each
-  time.
+**Process:** [docs/WORKFLOW.md](docs/WORKFLOW.md) — orchestrator + **Grok Build** swarms (cheaper than flagship 4.5 for implementation).  
+**Board:** [docs/EPICS.md](docs/EPICS.md) · filter issues by label `swarm-ready`
+
+| Epic | Issue | Notes |
+|---|---|---|
+| Shell → **Python 3.14** | [#18](https://github.com/tzervas/tg-agent-relay/issues/18) | **Python default** (#67); shell via `RELAY_PYTHON_*=0` |
+| Universal provider extensions | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) | **Closed** (+ OpenAI/ADK later) |
+| Product polish | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) | **Closed** |
+| Quality / CI / swarm packaging | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) | **Closed** (local-ci primary) |
+| Optional Rust hotspots | [#22](https://github.com/tzervas/tg-agent-relay/issues/22) | Open · child [#41](https://github.com/tzervas/tg-agent-relay/issues/41) |
+
+### Landed (not re-issued)
+
+- Provider registry + **Grok full 14-event** + OpenAI-compatible / ADK delivery (`docs/PROVIDERS.md`, `docs/ADK_MCP.md`)
+- Multi-backend + project rooms (`docs/ROUTING.md`)
+- Voice `spoken_mode` short/full + collapse refs
+- Hybrid context exclusive vision/text (`docs/context/`)
+- Usage recursive Claude + multi windows + wider charts
+- Python **3.14** package ports (send/poll/format/routing/tts) — **default** live path (#67)
+- MCP extension bus + local-ci / swarm workflow docs
+
+### Later / backlog ideas
+
+- Generic-webhook + log-tail adapters (outbound-only)
+- Command→behavior patterns on the consuming agent side
+- Per-project Claude hook scoping (SETUP caveat)
+
 - **Command → behavior wiring on the consuming side.** The relay tags a
   command (`[telegram:cmd:status]`); actually *acting* on it (e.g. a
   Claude Code session recognizing that tag and running a status check) is

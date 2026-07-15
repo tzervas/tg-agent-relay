@@ -1,6 +1,25 @@
 # The real config holds a live bot token — LOCAL ONLY, never committed/pushed.
 .env
 
+# UV / Python env (lockfile uv.lock IS committed for reproducible dev)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Manual GitHub runner downloads (use tzervas/gha-runner-ctl instead)
+/scripts/actions-runner/
+actions-runner-linux-*.tar.gz
+
 # The real user config — not inherently secret, but local/user-specific
 # (same reasoning as .env; commit relay.toml.example instead). Anchored to
 # the repo root so it does NOT shadow tests/fixtures/relay.toml (a
@@ -12,8 +31,13 @@
 .last-sent
 .tg-buffer
 .tg-buffer-ts
+.tg-buffer.*
 .metrics.log
 .tg-send.lock
+.chats.d/
+# Sticky Python→shell fallback stamps (lib/python_fallback.sh)
+.python-*-fallback
+.python-*-fallback.tmp.*
 *.log
 # ...except a COMMITTED test fixture that happens to share the extension
 # (same reasoning/pattern as /relay.toml above, scoped by directory instead
