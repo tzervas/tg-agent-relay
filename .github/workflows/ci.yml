@@ -28,7 +28,7 @@ permissions:
 jobs:
   python:
     name: uv + ruff + tests (${{ inputs.python_version }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,7 +61,7 @@ jobs:
 
   rust:
     name: rust toolchain (MSRV 1.96)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, podman]
     steps:
       - uses: actions/checkout@v4
 

@@ -29,7 +29,7 @@ jobs:
   close-linked:
     name: Close issues for main merge
     # Prefer local podman runner; falls back if no runner is registered.
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, x64, podman]
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
