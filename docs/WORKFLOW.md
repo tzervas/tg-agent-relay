@@ -256,13 +256,15 @@ uv run ruff format <paths>
 | Default branch | **`main`** (stable / tags) |
 | Integration branch | **`dev`** (feature PRs merge here) |
 | Latest release | **v0.6.1** (see GitHub Releases) |
+| In-progress VERSION | **`0.6.2-dev`** (no release cut yet) |
+| Product on `main` | **Yes** — [PR #68](https://github.com/tzervas/tg-agent-relay/pull/68) landed the v0.6.1-dev stack (Python default, providers, MCP/ADK, Grok epic) |
 | Python ports | Landed (send/poll/format/routing/tts/hooks/…) |
 | Live default | **Python** via `tg-send.sh` / `tg-poll.sh` exec (package import) |
 | Opt-out shell | `RELAY_PYTHON_SEND=0` · `RELAY_PYTHON_POLL=0` |
 | Recovery helpers | `lib/python_fallback.sh` (see SETUP / [DECISIONS.md](DECISIONS.md)) |
 | Claude hooks | Prefer `provider_hook` when Python works (`CLAUDE_USE_PROVIDER_HOOK=0` to force shell) |
 
-Promote `dev` → `main` when cutting a release or when stable work should land on the default branch. Details: [RELEASING.md](RELEASING.md).
+Product promote for the post-v0.6.1 line is **done** (PR #68). Further `dev` → `main` promotes are for docs/process deltas or the next release cut — not for re-shipping product already on `main`. Details: [RELEASING.md](RELEASING.md).
 
 ---
 
@@ -279,26 +281,34 @@ Promote `dev` → `main` when cutting a release or when stable work should land 
 
 ## 8. Open work at handoff (re-check with `gh issue list`)
 
+Open product/code issues after PR #68 (re-check with `gh issue list`):
+
 | # | Title | Lane | Next action |
 |---:|---|---|---|
-| **18** | Epic: Shell → Python | orchestrator | Live soak with env flags; then decide default cutover issue or close epic |
-| **22** | Epic: Rust hotspots | P2 | After #41 |
-| **41** | Rust spike benchmarks | Build swarm M | Optional; spawn when wanted |
+| **22** | Epic: Optional Rust hotspots | P2 | Optional; only if benchmarks wanted |
+| **41** | Rust spike benchmarks | Build swarm M | Deferred / optional |
 
-Providers / product / quality epics (#19–#21) are **closed**. Further provider/ADK/MCP work: open new `swarm-ready` children rather than reopening closed epics unless the epic success criteria truly regress.
+Providers / product / Grok hooks epics (#19–#21, #60 and children #61–#66) are **closed**. Product stack is on **`main`**. Residual human work is **live soak** (deploy + Grok hooks checklist in [GROK_HOOKS.md](GROK_HOOKS.md)), not a second product promote.
+
+Related standalone repos:
+
+| Repo | Role |
+|---|---|
+| [gha-runner-ctl](https://github.com/tzervas/gha-runner-ctl) | One shared self-hosted runner — install **current standalone release** (e.g. **[v0.2.0](https://github.com/tzervas/gha-runner-ctl/releases/tag/v0.2.0)**), not 0.1.x local tarballs |
+| [agent-harness](https://github.com/tzervas/agent-harness) | Universal orchestrator + swarms scaffold |
 
 ---
 
-## 9. Separate universal harness (future repo)
+## 9. Separate universal harness
 
-**Not** this repo’s runtime. Planned as **`tzervas/…` only** (e.g. `agent-harness`):
+**Not** this repo’s runtime. Live scaffold: **[tzervas/agent-harness](https://github.com/tzervas/agent-harness)** (MIT).
 
-- Extends **tg-agent-relay** (Telegram, providers, MCP server, cutover) as a dependency/integration.
-- Composes existing **tzervas** pieces where useful: `agent-mcp`, `mcp-vacuum`, `claude-usage-boilerplate`, `aphelion-agent-security-framework`, `agentic-dev-boilerplate`, mycelium-style CONTRIBUTING.
-- **Average Joe’s Labs (AJL)**: read / evaluate only; if useful, **fork to `tzervas`**, work on the fork, PR back with conventional commits. Never push direct to AJL as write base.
-- Swarm implementers: **Grok Build** lane; flagship only for architecture ADRs.
+- Extends **tg-agent-relay** as a dependency/integration (Telegram, providers, MCP).
+- Composes **tzervas** pieces where useful (`agent-mcp`, etc.).
+- **AJL**: read / evaluate only; fork to `tzervas` if useful.
+- Swarms: **Grok Build** lane; shared runner labels via gha-runner-ctl.
 
-Do not land harness core inside `tg-agent-relay` beyond the join surfaces already documented (`providers/`, `mcp_stub`, `extensions`, `adk_bridge`).
+Do not land harness core inside `tg-agent-relay` beyond existing join surfaces.
 
 ---
 

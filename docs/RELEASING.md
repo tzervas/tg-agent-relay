@@ -265,10 +265,12 @@ bash scripts/local-ci.sh --quick  # ruff + rust only
 
 ---
 
-## After v0.6.1
+## After v0.6.1 / PR #68
 
-- Optional: Rust spike (#41) only if benchmarks are wanted
-- Live soak of Python default + Grok hooks after deploy
-- Next in-progress version: `0.6.2-dev` after the cut
+Product stack (Python default, providers, MCP/ADK, Grok epic) is already on **`main`** via [PR #68](https://github.com/tzervas/tg-agent-relay/pull/68). Tree `VERSION` is **`0.6.2-dev`** until the next cut — do not invent a second product promote for the same line.
 
-Deploy with `bash scripts/deploy-local.sh --ref v0.6.1` (or current tip while on `-dev`).
+- Optional: Rust spike (#41) only if benchmarks are wanted (epic #22)
+- **Human soak:** deploy live bridge + Grok hooks checklist ([GROK_HOOKS.md](GROK_HOOKS.md)); confirm Python send/poll defaults
+- Next release cut: tag from a clean tree after soak (example bump already shown above: `0.6.2-dev` → publish `v0.6.2` when ready)
+
+Deploy with `bash scripts/deploy-local.sh --ref v0.6.1` (or current tip while on `-dev` / soak).
