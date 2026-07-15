@@ -69,6 +69,10 @@ text = sys.stdin.read()
 kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
 found = set()
 for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&]?\s*(?:and\s+)?#?\d+)*))", text):
+    # Ignore negated forms: "No Fixes #22", "not close #N", "without Fixes #N"
+    prefix = text[max(0, m.start() - 24) : m.start()].lower()
+    if re.search(r"\b(?:no|not|without|dont|don\'t)\b[\s*`\"\'\-]*$", prefix):
+        continue
     for n in re.findall(r"\d+", m.group(1)):
         found.add(int(n))
 # Conventional task titles (not "Epic: #N" prose)
