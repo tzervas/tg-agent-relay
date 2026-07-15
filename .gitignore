@@ -20,6 +20,11 @@ build/
 /scripts/actions-runner/
 actions-runner-linux-*.tar.gz
 
+# Local gha-runner-ctl release artifacts (download to /tmp or elsewhere; do not re-vendor)
+/gha-runner-ctl-*.tar.gz
+/gha-runner-ctl-*/
+/SHA256SUMS-*.txt
+
 # The real user config — not inherently secret, but local/user-specific
 # (same reasoning as .env; commit relay.toml.example instead). Anchored to
 # the repo root so it does NOT shadow tests/fixtures/relay.toml (a
