@@ -10,7 +10,7 @@ permissions:
 jobs:
   scan:
     name: Detect hardcoded secrets
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, podman]
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
