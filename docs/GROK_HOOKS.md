@@ -18,18 +18,20 @@
 | Dispatch | Smart `hook-notify` + `hook-notify-grok` | `hook-notify` → claude adapter |
 | Routing | `project_from_cwd` + RELAY_BACKEND=grok | Same pattern |
 
-## Gaps (why epic #60)
+## Delivered (epic #60 — closed via #61–#66)
 
-| Gap | Claude leads | Swarm issue |
+Epic [#60](https://github.com/tzervas/tg-agent-relay/issues/60) and swarm children are **done** on the product line (landed with [PR #68](https://github.com/tzervas/tg-agent-relay/pull/68) / the v0.6.1-dev stack). Offline quality bar is met in-repo; residual work is **operator live soak**, not more swarm code.
+
+| Area | Delivered | Issue |
 |---|---|---|
 | Install UX | Dry-run plan, explicit no-op, fail-closed malformed, merge narrative | #61 |
 | Summary fidelity | Richer templates / field extraction / tests | #62 |
-| Test depth | More config override + e2e paths | #63 |
-| Matchers | Grok native matcher underused | #64 |
-| Operator docs | Claude path better documented | #65 |
-| Live smoke | Checklist + metrics (this doc, below) | #66 |
+| Test depth | Config override + e2e paths offline | #63 |
+| Matchers | Grok native matcher wired where useful | #64 |
+| Operator docs | PROVIDERS / SETUP / this doc | #65 |
+| Live smoke doc | Checklist + metrics (below) | #66 |
 
-## Target quality bar
+## Quality bar (met offline; confirm live)
 
 1. **Install** never leaves broken JSON; second run is silent no-op when unchanged.  
 2. **Phone UX** one-line summaries as clear as Claude (emoji prefix + useful detail, no spam).  
@@ -37,21 +39,15 @@
 4. **Tests** offline, no live Telegram; all 14 fixtures exercised through format + key adapter paths.  
 5. **Docs** new user can wire Grok→Telegram without reading source.
 
-## Non-goals
+## Non-goals (still out of scope)
 
 - PreToolUse **blocking** policy engine (notify-only default)  
 - Editing Claude settings from Grok installer  
 - Forcing all 14 events default-on (noise)
 
-## Swarm order (recommended)
+## Residual live checklist (human)
 
-```
-Wave A (parallel): #61 install · #62 format · #65 docs
-Wave B (after #62 preferred): #63 fixtures/e2e
-Wave C (optional): #64 matchers · #66 smoke
-```
-
-Orchestrator merges; `bash scripts/local-ci.sh` before close.
+Use the operator smoke section below after deploy. Do **not** reopen #60–#66 for soak-only work unless offline AC regresses.
 
 ## Operator live smoke + metrics
 
