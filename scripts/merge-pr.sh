@@ -59,14 +59,22 @@ if [[ ${#MERGE_ARGS[@]} -eq 0 ]]; then
     MERGE_ARGS=(--merge)
 fi
 
+meta="$(gh pr view "$PR" --json baseRefName,headRefName,title --jq '{base:.baseRefName,head:.headRefName,title:.title}')"
+base="$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["base"])')"
+head="$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["head"])')"
+title="$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
+printf 'merge-pr.sh: PR #%s → base=%s head=%s — %s\n' "$PR" "$base" "$head" "$title"
+
+# Never delete persistent integration/default branches (promote PR head is often `dev`)
+DEV_BRANCH="${RELAY_DEV_BRANCH:-dev}"
+if (( DELETE == 1 )) && [[ "$head" == "$MAIN_BRANCH" || "$head" == "$DEV_BRANCH" ]]; then
+    printf 'merge-pr.sh: head=%s is protected — skipping --delete-branch (use feature heads only)\n' "$head"
+    DELETE=0
+fi
+
 if (( DELETE == 1 )); then
     MERGE_ARGS+=(--delete-branch)
 fi
-
-meta="$(gh pr view "$PR" --json baseRefName,title --jq '{base:.baseRefName,title:.title}')"
-base="$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["base"])')"
-title="$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
-printf 'merge-pr.sh: PR #%s → base=%s — %s\n' "$PR" "$base" "$title"
 
 if (( DRY_RUN == 1 )); then
     printf 'merge-pr.sh: --dry-run — would: gh pr merge %s %s\n' "$PR" "${MERGE_ARGS[*]}"
