@@ -63,7 +63,10 @@ fi
 
 # Reads text on stdin → one issue number per line.
 extract_issue_numbers() {
-    python3 -c '
+    # Load program via heredoc into a variable so stdin remains the PR text pipe
+    # (avoids bash quoting hazards in python -c '...' single quotes).
+    local _prog
+    _prog="$(cat <<'PY'
 import re, sys
 text = sys.stdin.read()
 kw = r"(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)"
@@ -71,8 +74,7 @@ found = set()
 for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&]?\s*(?:and\s+)?#?\d+)*))", text):
     # Ignore negated forms: "No Fixes #22", "not close #N", "without Fixes #N"
     prefix = text[max(0, m.start() - 24) : m.start()].lower()
-    # Note: avoid nested shell quotes; "dont" covers don't after lowercasing+strip
-    if re.search(r"\b(?:no|not|without|dont)\b[\s*`\"'\-]*$", prefix):
+    if re.search(r"(?:no|not|without|dont)\W*$", prefix):
         continue
     for n in re.findall(r"\d+", m.group(1)):
         found.add(int(n))
@@ -81,7 +83,9 @@ for m in re.finditer(r"(?i)\b(?:feat|fix|docs|test|chore|refactor|perf|ci|build|
     found.add(int(m.group(1)))
 for n in sorted(found):
     print(n)
-'
+PY
+)"
+    python3 -c "$_prog"
 }
 
 # Returns 0 if issue looks like an epic (label or title); we still close if
