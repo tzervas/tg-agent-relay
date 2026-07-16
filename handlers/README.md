@@ -20,6 +20,8 @@ real handlers ship in this directory:
 - **`help.sh`** — lists every configured command (relay-handled +
   forwarded), read live from `relay.toml` so it never drifts from what's
   actually enabled.
+- **`config.sh`** — allowlisted read/write of `relay.toml` from `/config`
+  (zero model tokens; never touches `.env` secrets). See `lib/remote_config.py`.
 - **`usage.sh`** — an OPT-IN (`[usage].enabled = true`, default off) token
   USAGE dashboard: tokens by provider/model/project, over `lib/usage_ingest.py`'s
   aggregation of a harness's local session-transcript logs (one adapter
