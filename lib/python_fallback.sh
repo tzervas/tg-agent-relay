@@ -281,6 +281,7 @@ relay_py_try_default() {
     fi
 
     # shellcheck disable=SC1091
+    [[ -f "${BRIDGE_DIR}/lib/exec-env.sh" ]] && source "${BRIDGE_DIR}/lib/exec-env.sh"
     [[ -f "${BRIDGE_DIR}/lib/python.sh" ]] && source "${BRIDGE_DIR}/lib/python.sh"
     if ! relay_py_resolve_safe; then
         RELAY_PY_FALLBACK_KIND="failed"

@@ -17,7 +17,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +94,7 @@ def load_session_backends(
     for path in sorted(sdir.glob("*.json")):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as _exc:
             continue
         if not isinstance(raw, dict):
             continue
@@ -130,10 +130,7 @@ def apply_sessions(
     """Shallow copy of cfg with effective backends (for poll / resolve)."""
     out = dict(cfg)
     sessions = out.get("sessions")
-    if not isinstance(sessions, dict):
-        sessions = {}
-    else:
-        sessions = dict(sessions)
+    sessions = {} if not isinstance(sessions, dict) else dict(sessions)
     if "dir" not in sessions and bridge_dir:
         sessions["dir"] = str(default_sessions_dir(bridge_dir))
     out["sessions"] = sessions
@@ -157,7 +154,7 @@ def list_sessions(
     for path in sorted(sdir.glob("*.json")):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as _exc:
             continue
         if isinstance(raw, dict):
             rows.append(raw)
@@ -204,7 +201,7 @@ def write_session_record(
         "prefixes": prefs,
         "project": project,
         "pid": int(pid if pid is not None else os.getpid()),
-        "registered_at": datetime.now(timezone.utc).isoformat(),
+        "registered_at": datetime.now(UTC).isoformat(),
     }
     out = sessions_dir / f"{handle}.json"
     out.write_text(json.dumps(rec, indent=2) + "\n", encoding="utf-8")

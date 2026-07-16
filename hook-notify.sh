@@ -15,6 +15,8 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
 PAYLOAD="$(cat 2>/dev/null || true)"
 [[ -z "$PAYLOAD" ]] && exit 0
 
