@@ -120,7 +120,8 @@ install_deploy_python_env() {
         return 0
     fi
     if command -v uv >/dev/null 2>&1; then
-        if (cd "$dest" && uv venv .venv 2>/dev/null); then
+        (cd "$dest" && uv venv .venv 2>/dev/null) || true
+        if [[ -x "$dest/.venv/bin/python" ]]; then
             if (cd "$dest" && uv pip install -e ".[dashboard]" 2>/dev/null); then
                 printf 'deploy-local.sh: installed editable package + dashboard extras in %s/.venv\n' "$dest"
                 return 0
