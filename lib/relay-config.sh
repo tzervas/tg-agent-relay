@@ -54,6 +54,17 @@ load_relay_config() {
         ' 2>/dev/null)" || true
         [[ -z "$RELAY_CONFIG_JSON" ]] && RELAY_CONFIG_JSON="{}"
     fi
+
+    # Merge dynamic session backends (.sessions.d/<handle>.json) over static
+    # [backends.*]; same handle id → session file wins. See docs/SESSIONS.md.
+    if [[ -f "$lib_dir/sessions.py" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+        local merged
+        merged="$(printf '%s' "${RELAY_CONFIG_JSON:-{}}" | RELAY_BRIDGE_DIR="$bridge_dir" \
+            relay_python "$lib_dir/sessions.py" merge-stdin --bridge-dir "$bridge_dir" 2>/dev/null)" || merged=""
+        if [[ -n "$merged" ]]; then
+            RELAY_CONFIG_JSON="$merged"
+        fi
+    fi
     return 0
 }
 

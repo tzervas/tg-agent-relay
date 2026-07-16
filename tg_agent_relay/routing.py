@@ -28,6 +28,11 @@ if str(_LIB) not in sys.path:
 
 import routing as _routing  # type: ignore  # noqa: E402
 
+try:
+    import sessions as _sessions  # type: ignore  # noqa: E402
+except ImportError:
+    _sessions = None  # type: ignore[assignment]
+
 # Re-export pure helpers for direct use / tests
 chat_binding = _routing.chat_binding
 strip_prefix = _routing.strip_prefix
@@ -36,6 +41,15 @@ lookup_project = _routing.lookup_project
 project_worktree = _routing.project_worktree
 format_tag = _routing.format_tag
 inbound_tag = _routing.inbound_tag
+
+if _sessions is not None:
+    apply_sessions = _sessions.apply_sessions
+    load_session_backends = _sessions.load_session_backends
+    merged_backends = _sessions.merged_backends
+else:  # pragma: no cover
+    apply_sessions = None  # type: ignore[assignment]
+    load_session_backends = None  # type: ignore[assignment]
+    merged_backends = None  # type: ignore[assignment]
 
 
 def resolve(cfg: dict[str, Any], chat_id: str, thread_id: str, text: str) -> RouteResult:

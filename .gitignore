@@ -40,6 +40,8 @@ actions-runner-linux-*.tar.gz
 .metrics.log
 .tg-send.lock
 .chats.d/
+.sessions.d/
+/sessions/
 # Sticky Python→shell fallback stamps (lib/python_fallback.sh)
 .python-*-fallback
 .python-*-fallback.tmp.*
