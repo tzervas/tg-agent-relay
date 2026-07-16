@@ -102,6 +102,31 @@ After `git pull`, restart `tg-poll` (or rely on its periodic config reload)
 so new registrations are picked up. Deploy with `bash scripts/deploy-local.sh`
 — preserves `.sessions.d/` and `sessions/` like `.chats.d/`.
 
+## Inbound stack (required)
+
+Multi-session routing only works when **both** sides of the pipe are running:
+
+| Process | Role |
+|---|---|
+| **`tg-poll.sh`** | Reads Telegram; writes tagged lines to each backend FIFO |
+| **`adapters/backend-fifo-reader.sh`** | One long-lived reader **per FIFO** (Monitor event source) |
+
+If `tg-poll` writes while no reader holds the FIFO open, the kernel returns
+**ENXIO** and the message is **dropped**. After deploy or reboot, start the
+stack explicitly:
+
+```bash
+bash scripts/ensure-inbound.sh
+# or from the bridge dir: bash scripts/ensure-inbound.sh --bridge-dir ~/.claude/telegram-bridge
+```
+
+`ensure-inbound.sh` uses pid files under `.run/` and `flock` so duplicate
+pollers/readers are not started. Logs: `.run/logs/`.
+
+Deploy also installs the Python package (`uv pip install -e .` into
+`DEST/.venv` when possible) or sets `PYTHONPATH` via `lib/exec-env.sh` and
+`env.sh` so `tg-poll` / `tg-send` import `tg_agent_relay` without a dev checkout.
+
 ## Mobile checklist
 
 1. [ ] `require_prefix = true` if the chat is shared/noisy

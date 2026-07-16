@@ -14,6 +14,10 @@
 #      relay_python lib/provider_hook.py grok
 set -u
 
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+[[ -f "$_LIB_DIR/exec-env.sh" ]] && source "$_LIB_DIR/exec-env.sh"
+
 # relay_python_resolve → sets RELAY_PYTHON to an absolute or PATH command.
 # Preference: RELAY_PYTHON override → project .venv (uv) → python3.14 → 3.13 → python3
 #

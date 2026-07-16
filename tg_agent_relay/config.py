@@ -58,7 +58,7 @@ def _apply_sessions_overlay(cfg: dict[str, Any], bridge_dir: Path) -> dict[str, 
     if str(lib) not in sys.path:
         sys.path.insert(0, str(lib))
     try:
-        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+        import sessions as _sessions  # type: ignore
 
         out = _sessions.apply_sessions(cfg, bridge_dir=bridge_dir)
         out["_sessions_merged"] = True

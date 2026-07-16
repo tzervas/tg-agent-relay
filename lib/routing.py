@@ -26,7 +26,7 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
         b = cfg.get("backends") or {}
         return b if isinstance(b, dict) else {}
     try:
-        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+        import sessions as _sessions  # type: ignore
 
         bridge = cfg.get("_bridge_dir")
         return _sessions.merged_backends(cfg, bridge_dir=bridge)
@@ -69,7 +69,7 @@ def has_routing_config(cfg: dict[str, Any]) -> bool:
     if _backends(cfg):
         return True
     try:
-        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+        import sessions as _sessions  # type: ignore
 
         bridge = cfg.get("_bridge_dir")
         if _sessions.load_session_backends(cfg, bridge_dir=bridge):

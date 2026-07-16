@@ -55,8 +55,15 @@ def main() -> int:
 
     true("__version__ exists and is non-empty", bool(getattr(tg_agent_relay, "__version__", None)))
     true("__version__ is a string", isinstance(tg_agent_relay.__version__, str))
-    missing = REPO / "relay.toml.does.not.exist.for.tests"
-    eq("load_config missing file returns {}", {}, config.load_config(missing))
+    with tempfile.TemporaryDirectory() as td:
+        bridge = Path(td)
+        missing = bridge / "relay.toml.does.not.exist.for.tests"
+        cfg_missing = config.load_config(missing, bridge_dir=bridge)
+        eq("load_config missing file backends empty", {}, cfg_missing.get("backends"))
+        true(
+            "load_config missing file applies session registry shell",
+            cfg_missing.get("_sessions_merged") is True,
+        )
     cfg_sample = {
         "routing": {"default_backend": "claude"},
         "backends": {"claude": {"tag": "claude", "prefixes": ["@claude"]}},
