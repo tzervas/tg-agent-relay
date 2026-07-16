@@ -121,8 +121,12 @@ install_deploy_python_env() {
     fi
     if command -v uv >/dev/null 2>&1; then
         if (cd "$dest" && uv venv .venv 2>/dev/null); then
+            if (cd "$dest" && uv pip install -e ".[dashboard]" 2>/dev/null); then
+                printf 'deploy-local.sh: installed editable package + dashboard extras in %s/.venv\n' "$dest"
+                return 0
+            fi
             if (cd "$dest" && uv pip install -e . 2>/dev/null); then
-                printf 'deploy-local.sh: installed editable package in %s/.venv\n' "$dest"
+                printf 'deploy-local.sh: installed editable package in %s/.venv (dashboard extra failed)\n' "$dest"
                 return 0
             fi
             printf 'deploy-local.sh: uv pip install -e failed — using PYTHONPATH=%s\n' "$dest" >&2
@@ -151,6 +155,11 @@ fi
 printf 'deploy-local.sh: %s → %s\n' "${REF:-working-tree}" "$DEST"
 printf '  preserved: .env relay.toml .offset .metrics.log .usage/ .chats.d/ .sessions.d/ sessions/ voices/\n'
 if (( DRY_RUN == 0 )); then
+    if [[ -x "$DEST/scripts/ensure-inbound.sh" ]]; then
+        bash "$DEST/scripts/ensure-inbound.sh" --bridge-dir "$DEST" --restart-poll 2>/dev/null \
+            || bash "$DEST/scripts/ensure-inbound.sh" --bridge-dir "$DEST" 2>/dev/null \
+            || true
+    fi
     printf '  next: source %s/env.sh or rely on lib/exec-env.sh; bash scripts/ensure-inbound.sh\n' "$DEST"
     printf '  next: re-run install-hooks / install-grok-hooks if needed\n'
     if [[ -f "$DEST/VERSION" ]]; then

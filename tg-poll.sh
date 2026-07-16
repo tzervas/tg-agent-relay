@@ -383,13 +383,25 @@ flush_buffer() {
         fi
     done
 
-    local name backend project stripped match_kind
+    local name cmd_text backend project stripped match_kind prefix_hit
     name="$(classify_command "$out")"
+    cmd_text="$out"
+    if [[ -z "$name" ]] && declare -f route_has_routing_config >/dev/null 2>&1 && route_has_routing_config; then
+        prefix_hit="$(_route_strip_prefix "$out")"
+        if [[ -n "$prefix_hit" ]]; then
+            stripped="${prefix_hit#*|}"
+            stripped="${stripped#*|}"
+            name="$(classify_command "$stripped")"
+            if [[ -n "$name" ]]; then
+                cmd_text="$stripped"
+            fi
+        fi
+    fi
     if [[ -n "$name" ]]; then
         # Relay-handled commands reply to the originating chat.
         export RELAY_CHAT_ID="$chat_id"
         export RELAY_THREAD_ID="$thread_id"
-        dispatch_command "$name" "$out"
+        dispatch_command "$name" "$cmd_text"
     else
         if declare -f route_resolve >/dev/null 2>&1; then
             IFS='|' read -r backend project stripped match_kind < <(route_resolve "$chat_id" "$thread_id" "$out")

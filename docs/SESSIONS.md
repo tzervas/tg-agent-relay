@@ -28,6 +28,11 @@ From Telegram (with `[commands.config]` enabled — see [`COMMANDS.md`](COMMANDS
 you can flip `routing.require_prefix` or usage window/chart prefs without SSH:
 `/config`, `/config get routing.require_prefix`, `/config set routing.require_prefix true`.
 
+With `routing.require_prefix = true` and per-session `@handle` prefixes, use either
+`@cabal /config` or plain `/config` (when `require_prefix` is false). Prefixed
+forms strip the handle before command dispatch, so handlers always see `/config`,
+not `@cabal /config`.
+
 ## Quick start (two Grok sessions)
 
 ### 1. Relay config

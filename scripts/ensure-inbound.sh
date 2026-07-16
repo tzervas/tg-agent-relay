@@ -10,13 +10,15 @@ set -euo pipefail
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=0
+RESTART_POLL=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --bridge-dir) BRIDGE_DIR="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --restart-poll) RESTART_POLL=1; shift ;;
         -h|--help)
-            sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) printf 'ensure-inbound.sh: unknown arg: %s\n' "$1" >&2; exit 2 ;;
@@ -85,6 +87,19 @@ start_fifo_reader() {
 POLL_LOCK="$RUN_DIR/tg-poll.lock"
 POLL_PID="$RUN_DIR/tg-poll.pid"
 POLL_LOG="$LOG_DIR/tg-poll.log"
+if (( RESTART_POLL == 1 )) && pid_alive "$(cat "$POLL_PID" 2>/dev/null || true)"; then
+    old_pid="$(cat "$POLL_PID" 2>/dev/null || true)"
+    kill "$old_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        pid_alive "$old_pid" || break
+        sleep 0.2
+    done
+    if pid_alive "$old_pid"; then
+        kill -9 "$old_pid" 2>/dev/null || true
+    fi
+    rm -f "$POLL_PID"
+    printf 'ensure-inbound: restarted tg-poll (was pid %s)\n' "$old_pid"
+fi
 if pid_alive "$(cat "$POLL_PID" 2>/dev/null || true)"; then
     printf 'ensure-inbound: tg-poll already running (pid %s)\n' "$(cat "$POLL_PID")"
 else
