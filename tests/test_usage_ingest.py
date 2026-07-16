@@ -387,6 +387,13 @@ def main() -> int:
         "b",
         dr._top_key({"a": {"total_tokens": 5}, "b": {"total_tokens": 50}}),
     )
+    assert_eq("_normalize_chart_mode: charts -> both", "both", dr._normalize_chart_mode("charts"))
+    assert_eq("_normalize_chart_mode: line", "line", dr._normalize_chart_mode("line"))
+    assert_eq(
+        "_normalize_chart_mode: bogus -> default",
+        "both",
+        dr._normalize_chart_mode("nope"),
+    )
     print(
         "== lib/dashboard_render.py: usage image path when matplotlib IS available, else graceful TEXT =="
     )
@@ -398,12 +405,47 @@ def main() -> int:
         with open(usage_cache, "w", encoding="utf-8") as f:
             json.dump(agg, f)
         out_png = str(Path(tmpdir) / "usage.png")
-        rc = dr.main(["dashboard_render.py", "--usage-only", usage_cache, out_png])
+        rc = dr.main(
+            [
+                "dashboard_render.py",
+                "--usage-only",
+                usage_cache,
+                out_png,
+                "--chart",
+                "bar",
+            ]
+        )
         assert_eq(
             "dashboard_render.py --usage-only never exits non-zero for a data/render condition",
             0,
             rc,
         )
+        if HAS_MPL:
+            import io
+            from contextlib import redirect_stdout
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                dr.main(
+                    [
+                        "dashboard_render.py",
+                        "--usage-only",
+                        usage_cache,
+                        out_png,
+                        "--chart",
+                        "line",
+                    ]
+                )
+            out_lines = buf.getvalue().splitlines()
+            if out_lines and out_lines[0].startswith("IMAGE:") and Path(out_png).stat().st_size > 0:
+                ok(
+                    "dashboard_render --usage-only prints IMAGE: and writes non-empty PNG (mock cache)"
+                )
+            else:
+                fail(
+                    "dashboard_render --usage-only prints IMAGE: and writes non-empty PNG",
+                    out_lines[:2] if out_lines else "(no output)",
+                )
     if HAS_MPL:
         print("      (matplotlib present in this interpreter - exercising the usage IMAGE paths)")
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -2498,6 +2498,19 @@ else
     printf 'SKIP  python3 not installed - skipping usage-ingest unit tests (never-silent: this line IS the record)\n'
 fi
 
+echo "== lib/remote_config.py: allowlisted Telegram /config (offline, temp relay.toml) =="
+if command -v python3 >/dev/null 2>&1; then
+    PY_OUT="$(cd "$REPO_ROOT/lib" && relay_python "$REPO_ROOT/tests/test_remote_config.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_remote_config.py"
+    else
+        fail "relay_python tests/test_remote_config.py" "$PY_OUT"
+    fi
+else
+    printf 'SKIP  python3 not installed - skipping remote-config unit tests (never-silent: this line IS the record)\n'
+fi
+
 echo "== usage registry (ADAPTERS from providers/*, issue #31) =="
 if command -v python3 >/dev/null 2>&1; then
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_usage_registry.py" 2>&1)"

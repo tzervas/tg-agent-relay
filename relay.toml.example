@@ -699,6 +699,11 @@
 #   `projects` toggle since "which project is spending tokens" is this
 #   feature's whole point).
 
+# charts.default = "both"
+#   Default `/usage` PNG layout when the command has no trailing chart
+#   keyword: bar | line | both | allot | share. Override per message with
+#   `/usage bar`, `/usage line`, etc., or via `/config charts <mode>`.
+
 # [usage.allotments]
 # Optional token caps for quota lines on `/usage` (used vs cap + % bar).
 # Omit a period or set cap to 0 for unlimited (no bar for that slot).

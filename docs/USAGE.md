@@ -572,6 +572,12 @@ default (they're opt-in, high-volume). See `relay.toml.example`'s
 commands (uncomment their blocks in `relay.toml` — see
 [`COMMANDS.md`](COMMANDS.md)) and send `/uptime` or `/stats`.
 
+**"I want to tweak relay settings from my phone (no shell)."** Enable
+`[commands.config]` in `relay.toml` (see [`COMMANDS.md`](COMMANDS.md))
+and use `/config` for a safe summary, `/config set usage.enabled true`,
+`/config usage window 30d`, or `/config charts both`. Only allowlisted
+keys are writable; secrets stay in `.env`.
+
 **"I want to see where my token spend is going."** Enable `[usage]` and
 `/usage` (see "Token usage dashboard" above) and send `/usage 7d`.
 

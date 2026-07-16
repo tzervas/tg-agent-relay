@@ -69,6 +69,17 @@ WINDOW="$(cfg_get '.usage.window' "7d")"
 SHOW_PROVIDERS="$(cfg_get '.usage.providers' "true")"
 SHOW_MODELS="$(cfg_get '.usage.models' "true")"
 
+# Chart mode: /usage charts | bar | line | both | allot | share
+# (relay.toml usage.charts.default, then RELAY_USAGE_CHART, then both).
+CHART_MODE="$(cfg_get '.usage.charts.default' "both")"
+CHART_MODE="${RELAY_USAGE_CHART:-$CHART_MODE}"
+if [[ "$TEXT" =~ (^|[[:space:]])(charts|chart|bar|line|both|allot|share)([[:space:]]|$) ]]; then
+    CHART_MODE="${BASH_REMATCH[2]}"
+    TEXT="${TEXT//${BASH_REMATCH[2]}/}"
+    TEXT="$(printf '%s' "$TEXT" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')"
+fi
+[[ "$CHART_MODE" == "charts" || "$CHART_MODE" == "chart" ]] && CHART_MODE="both"
+
 # Optional trailing window override - today/all/lifetime/<N>h|d|w|m|y
 # (matches lib/usage_ingest.py's resolve_window() grammar).
 if [[ "$TEXT" =~ (today|all|lifetime|[0-9]+[hdwmy])[[:space:]]*$ ]]; then
@@ -108,7 +119,8 @@ OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-usage-XXXXXX.png")"
 
 RENDER_OUT=""
 if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
-    RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
+    RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" \
+        --chart "$CHART_MODE" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
 fi
 
 # Rich text breakdown (providers, harness sources, optional quotas) — always
@@ -137,6 +149,12 @@ fi
 
 MODE_LINE="${RENDER_OUT%%$'\n'*}"
 REST="${RENDER_OUT#*$'\n'}"
+PHOTO_CAPTION="Token Usage — ${WINDOW}"
+if [[ "$REST" == CAPTION:* ]]; then
+    PHOTO_CAPTION="${REST%%$'\n'*}"
+    PHOTO_CAPTION="${PHOTO_CAPTION#CAPTION:}"
+    REST="${REST#*$'\n'}"
+fi
 
 send_text() {
     local msg="$1"
@@ -161,7 +179,7 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
     SEND_CHAT="${RELAY_CHAT_ID:-${ALLOWED_CHAT_ID:-}}"
 
     if [[ -n "${BOT_TOKEN:-}" && -n "${SEND_CHAT:-}" ]]; then
-        CAPTION="Token Usage — ${WINDOW}"
+        CAPTION="$PHOTO_CAPTION"
         curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
             -F "chat_id=${SEND_CHAT}" \
             -F "photo=@${OUT_PNG}" \
