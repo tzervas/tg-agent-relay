@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.0-dev] — unreleased
+## [0.7.0] — 2026-07-16
 
 ### Added
 
