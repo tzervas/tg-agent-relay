@@ -36,7 +36,13 @@ from typing import Any, TextIO
 
 from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.metrics import emit_metric
-from tg_agent_relay.routing import has_routing_config, inbound_tag, project_worktree, resolve
+from tg_agent_relay.routing import (
+    has_routing_config,
+    inbound_tag,
+    project_worktree,
+    resolve,
+    strip_prefix,
+)
 from tg_agent_relay.send import load_env
 
 # Record separator — never appears in normal Telegram text.
@@ -143,6 +149,24 @@ def classify_command(cfg: dict[str, Any], text: str) -> str:
         ):
             return str(name)
     return ""
+
+
+def resolve_command_match(cfg: dict[str, Any], text: str) -> tuple[str, str]:
+    """Classify command on text; if no match, retry after @handle strip.
+
+    Returns (command_name, text_for_handler). Empty name means not a command.
+    """
+    name = classify_command(cfg, text)
+    if name:
+        return name, text
+    if has_routing_config(cfg):
+        hit = strip_prefix(cfg, text)
+        if hit:
+            stripped = hit[2]
+            name2 = classify_command(cfg, stripped)
+            if name2:
+                return name2, stripped
+    return "", ""
 
 
 def command_field(cfg: dict[str, Any], name: str, field: str, default: str = "") -> str:
@@ -514,14 +538,15 @@ def flush_buffer(
         return []
 
     lines: list[str] = []
-    name = classify_command(cfg, out)
+    work_cfg = cfg if cfg.get("_bridge_dir") else {**cfg, "_bridge_dir": str(root)}
+    name, cmd_text = resolve_command_match(work_cfg, out)
     if name:
         os.environ["RELAY_CHAT_ID"] = chat_id
         os.environ["RELAY_THREAD_ID"] = thread_id
         lines = dispatch_command(
             cfg,
             name,
-            out,
+            cmd_text,
             bridge_dir=root,
             chat_id=chat_id,
             thread_id=thread_id,

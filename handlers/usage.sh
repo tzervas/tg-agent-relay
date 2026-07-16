@@ -30,6 +30,8 @@ set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
+# shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
 declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 CONFIG_FILE="$BRIDGE_DIR/.env"
@@ -117,10 +119,14 @@ DISPLAY_FLAGS=()
 # review LOW).
 OUT_PNG="$(mktemp "${TMPDIR:-/tmp}/relay-usage-XXXXXX.png")"
 
+RENDER_ERR=""
 RENDER_OUT=""
 if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/dashboard_render.py" ]]; then
+    RENDER_ERRFILE="$(mktemp "${TMPDIR:-/tmp}/relay-usage-render-err-XXXXXX")"
     RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" \
-        --chart "$CHART_MODE" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
+        --chart "$CHART_MODE" "${DISPLAY_FLAGS[@]}" 2>"$RENDER_ERRFILE")" || true
+    RENDER_ERR="$(head -n 1 "$RENDER_ERRFILE" 2>/dev/null || true)"
+    rm -f "$RENDER_ERRFILE"
 fi
 
 # Rich text breakdown (providers, harness sources, optional quotas) — always
@@ -137,13 +143,25 @@ fi
 
 # Never fail to send SOMETHING, even with no python3 at all (same
 # never-fail contract as handlers/dashboard.sh).
+HAS_MPL=0
+if relay_python -c "import matplotlib" >/dev/null 2>&1; then
+    HAS_MPL=1
+fi
+
 if [[ -z "$RENDER_OUT" ]]; then
     if [[ -n "$USAGE_TEXT" ]]; then
         RENDER_OUT="TEXT
 ${USAGE_TEXT}"
-    else
+    elif [[ "$HAS_MPL" -eq 0 ]]; then
         RENDER_OUT="TEXT
-📈 Token usage (minimal — python3/matplotlib unavailable)"
+📈 Token usage (text only) — charts need matplotlib; redeploy with dashboard extra: uv pip install -e \".[dashboard]\""
+    else
+        chart_hint=""
+        if [[ -n "$RENDER_ERR" ]]; then
+            chart_hint=" (${RENDER_ERR})"
+        fi
+        RENDER_OUT="TEXT
+📈 Token usage (text only) — chart render failed${chart_hint}"
     fi
 fi
 

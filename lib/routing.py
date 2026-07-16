@@ -25,14 +25,17 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
     if cfg.get("_sessions_merged"):
         b = cfg.get("backends") or {}
         return b if isinstance(b, dict) else {}
+    static = cfg.get("backends") or {}
+    static = static if isinstance(static, dict) else {}
+    bridge = cfg.get("_bridge_dir")
+    if not bridge:
+        return static
     try:
         import sessions as _sessions  # type: ignore
 
-        bridge = cfg.get("_bridge_dir")
         return _sessions.merged_backends(cfg, bridge_dir=bridge)
     except Exception:
-        b = cfg.get("backends") or {}
-        return b if isinstance(b, dict) else {}
+        return static
 
 
 def _chats(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -68,10 +71,12 @@ def has_routing_config(cfg: dict[str, Any]) -> bool:
         return True
     if _backends(cfg):
         return True
+    bridge = cfg.get("_bridge_dir")
+    if not bridge:
+        return False
     try:
         import sessions as _sessions  # type: ignore
 
-        bridge = cfg.get("_bridge_dir")
         if _sessions.load_session_backends(cfg, bridge_dir=bridge):
             return True
     except Exception:

@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.1] — 2026-07-16
+
+### Fixed
+
+- **Prefixed commands** — `@handle /config` and `@handle /usage` strip the
+  session prefix before command classify/dispatch (Python `poll.py` and shell
+  `tg-poll.sh` parity).
+- **Handlers** — `handlers/config.sh` and `handlers/usage.sh` source
+  `lib/exec-env.sh` + `lib/python.sh`; config surfaces real Python stderr on
+  failure; usage explains missing matplotlib / dashboard extra.
+- **Deploy** — `deploy-local.sh` installs `.[dashboard]` extras and restarts
+  inbound poll via `ensure-inbound.sh --restart-poll`.
+
+## [0.8.0] — 2026-07-16
+
+### Added
+
+- **Usage dashboard** — allotments per provider/period, multi-source text
+  breakdown, quota bars, and chart modes (`bar` / `line` / `both` /
+  `allot` / `share`) with padded PNG screenshots when matplotlib is
+  available.
+- **Remote config** — Telegram `/config` get/set for an allowlisted subset
+  of `relay.toml` (charts default, usage window, allotments); see
+  `handlers/config.sh` and `lib/remote_config.py`.
+- **Docs** — expanded `docs/USAGE.md`, `docs/COMMANDS.md`, and
+  `relay.toml.example` for usage + `/config`.
+
+### Changed
+
+- `lib/usage_ingest.py` and `lib/dashboard_render.py` extended for
+  allotment-aware aggregation and chart rendering.
+- `handlers/usage.sh` supports new chart and breakdown modes.
+
 ## [0.7.0] — 2026-07-16
 
 ### Added
