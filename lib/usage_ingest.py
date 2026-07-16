@@ -189,9 +189,7 @@ def resolve_window(spec: str, now: int | None = None) -> tuple[int, int, str]:
 
 
 def row_total_tokens(r: UsageRow) -> int:
-    return (
-        r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens
-    )
+    return r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens
 
 
 ALLOTMENT_PERIODS = frozenset({"daily", "weekly", "monthly"})
@@ -207,26 +205,18 @@ def period_window_bounds(period: str, now: int | None = None) -> tuple[int, int]
     period_norm = (period or "").strip().lower()
     local = time.localtime(now)
     if period_norm == "daily":
-        start = int(
-            time.mktime(
-                (local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)
-            )
-        )
+        start = int(time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)))
         return start, now
     if period_norm == "weekly":
         # Monday-based week (tm_wday: 0=Mon … 6=Sun)
         days_since_mon = local.tm_wday
         midnight_today = int(
-            time.mktime(
-                (local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)
-            )
+            time.mktime((local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1))
         )
         start = midnight_today - days_since_mon * 86400
         return start, now
     if period_norm == "monthly":
-        start = int(
-            time.mktime((local.tm_year, local.tm_mon, 1, 0, 0, 0, 0, 0, -1))
-        )
+        start = int(time.mktime((local.tm_year, local.tm_mon, 1, 0, 0, 0, 0, 0, -1)))
         return start, now
     return 0, now
 
@@ -251,7 +241,8 @@ def parse_allotments(raw: object) -> dict[str, dict[str, int | None]]:
             return
         try:
             cap = int(cap_raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as _exc:
+            del _exc
             return
         if cap <= 0:
             out.setdefault(subject, {})[period] = None  # unlimited — no bar
@@ -324,7 +315,7 @@ def quota_progress_bar(percent: float | None, width: int = 10) -> str:
     """Text bar for Telegram; empty when percent is None."""
     if percent is None:
         return ""
-    filled = int(round(width * min(100.0, max(0.0, percent)) / 100.0))
+    filled = round(width * min(100.0, max(0.0, percent)) / 100.0)
     filled = min(width, max(0, filled))
     return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
 
@@ -746,7 +737,8 @@ def collect(
 def _compact_tokens(n: object) -> str:
     try:
         v = int(n)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:
+        del _exc
         return "0"
     if v >= 1_000_000:
         return f"{v / 1_000_000:.1f}M"
@@ -805,9 +797,7 @@ def render_telegram_usage_text(
         by_mod = usage_agg.get("by_model") or {}
         if by_mod:
             lines.append("By model (top):")
-            top = sorted(
-                by_mod.items(), key=lambda kv: -kv[1].get("total_tokens", 0)
-            )[:8]
+            top = sorted(by_mod.items(), key=lambda kv: -kv[1].get("total_tokens", 0))[:8]
             for m, d in top:
                 lines.append(f"  {display_model(m)}: {_compact_tokens(d.get('total_tokens', 0))}")
             lines.append("")
@@ -848,7 +838,8 @@ def _load_allotments_arg(path: str) -> dict[str, dict[str, int | None]]:
     try:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError) as _exc:
+        del _exc
         return {}
     return parse_allotments(raw)
 
@@ -864,9 +855,12 @@ def _main(argv: list[str]) -> int:
         try:
             with open(cache_path, encoding="utf-8") as f:
                 agg = json.load(f)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError) as _exc:
+            del _exc
             agg = {}
-        print(render_telegram_usage_text(agg, show_providers=show_providers, show_models=show_models))
+        print(
+            render_telegram_usage_text(agg, show_providers=show_providers, show_models=show_models)
+        )
         return 0
 
     args = [a for a in argv[1:] if a not in ("--no-providers", "--no-models")]

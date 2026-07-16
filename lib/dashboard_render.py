@@ -537,16 +537,16 @@ def _usage_provider_stacked_bar(ax, by_provider: dict, limit: int = 6) -> None:
     """Stacked horizontal bars: input + output (+ cache) per provider."""
     import matplotlib.ticker as mticker
 
-    ax.set_title("Tokens by provider (stacked)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10)
+    ax.set_title(
+        "Tokens by provider (stacked)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10
+    )
     if not by_provider:
         ax.text(
             0.5, 0.5, "(none)", ha="center", va="center", color=INK_MUTED, transform=ax.transAxes
         )
         ax.axis("off")
         return
-    items = sorted(
-        by_provider.items(), key=lambda kv: kv[1].get("total_tokens", 0)
-    )[-limit:]
+    items = sorted(by_provider.items(), key=lambda kv: kv[1].get("total_tokens", 0))[-limit:]
     names = [n for n, _ in items]
     y = list(range(len(names)))
     lefts = [0.0] * len(names)
@@ -561,7 +561,7 @@ def _usage_provider_stacked_bar(ax, by_provider: dict, limit: int = 6) -> None:
         if not any(widths):
             continue
         ax.barh(y, widths, left=lefts, color=color, height=0.62, label=_label)
-        lefts = [l + w for l, w in zip(lefts, widths, strict=True)]
+        lefts = [left + w for left, w in zip(lefts, widths, strict=True)]
     ax.set_yticks(y)
     ax.set_yticklabels(names, fontsize=9.5, color=INK_SECONDARY)
     ax.legend(loc="lower right", frameon=False, fontsize=7.5, labelcolor=INK_MUTED)
@@ -580,7 +580,9 @@ def _usage_share_area(ax, usage_agg: dict, limit_models: int = 5) -> None:
     import matplotlib.dates as mdates
     import matplotlib.ticker as mticker
 
-    ax.set_title("Model share over time (stacked area)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10)
+    ax.set_title(
+        "Model share over time (stacked area)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10
+    )
     raw = usage_agg.get("timeline_by_model") or []
     if len(raw) < 2:
         ax.text(
@@ -601,8 +603,7 @@ def _usage_share_area(ax, usage_agg: dict, limit_models: int = 5) -> None:
         for m, v in models.items():
             totals_by_model[m] = totals_by_model.get(m, 0) + int(v)
     top_models = [
-        m
-        for m, _ in sorted(totals_by_model.items(), key=lambda kv: kv[1])[-limit_models:]
+        m for m, _ in sorted(totals_by_model.items(), key=lambda kv: kv[1])[-limit_models:]
     ]
     if not top_models:
         ax.axis("off")
@@ -617,7 +618,9 @@ def _usage_share_area(ax, usage_agg: dict, limit_models: int = 5) -> None:
             ]
         )
     colors = [CAT[CAT_ORDER[i % len(CAT_ORDER)]] for i in range(len(top_models))]
-    ax.stackplot(xs, *series, labels=[_display_name(m) for m in top_models], colors=colors, alpha=0.88)
+    ax.stackplot(
+        xs, *series, labels=[_display_name(m) for m in top_models], colors=colors, alpha=0.88
+    )
     locator = mdates.AutoDateLocator(maxticks=6, minticks=3)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
@@ -639,7 +642,9 @@ def _usage_allotment_bars(ax, periods: dict) -> None:
     """Horizontal progress bars: configured quota used vs cap (from usage_agg.periods)."""
     import matplotlib.ticker as mticker
 
-    ax.set_title("Allotment usage (used vs cap)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10)
+    ax.set_title(
+        "Allotment usage (used vs cap)", fontsize=11, color=INK_SECONDARY, loc="left", pad=10
+    )
     rows: list[tuple[str, int, int, float | None]] = []
     for subject, per_map in (periods or {}).items():
         if not isinstance(per_map, dict):
@@ -869,7 +874,6 @@ def _render_usage_image(
         y=0.98,
     )
 
-    totals = usage_agg.get("totals", {})
     for idx, (panel_id, _h) in enumerate(plan):
         ax = fig.add_subplot(gs[idx])
         if panel_id == "header":
@@ -1023,7 +1027,7 @@ def main(argv: list[str]) -> int:
         return 2
     log_path, window_hours_raw, out_path = argv[1], argv[2], argv[3]
     usage_json_path = None
-    for i, a in enumerate(argv[4:], start=4):
+    for _i, a in enumerate(argv[4:], start=4):
         if not a.startswith("--") and usage_json_path is None:
             usage_json_path = a
             break

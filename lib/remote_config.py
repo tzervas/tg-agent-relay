@@ -37,9 +37,7 @@ _BUILTIN_ALLOW: dict[str, str] = {
     "routing.require_prefix": "bool",
 }
 
-_ALLOT_RE = re.compile(
-    r"^usage\.allotments\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*$"
-)
+_ALLOT_RE = re.compile(r"^usage\.allotments\.[a-zA-Z0-9][a-zA-Z0-9_-]*\.[a-zA-Z0-9][a-zA-Z0-9_-]*$")
 
 _SECRET_KEY_RE = re.compile(
     r"(bot[_-]?token|allowed[_-]?(user|chat)[_-]?id|secret|password|api[_-]?key)",
@@ -76,7 +74,8 @@ def _load_toml(path: Path) -> dict[str, Any]:
         with path.open("rb") as f:
             data = tomllib.load(f)
         return data if isinstance(data, dict) else {}
-    except (OSError, tomllib.TOMLDecodeError):
+    except (OSError, tomllib.TOMLDecodeError) as _exc:
+        del _exc
         return {}
 
 
@@ -179,9 +178,7 @@ def _coerce_value(kind: str, raw: str) -> Any:
     if kind == "window":
         v = s.lower()
         if not _WINDOW_RE.match(v):
-            raise ValueError(
-                f"expected today|all|lifetime|<N>h|d|w|m|y, got {raw!r}"
-            )
+            raise ValueError(f"expected today|all|lifetime|<N>h|d|w|m|y, got {raw!r}")
         return v
     return s
 
@@ -347,7 +344,7 @@ def format_help(cfg: dict[str, Any] | None = None) -> str:
             "  /config usage window <7d|30d|today|…>",
             "  /config allot <provider> <period> <number>",
             "",
-            "Optional: [config.remote] allow = [\"extra.dotted.key\"] in relay.toml",
+            'Optional: [config.remote] allow = ["extra.dotted.key"] in relay.toml',
         ]
     )
     return "\n".join(lines)

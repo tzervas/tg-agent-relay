@@ -8,7 +8,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "lib"))
 
-import usage_ingest as u  # noqa: E402
+import usage_ingest as u
 
 NOW = 1_700_000_000
 
@@ -28,9 +28,7 @@ def test_allotment_percent_saturates_at_100() -> None:
     rows = [
         u.UsageRow(NOW, "anthropic", "m", "p", 2000, 0, 0, 0, "claude-code"),
     ]
-    snap = u.allotment_usage_snapshot(
-        rows, {"claude-code": {"daily": 1000}}, now=NOW
-    )
+    snap = u.allotment_usage_snapshot(rows, {"claude-code": {"daily": 1000}}, now=NOW)
     assert snap["claude-code"]["daily"]["percent"] == 100.0
 
 

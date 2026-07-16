@@ -128,7 +128,6 @@ def main() -> int:
     assert True if we_d == NOW else fail("period daily: end is now")
     assert True if NOW - ws_d <= 86400 else fail("period daily: start within 24h", f"ws={ws_d}")
     ws_w, _ = u.period_window_bounds("weekly", now=NOW)
-    local = __import__("time").localtime(NOW)
     assert_eq("period weekly: Monday start wday", 0, __import__("time").localtime(ws_w).tm_wday)
     quota_rows = [
         u.UsageRow(NOW - 100, "anthropic", "claude-opus-4-8", "p", 100, 0, 0, 0, "claude-code"),
