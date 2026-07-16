@@ -62,7 +62,8 @@ Opt-in and local-only by design — see docs/USAGE.md's \"Token usage dashboard\
     exit 0
 fi
 
-SOURCE="$(cfg_get '.usage.source' "claude-code")"
+# Default "multi" when unset so Claude + Grok breakdowns appear when both exist.
+SOURCE="$(cfg_get '.usage.source' "multi")"
 PROJECTS_DIR="$(cfg_get '.usage.projects_dir' "$HOME/.claude/projects")"
 WINDOW="$(cfg_get '.usage.window' "7d")"
 SHOW_PROVIDERS="$(cfg_get '.usage.providers' "true")"
@@ -78,9 +79,21 @@ CACHE_DIR="$BRIDGE_DIR/.usage"
 mkdir -p "$CACHE_DIR" 2>/dev/null
 CACHE_JSON="$CACHE_DIR/usage-summary.json"
 
-if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
-    relay_python "$BRIDGE_DIR/lib/usage_ingest.py" "$SOURCE" "$PROJECTS_DIR" "$WINDOW" "$CACHE_JSON" >/dev/null 2>&1
+ALLOTMENTS_ARG=()
+if command -v jq >/dev/null 2>&1; then
+    ALLOTMENTS_JSON="$(printf '%s' "${RELAY_CONFIG_JSON:-{}}" | jq -c '.usage.allotments // empty' 2>/dev/null)"
+    if [[ -n "$ALLOTMENTS_JSON" && "$ALLOTMENTS_JSON" != "null" && "$ALLOTMENTS_JSON" != "{}" ]]; then
+        ALLOTMENTS_FILE="$(mktemp "${TMPDIR:-/tmp}/relay-allotments-XXXXXX.json")"
+        printf '%s' "$ALLOTMENTS_JSON" >"$ALLOTMENTS_FILE"
+        ALLOTMENTS_ARG=(--allotments "$ALLOTMENTS_FILE")
+    fi
 fi
+
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" ]]; then
+    relay_python "$BRIDGE_DIR/lib/usage_ingest.py" "$SOURCE" "$PROJECTS_DIR" "$WINDOW" "$CACHE_JSON" \
+        "${ALLOTMENTS_ARG[@]}" >/dev/null 2>&1
+fi
+[[ -n "${ALLOTMENTS_FILE:-}" ]] && rm -f "$ALLOTMENTS_FILE"
 
 DISPLAY_FLAGS=()
 [[ "$SHOW_PROVIDERS" == "false" ]] && DISPLAY_FLAGS+=("--no-providers")
@@ -98,11 +111,28 @@ if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 && [[ -f "$BRIDGE_DIR/l
     RENDER_OUT="$(relay_python "$BRIDGE_DIR/lib/dashboard_render.py" --usage-only "$CACHE_JSON" "$OUT_PNG" "${DISPLAY_FLAGS[@]}" 2>/dev/null)"
 fi
 
+# Rich text breakdown (providers, harness sources, optional quotas) — always
+# attempted when the cache exists; independent of matplotlib.
+USAGE_TEXT=""
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1 \
+    && [[ -f "$BRIDGE_DIR/lib/usage_ingest.py" && -s "$CACHE_JSON" ]]; then
+    TEXT_FLAGS=()
+    [[ "$SHOW_PROVIDERS" == "false" ]] && TEXT_FLAGS+=(--no-providers)
+    [[ "$SHOW_MODELS" == "false" ]] && TEXT_FLAGS+=(--no-models)
+    USAGE_TEXT="$(relay_python "$BRIDGE_DIR/lib/usage_ingest.py" --telegram-text "$CACHE_JSON" \
+        "${TEXT_FLAGS[@]}" 2>/dev/null)"
+fi
+
 # Never fail to send SOMETHING, even with no python3 at all (same
 # never-fail contract as handlers/dashboard.sh).
 if [[ -z "$RENDER_OUT" ]]; then
-    RENDER_OUT="TEXT
+    if [[ -n "$USAGE_TEXT" ]]; then
+        RENDER_OUT="TEXT
+${USAGE_TEXT}"
+    else
+        RENDER_OUT="TEXT
 📈 Token usage (minimal — python3/matplotlib unavailable)"
+    fi
 fi
 
 MODE_LINE="${RENDER_OUT%%$'\n'*}"
@@ -113,6 +143,10 @@ send_text() {
     "$BRIDGE_DIR/relay-notify.sh" --raw "$msg" >/dev/null 2>&1
     emit_metric "usage" "render" "text"
 }
+
+if [[ -n "$USAGE_TEXT" ]]; then
+    send_text "$USAGE_TEXT"
+fi
 
 if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
     # No .env / no token -> the same silent no-op every other script in
@@ -137,7 +171,7 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
     fi
     # else: no token yet - silent no-op (setup not complete), matching the
     # rest of the repo's "harmless before setup" contract.
-else
+elif [[ -z "$USAGE_TEXT" ]]; then
     send_text "$REST"
 fi
 

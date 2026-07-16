@@ -107,6 +107,54 @@ def main() -> int:
             "unrecognized window spec: honestly-labeled 7d fallback",
             f"label={label!r} span={we - ws}",
         )
+    print("== lib/usage_ingest.py: allotments (pure) ==")
+    nested = u.parse_allotments(
+        {"claude-code": {"weekly": 1_000_000, "daily": 0}, "total": {"monthly": 2_000_000}}
+    )
+    assert_eq(
+        "parse_allotments: weekly cap",
+        1_000_000,
+        nested.get("claude-code", {}).get("weekly"),
+    )
+    assert_eq(
+        "parse_allotments: daily 0 -> unlimited (None)",
+        None,
+        nested.get("claude-code", {}).get("daily"),
+    )
+    dotted = u.parse_allotments({"grok.weekly": 500_000, "bogus.period": 1})
+    assert_eq("parse_allotments: dotted key", 500_000, dotted.get("grok", {}).get("weekly"))
+    assert_eq("parse_allotments: invalid period ignored", None, dotted.get("bogus"))
+    ws_d, we_d = u.period_window_bounds("daily", now=NOW)
+    assert True if we_d == NOW else fail("period daily: end is now")
+    assert True if NOW - ws_d <= 86400 else fail("period daily: start within 24h", f"ws={ws_d}")
+    ws_w, _ = u.period_window_bounds("weekly", now=NOW)
+    local = __import__("time").localtime(NOW)
+    assert_eq("period weekly: Monday start wday", 0, __import__("time").localtime(ws_w).tm_wday)
+    quota_rows = [
+        u.UsageRow(NOW - 100, "anthropic", "claude-opus-4-8", "p", 100, 0, 0, 0, "claude-code"),
+        u.UsageRow(NOW - 100, "xai", "grok-4.5", "p", 50, 0, 0, 0, "grok"),
+        u.UsageRow(NOW - 999999, "anthropic", "claude-opus-4-8", "p", 999, 0, 0, 0, "claude-code"),
+    ]
+    assert_eq(
+        "usage_in_period: claude-code only",
+        100,
+        u.usage_in_period(quota_rows, NOW - 3600, NOW, adapter="claude-code"),
+    )
+    assert_eq(
+        "usage_in_period: total",
+        150,
+        u.usage_in_period(quota_rows, NOW - 3600, NOW, adapter="total"),
+    )
+    snap = u.allotment_usage_snapshot(
+        quota_rows,
+        {"claude-code": {"daily": 1000}, "total": {"daily": 2000}},
+        now=NOW,
+    )
+    assert_eq("allotment snapshot used", 100, snap["claude-code"]["daily"]["used"])
+    assert_eq("allotment snapshot cap", 1000, snap["claude-code"]["daily"]["cap"])
+    assert_eq("allotment snapshot percent", 10.0, snap["claude-code"]["daily"]["percent"])
+    assert_eq("quota_progress_bar half", "[█████░░░░░]", u.quota_progress_bar(50.0, width=10))
+    assert_eq("quota_progress_bar unlimited", "", u.quota_progress_bar(None))
     print("== lib/usage_ingest.py: filter_rows() ==")
     rows = [
         u.UsageRow(NOW - 100, "anthropic", "claude-opus-4-8", "p", 1, 1, 0, 0),
@@ -137,6 +185,16 @@ def main() -> int:
     assert_eq("aggregate: empty rows -> total_events 0", 0, empty_agg["total_events"])
     assert_eq("aggregate: empty rows -> zeroed totals", 0, empty_agg["totals"]["total_tokens"])
     assert_eq("aggregate: empty rows -> empty breakdowns", {}, empty_agg["by_provider"])
+    by_src_rows = [
+        u.UsageRow(NOW - 100, "anthropic", "claude-opus-4-8", "p", 10, 0, 0, 0, "claude-code"),
+        u.UsageRow(NOW - 100, "xai", "grok-4.5", "p", 20, 0, 0, 0, "grok"),
+    ]
+    by_src_agg = u.aggregate(by_src_rows, NOW - 3600, NOW, "1h")
+    assert_eq(
+        "aggregate: by_source keys",
+        {"claude-code", "grok"},
+        set(by_src_agg.get("by_source", {}).keys()),
+    )
     print("== lib/usage_ingest.py: collect() over the synthetic fixture tree ==")
     agg = u.collect("claude-code", str(FIXTURE_DIR), WINDOW, now=NOW)
     assert_eq(

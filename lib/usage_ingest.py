@@ -77,6 +77,7 @@ class UsageRow(NamedTuple):
     output_tokens: int
     cache_read_tokens: int
     cache_creation_tokens: int
+    adapter: str = ""  # usage source key (claude-code, grok, …) set in collect()
 
 
 # --- provider inference -----------------------------------------------------
@@ -185,6 +186,147 @@ def resolve_window(spec: str, now: int | None = None) -> tuple[int, int, str]:
         return now - seconds, now, spec_norm
 
     return now - 7 * 24 * 3600, now, f"{spec_norm} (unrecognized window - defaulted to 7d)"
+
+
+def row_total_tokens(r: UsageRow) -> int:
+    return (
+        r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens
+    )
+
+
+ALLOTMENT_PERIODS = frozenset({"daily", "weekly", "monthly"})
+
+
+def period_window_bounds(period: str, now: int | None = None) -> tuple[int, int]:
+    """Local-calendar bounds for quota periods (daily / weekly / monthly).
+
+    weekly starts Monday 00:00 local; monthly starts day-of-month 1 00:00 local.
+    """
+    if now is None:
+        now = int(time.time())
+    period_norm = (period or "").strip().lower()
+    local = time.localtime(now)
+    if period_norm == "daily":
+        start = int(
+            time.mktime(
+                (local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)
+            )
+        )
+        return start, now
+    if period_norm == "weekly":
+        # Monday-based week (tm_wday: 0=Mon … 6=Sun)
+        days_since_mon = local.tm_wday
+        midnight_today = int(
+            time.mktime(
+                (local.tm_year, local.tm_mon, local.tm_mday, 0, 0, 0, 0, 0, -1)
+            )
+        )
+        start = midnight_today - days_since_mon * 86400
+        return start, now
+    if period_norm == "monthly":
+        start = int(
+            time.mktime((local.tm_year, local.tm_mon, 1, 0, 0, 0, 0, 0, -1))
+        )
+        return start, now
+    return 0, now
+
+
+def parse_allotments(raw: object) -> dict[str, dict[str, int | None]]:
+    """Normalize relay.toml ``[usage.allotments]`` to {subject: {period: cap}}.
+
+    Supports nested tables (``[usage.allotments.claude-code] daily = …``) and
+    dotted keys (``claude-code.weekly = …``). Omitted periods or caps mean no
+    quota line for that slot. ``0`` means unlimited (no bar).
+    """
+    out: dict[str, dict[str, int | None]] = {}
+    if not isinstance(raw, dict):
+        return out
+
+    def _set_cap(subject: str, period: str, cap_raw: object) -> None:
+        subject = (subject or "").strip()
+        period = (period or "").strip().lower()
+        if not subject or period not in ALLOTMENT_PERIODS:
+            return
+        if cap_raw is None:
+            return
+        try:
+            cap = int(cap_raw)
+        except (TypeError, ValueError):
+            return
+        if cap <= 0:
+            out.setdefault(subject, {})[period] = None  # unlimited — no bar
+        else:
+            out.setdefault(subject, {})[period] = cap
+
+    for key, val in raw.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(val, dict):
+            for period, cap_raw in val.items():
+                if isinstance(period, str):
+                    _set_cap(key, period, cap_raw)
+            continue
+        if "." in key:
+            subject, _, period = key.partition(".")
+            _set_cap(subject, period, val)
+    return out
+
+
+def usage_in_period(
+    rows: list[UsageRow],
+    window_start: int,
+    window_end: int,
+    *,
+    adapter: str | None = None,
+) -> int:
+    """Sum token mass for rows in [window_start, window_end].
+
+    ``adapter`` None or ``total`` counts every row; otherwise match
+    ``UsageRow.adapter`` (usage source key).
+    """
+    total = 0
+    want_all = adapter is None or adapter == "total"
+    for r in rows:
+        if not (window_start <= r.ts <= window_end):
+            continue
+        if want_all or r.adapter == adapter:
+            total += row_total_tokens(r)
+    return total
+
+
+def allotment_usage_snapshot(
+    rows: list[UsageRow],
+    allotments: dict[str, dict[str, int | None]],
+    now: int | None = None,
+) -> dict[str, dict[str, dict[str, int | float | None]]]:
+    """Per configured subject+period: used tokens, cap, percent (or None if unlimited)."""
+    if now is None:
+        now = int(time.time())
+    snapshot: dict[str, dict[str, dict[str, int | float | None]]] = {}
+    for subject, periods in allotments.items():
+        for period, cap in periods.items():
+            if cap is None:
+                continue  # unlimited / omitted cap — no quota row
+            ws, we = period_window_bounds(period, now)
+            used = usage_in_period(rows, ws, we, adapter=subject)
+            pct: float | None = None
+            if cap > 0:
+                pct = min(100.0, round(100.0 * used / cap, 1))
+            snapshot.setdefault(subject, {})[period] = {
+                "used": used,
+                "cap": cap,
+                "percent": pct,
+            }
+    return snapshot
+
+
+def quota_progress_bar(percent: float | None, width: int = 10) -> str:
+    """Text bar for Telegram; empty when percent is None."""
+    if percent is None:
+        return ""
+    filled = int(round(width * min(100.0, max(0.0, percent)) / 100.0))
+    filled = min(width, max(0, filled))
+    return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
 
 
 def filter_rows(rows: list[UsageRow], window_start: int, window_end: int) -> list[UsageRow]:
@@ -488,16 +630,25 @@ def aggregate(rows: list[UsageRow], window_start: int, window_end: int, window_l
     by_project: dict[str, dict[str, int]] = {}
     bucket_size = _bucket_size_seconds(window_start, window_end)
     buckets: dict[int, int] = {}
+    buckets_by_provider: dict[int, dict[str, int]] = {}
+    buckets_by_model: dict[int, dict[str, int]] = {}
+
+    by_source: dict[str, dict[str, int]] = {}
 
     for r in rows:
         _add_row(totals, r)
         _add_row(by_provider.setdefault(r.provider, _empty_totals()), r)
         _add_row(by_model.setdefault(r.model, _empty_totals()), r)
         _add_row(by_project.setdefault(r.project, _empty_totals()), r)
+        if r.adapter:
+            _add_row(by_source.setdefault(r.adapter, _empty_totals()), r)
         b = r.ts - (r.ts % bucket_size)
-        buckets[b] = buckets.get(b, 0) + (
-            r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_creation_tokens
-        )
+        tok = row_total_tokens(r)
+        buckets[b] = buckets.get(b, 0) + tok
+        bp = buckets_by_provider.setdefault(b, {})
+        bp[r.provider] = bp.get(r.provider, 0) + tok
+        bm = buckets_by_model.setdefault(b, {})
+        bm[r.model] = bm.get(r.model, 0) + tok
 
     return {
         "generated_at": int(time.time()),
@@ -508,9 +659,12 @@ def aggregate(rows: list[UsageRow], window_start: int, window_end: int, window_l
         "total_events": len(rows),
         "totals": totals,
         "by_provider": by_provider,
+        "by_source": by_source,
         "by_model": by_model,
         "by_project": by_project,
         "timeline": sorted(buckets.items()),
+        "timeline_by_provider": sorted(buckets_by_provider.items()),
+        "timeline_by_model": sorted(buckets_by_model.items()),
     }
 
 
@@ -521,7 +675,13 @@ def _default_dir_for_source(source: str) -> str:
     return f"{home}/.claude/projects"
 
 
-def collect(source: str, projects_dir: str, window: str, now: int | None = None) -> dict:
+def collect(
+    source: str,
+    projects_dir: str,
+    window: str,
+    now: int | None = None,
+    allotments: dict[str, dict[str, int | None]] | None = None,
+) -> dict:
     """The top-level, skip-graceful entry point: resolve the window,
     dispatch to the configured source adapter, filter, and aggregate.
     ALWAYS returns a valid summary dict (see aggregate()'s shape) plus
@@ -559,7 +719,8 @@ def collect(source: str, projects_dir: str, window: str, now: int | None = None)
             continue
         try:
             part = adapter(base)
-            rows.extend(part)
+            for r in part:
+                rows.append(r._replace(adapter=src_name))
             if src_name == "grok" and part:
                 notes.append("grok: token_basis=context_peak_proxy (not API billing)")
         except Exception as e:
@@ -570,6 +731,8 @@ def collect(source: str, projects_dir: str, window: str, now: int | None = None)
 
     filtered = filter_rows(rows, window_start, window_end)
     agg = aggregate(filtered, window_start, window_end, label)
+    if allotments:
+        agg["periods"] = allotment_usage_snapshot(rows, allotments, now)
     agg["source"] = source
     agg["projects_dir"] = str(projects_dir)
     agg["sources_scanned"] = len(rows)
@@ -580,16 +743,152 @@ def collect(source: str, projects_dir: str, window: str, now: int | None = None)
     return agg
 
 
+def _compact_tokens(n: object) -> str:
+    try:
+        v = int(n)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "0"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}k"
+    return str(v)
+
+
+def render_telegram_usage_text(
+    usage_agg: dict,
+    *,
+    show_providers: bool = True,
+    show_models: bool = True,
+) -> str:
+    """Rich text for `/usage` (providers, harness sources, optional quota lines)."""
+    if not usage_agg:
+        return (
+            "📈 Token usage — unavailable\n"
+            "(usage tracking is disabled, or no source is configured — see relay.toml [usage])"
+        )
+    totals = usage_agg.get("totals", {})
+    win = usage_agg.get("window", "?")
+    lines = [
+        f"📈 Token usage — {win}",
+        "═" * 32,
+        "",
+        f"total tokens:   {_compact_tokens(totals.get('total_tokens', 0))}",
+        f"  input:        {_compact_tokens(totals.get('input_tokens', 0))}",
+        f"  output:       {_compact_tokens(totals.get('output_tokens', 0))}",
+        f"  cache read:   {_compact_tokens(totals.get('cache_read_tokens', 0))}",
+        f"  cache create: {_compact_tokens(totals.get('cache_creation_tokens', 0))}",
+        "",
+    ]
+
+    by_source = usage_agg.get("by_source") or {}
+    if by_source:
+        lines.append("By harness (source):")
+        for src in sorted(by_source.keys()):
+            t = by_source[src].get("total_tokens", 0)
+            lines.append(f"  {src}: {_compact_tokens(t)}")
+        lines.append("")
+
+    if show_providers:
+        by_prov = usage_agg.get("by_provider") or {}
+        if by_prov:
+            lines.append("By provider:")
+            for p in sorted(by_prov.keys(), key=lambda k: -by_prov[k].get("total_tokens", 0)):
+                lines.append(f"  {p}: {_compact_tokens(by_prov[p].get('total_tokens', 0))}")
+            lines.append("")
+        else:
+            lines += ["By provider:", "  (no data in this window)", ""]
+    else:
+        lines += ["By provider:", "  (display disabled — [usage].providers = false)", ""]
+
+    if show_models:
+        by_mod = usage_agg.get("by_model") or {}
+        if by_mod:
+            lines.append("By model (top):")
+            top = sorted(
+                by_mod.items(), key=lambda kv: -kv[1].get("total_tokens", 0)
+            )[:8]
+            for m, d in top:
+                lines.append(f"  {display_model(m)}: {_compact_tokens(d.get('total_tokens', 0))}")
+            lines.append("")
+    else:
+        lines += ["By model:", "  (display disabled — [usage].models = false)", ""]
+
+    periods = usage_agg.get("periods") or {}
+    if periods:
+        lines.append("Quotas (configured periods):")
+        for subject in sorted(periods.keys()):
+            for period in ("daily", "weekly", "monthly"):
+                slot = periods[subject].get(period)
+                if not slot:
+                    continue
+                used = int(slot.get("used", 0))
+                cap = int(slot.get("cap", 0))
+                pct = slot.get("percent")
+                bar = quota_progress_bar(float(pct) if pct is not None else None)
+                pct_s = f" {pct}%" if pct is not None else ""
+                lines.append(
+                    f"  {subject} {period}: {_compact_tokens(used)} / {_compact_tokens(cap)}"
+                    f"{pct_s} {bar}".rstrip()
+                )
+        lines.append("")
+
+    if usage_agg.get("skipped"):
+        lines.append(f"note: {usage_agg['skipped']}")
+    elif usage_agg.get("notes"):
+        for note in usage_agg["notes"]:
+            lines.append(f"note: {note}")
+    elif usage_agg.get("total_events", 0) == 0:
+        lines.append("(no usage data recorded yet in this window)")
+
+    return "\n".join(lines)
+
+
+def _load_allotments_arg(path: str) -> dict[str, dict[str, int | None]]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {}
+    return parse_allotments(raw)
+
+
 def _main(argv: list[str]) -> int:
-    if len(argv) < 5:
+    if len(argv) >= 2 and argv[1] == "--telegram-text":
+        if len(argv) < 3:
+            print("usage: usage_ingest.py --telegram-text <usage_json_path>", file=sys.stderr)
+            return 2
+        cache_path = argv[2]
+        show_providers = "--no-providers" not in argv
+        show_models = "--no-models" not in argv
+        try:
+            with open(cache_path, encoding="utf-8") as f:
+                agg = json.load(f)
+        except (OSError, ValueError, TypeError):
+            agg = {}
+        print(render_telegram_usage_text(agg, show_providers=show_providers, show_models=show_models))
+        return 0
+
+    args = [a for a in argv[1:] if a not in ("--no-providers", "--no-models")]
+    allotments: dict[str, dict[str, int | None]] | None = None
+    if "--allotments" in args:
+        idx = args.index("--allotments")
+        if idx + 1 >= len(args):
+            print("usage: ... --allotments <allotments.json>", file=sys.stderr)
+            return 2
+        allotments = _load_allotments_arg(args[idx + 1])
+        del args[idx : idx + 2]
+
+    if len(args) < 4:
         print(
-            "usage: usage_ingest.py <source> <projects_dir> <window> <out_json_path>",
+            "usage: usage_ingest.py <source> <projects_dir> <window> <out_json_path> "
+            "[--allotments <allotments.json>]",
             file=sys.stderr,
         )
         return 2
-    source, projects_dir, window, out_path = argv[1], argv[2], argv[3], argv[4]
+    source, projects_dir, window, out_path = args[0], args[1], args[2], args[3]
 
-    agg = collect(source, projects_dir, window)
+    agg = collect(source, projects_dir, window, allotments=allotments)
 
     try:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)

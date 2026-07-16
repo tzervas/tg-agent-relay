@@ -463,7 +463,12 @@ Nothing runs until you opt in in `relay.toml`:
 ```toml
 [usage]
 enabled = true
+source = "multi"   # claude-code | grok | multi | auto
 ```
+
+`source = "multi"` (or `auto`) merges Claude Code and Grok local
+transcripts when both directories exist. Single-harness setups can keep
+`source = "claude-code"` (historical default in older examples).
 
 Uncomment `[commands.usage]` too (see
 [`COMMANDS.md`'s `/usage` entry](COMMANDS.md#the-five-built-in-relay-handled-commands))
@@ -490,6 +495,26 @@ history, or a malformed transcript line never errors and never fabricates
 a number — the dashboard/command just shows an honest empty or partial
 result, optionally with a short note explaining what was skipped.
 
+### Allotments (optional quotas)
+
+`[usage.allotments]` defines optional caps for daily, weekly, or monthly
+periods (local calendar). `/usage` text then shows used / cap and a small
+percent bar for each configured slot. Omit a period or set cap to `0` for
+unlimited (no bar). Subjects are usage source keys (`claude-code`, `grok`,
+…) or `total` for all harnesses combined.
+
+```toml
+[usage.allotments.claude-code]
+weekly = 5000000
+[usage.allotments.grok]
+weekly = 1000000
+[usage.allotments.total]
+monthly = 20000000
+```
+
+With no `[usage.allotments]` section, `/usage` still shows provider and
+harness breakdowns without quota lines.
+
 ### Reading it
 
 ```
@@ -499,17 +524,16 @@ result, optionally with a short note explaining what was skipped.
 /usage all          # everything the source has
 ```
 
-The image shows header stat tiles (total tokens, input/output split, top
-model, top project), a **tokens by model** bar, a **tokens by provider**
-share bar (percentages — deliberately a bar, not a pie: see the
-`/dataviz` design skill's guidance on comparing a handful of categories),
-a **tokens by project** bar, and — when there's enough spread of
-timestamps to be meaningful — a small over-time trend line. `[usage].providers`
-/`[usage].models` (both default `true`) can turn off either breakdown; the
-panel still renders in the same spot, labeled "(display disabled)" rather
-than silently vanishing. With `[usage].enabled = false` (the default),
-`/dashboard` renders **exactly** as it always has — no usage panels, no
-behavior change at all.
+The command sends a text summary (totals, by harness source when using
+`multi`, by provider/model, and optional quota lines) plus a chart image
+when matplotlib is available. The image shows header stat tiles (total
+tokens, input/output split, top model, top project), a tokens by model
+bar, a tokens by provider share bar, a tokens by project bar, and — when
+there's enough spread of timestamps — a small over-time trend line.
+`[usage].providers` / `[usage].models` (both default `true`) can turn off
+either breakdown in the image; the text summary honors the same toggles.
+With `[usage].enabled = false` (the default), `/dashboard` renders
+exactly as it always has — no usage panels, no behavior change at all.
 
 ### Privacy — read this before enabling
 

@@ -666,11 +666,12 @@
 # [usage]
 # enabled = false
 
-# source = "claude-code"
-#   Which adapter reads `projects_dir` below. Only "claude-code" ships
-#   today; also "grok", "multi"/"auto" (see lib/usage_ingest.py's module docstring for the
-#   source-adapter contract) - an unrecognized value skip-gracefully
-#   disables collection (never fabricates numbers) rather than erroring.
+# source = "multi"
+#   Which harness(es) to read: "claude-code", "grok", "multi"/"auto" (merge
+#   both default dirs — recommended when Claude Code and Grok are in use).
+#   handlers/usage.sh defaults to "multi" when this key is omitted. An
+#   unrecognized value skip-gracefully disables collection (never fabricates
+#   numbers) rather than erroring.
 
 # projects_dir = "~/.claude/projects"
 #   Where the configured `source` adapter looks - the "claude-code"
@@ -697,6 +698,26 @@
 #   by-project breakdown and the totals always show; there's no
 #   `projects` toggle since "which project is spending tokens" is this
 #   feature's whole point).
+
+# [usage.allotments]
+# Optional token caps for quota lines on `/usage` (used vs cap + % bar).
+# Omit a period or set cap to 0 for unlimited (no bar for that slot).
+# Periods: daily | weekly | monthly (local calendar).
+# Subject keys: usage source names ("claude-code", "grok", …) or "total".
+#
+# Nested tables (recommended):
+# [usage.allotments.claude-code]
+# daily = 0              # 0 = unlimited display, no bar
+# weekly = 5000000
+# [usage.allotments.grok]
+# weekly = 1000000
+# [usage.allotments.total]
+# monthly = 20000000
+#
+# Dotted keys in one table also work:
+# claude-code.weekly = 5000000
+# grok.weekly = 1000000
+# total.monthly = 20000000
 
 # --------------------------------------------------------------------------
 # The five built-in relay-handled commands (handlers/README.md's real
@@ -757,6 +778,18 @@
 # # Project-room binds: /project list · here · bind <slug> · unbind
 # # Writes gitignored .chats.d/bindings.json (merged over [[chats]]).
 # # See docs/ROUTING.md — forum topics OR one group per repo.
+#
+# [commands.config]
+# keyword = "config"
+# slash = "/config"
+# mode = "relay"
+# handler = "handlers/config.sh"
+# # Safe relay.toml edits from your phone (allowlisted keys only; never
+# # BOT_TOKEN or allowlist ids). /config · get · set · charts · usage window · allot
+#
+# # Optional extra allowlisted dotted keys (hardcoded list in lib/remote_config.py):
+# # [config.remote]
+# # allow = ["my.custom.flag"]
 
 # --------------------------------------------------------------------------
 # Grok Build provider — full hook catalog (providers/grok).
