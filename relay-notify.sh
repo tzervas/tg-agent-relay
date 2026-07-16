@@ -53,6 +53,8 @@ set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
+# shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-config.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-common.sh"

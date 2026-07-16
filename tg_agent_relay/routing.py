@@ -29,7 +29,7 @@ if str(_LIB) not in sys.path:
 import routing as _routing  # type: ignore  # noqa: E402
 
 try:
-    import sessions as _sessions  # type: ignore  # noqa: E402
+    import sessions as _sessions  # type: ignore
 except ImportError:
     _sessions = None  # type: ignore[assignment]
 

@@ -79,7 +79,8 @@ if [[ ! -p "$FIFO" ]]; then
     mkfifo "$FIFO"
 fi
 
-export PYTHONPATH="$BRIDGE_DIR/lib${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
 relay_python -c "
 from pathlib import Path
 from sessions import write_session_record

@@ -58,6 +58,8 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
 # Python poll is the default (#67). Opt out: RELAY_PYTHON_POLL=0.
 # If the package cannot be imported, this shell body continues (see
 # lib/python_fallback.sh and docs/DECISIONS.md).
