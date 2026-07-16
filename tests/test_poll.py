@@ -46,6 +46,7 @@ from tg_agent_relay.poll import (
     process_update,
     read_offset,
     reassemble_window,
+    resolve_command_match,
     write_offset,
 )
 
@@ -556,6 +557,44 @@ eq(
     "flush classifies command",
     ["[telegram:cmd:status] /status please"],
     cmd_lines,
+)
+
+cfg_cabal_config = {
+    "backends": {
+        "cabal": {"tag": "cabal", "delivery": "stdout", "prefixes": ["@cabal"]},
+    },
+    "routing": {"require_prefix": True},
+    "commands": {"config": {"slash": "/config", "tag": "config"}},
+}
+eq(
+    "resolve_command_match @cabal /config",
+    ("config", "/config"),
+    resolve_command_match(cfg_cabal_config, "@cabal /config"),
+)
+bridge_cabal_cmd = _tmp_bridge()
+append_message(bridge_cabal_cmd, "@cabal /config", multi_chat=True, now=1)
+cabal_cmd_lines = flush_buffer(bridge_cabal_cmd, cfg_cabal_config, multi_chat=True)
+eq(
+    "flush prefixed /config routes to command handler text",
+    ["[telegram:cmd:config] /config"],
+    cabal_cmd_lines,
+)
+eq("raw /config still classifies", "config", classify_command(cfg_cabal_config, "/config"))
+bridge_cabal_raw = _tmp_bridge()
+append_message(bridge_cabal_raw, "/config", multi_chat=True, now=1)
+raw_cfg_lines = flush_buffer(bridge_cabal_raw, cfg_cabal_config, multi_chat=True)
+eq(
+    "flush raw /config routes to command",
+    ["[telegram:cmd:config] /config"],
+    raw_cfg_lines,
+)
+bridge_cabal_fifo = _tmp_bridge()
+append_message(bridge_cabal_fifo, "@cabal hello", "77", "", multi_chat=True, now=1)
+cabal_fifo_lines = flush_buffer(bridge_cabal_fifo, cfg_cabal_config, "77", "", multi_chat=True)
+eq(
+    "flush @cabal hello goes to backend fifo path not command",
+    ["[telegram:backend:cabal] hello"],
+    cabal_fifo_lines,
 )
 
 

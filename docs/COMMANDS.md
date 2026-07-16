@@ -122,6 +122,13 @@ mode = "relay"
 handler = "handlers/config.sh"
 ```
 
+With `routing.require_prefix = true` and per-backend `@handle` prefixes (static
+`[backends.cabal]` or a registered session), **`@cabal /config` works the same
+as `/config`**: the poll loop strips the handle before classifying commands, so
+`handlers/config.sh` always receives `/config`, not the prefixed line. Unprefixed
+agent traffic still needs `@cabal …` when `require_prefix` is on — see
+[`SESSIONS.md`](SESSIONS.md).
+
 ### `/usage [today|all|<N>d|<N>h]`
 
 **OPT-IN — default disabled.** A token USAGE dashboard: tokens by

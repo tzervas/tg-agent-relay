@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1] — 2026-07-16
+
+### Fixed
+
+- **Prefixed commands** — `@handle /config` and `@handle /usage` strip the
+  session prefix before command classify/dispatch (Python `poll.py` and shell
+  `tg-poll.sh` parity).
+- **Handlers** — `handlers/config.sh` and `handlers/usage.sh` source
+  `lib/exec-env.sh` + `lib/python.sh`; config surfaces real Python stderr on
+  failure; usage explains missing matplotlib / dashboard extra.
+- **Deploy** — `deploy-local.sh` installs `.[dashboard]` extras and restarts
+  inbound poll via `ensure-inbound.sh --restart-poll`.
+
 ## [0.8.0] — 2026-07-16
 
 ### Added

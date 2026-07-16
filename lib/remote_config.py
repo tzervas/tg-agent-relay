@@ -3,6 +3,10 @@
 
 Used by handlers/config.sh (zero model tokens). Never reads or writes
 secrets (.env / BOT_TOKEN / ALLOWED_*). Fail closed on unknown keys.
+
+Reads via stdlib ``tomllib`` only. Writes via the built-in ``dump_toml``
+encoder (no third-party TOML writer); run with bridge ``PYTHONPATH`` from
+``lib/exec-env.sh`` so ``remote_config`` resolves under ``lib/``.
 """
 
 from __future__ import annotations
