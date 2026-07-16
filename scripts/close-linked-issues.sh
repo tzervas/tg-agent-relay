@@ -71,7 +71,8 @@ found = set()
 for m in re.finditer(rf"(?is)\b{kw}\b(?:\s*:)?\s*((?:#?\d+(?:\s*[,&]?\s*(?:and\s+)?#?\d+)*))", text):
     # Ignore negated forms: "No Fixes #22", "not close #N", "without Fixes #N"
     prefix = text[max(0, m.start() - 24) : m.start()].lower()
-    if re.search(r"\b(?:no|not|without|dont|don\'t)\b[\s*`\"\'\-]*$", prefix):
+    # Note: avoid nested shell quotes; "dont" covers don't after lowercasing+strip
+    if re.search(r"\b(?:no|not|without|dont)\b[\s*`\"'\-]*$", prefix):
         continue
     for n in re.findall(r"\d+", m.group(1)):
         found.add(int(n))
