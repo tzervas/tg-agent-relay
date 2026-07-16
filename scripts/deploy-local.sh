@@ -116,7 +116,7 @@ fi
 [[ -n "$CLEANUP" ]] && rm -rf "$CLEANUP"
 
 printf 'deploy-local.sh: %s → %s\n' "${REF:-working-tree}" "$DEST"
-printf '  preserved: .env relay.toml .offset .metrics.log .usage/ .chats.d/ voices/\n'
+printf '  preserved: .env relay.toml .offset .metrics.log .usage/ .chats.d/ .sessions.d/ sessions/ voices/\n'
 if (( DRY_RUN == 0 )); then
     printf '  next: re-run install-hooks / install-grok-hooks if needed; restart poller\n'
     if [[ -f "$DEST/VERSION" ]]; then

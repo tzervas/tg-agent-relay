@@ -51,17 +51,35 @@ def _merge_chats_overlay(cfg: dict[str, Any], overlay_path: Path) -> dict[str, A
     return out
 
 
+def _apply_sessions_overlay(cfg: dict[str, Any], bridge_dir: Path) -> dict[str, Any]:
+    lib = _repo_root() / "lib"
+    import sys
+
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    try:
+        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+
+        out = _sessions.apply_sessions(cfg, bridge_dir=bridge_dir)
+        out["_sessions_merged"] = True
+        out["_bridge_dir"] = str(bridge_dir)
+        return out
+    except Exception:
+        return cfg
+
+
 def load_config(
     relay_toml: Path | str | None = None,
     *,
     bridge_dir: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Load full effective config (toml + chat overlay)."""
+    """Load full effective config (toml + chat overlay + session backends)."""
     root = Path(bridge_dir) if bridge_dir else _repo_root()
     toml_path = Path(relay_toml) if relay_toml else root / "relay.toml"
     cfg = load_toml_as_dict(toml_path)
     overlay = Path(os.environ.get("RELAY_CHATS_OVERLAY", root / ".chats.d" / "bindings.json"))
-    return _merge_chats_overlay(cfg, overlay)
+    cfg = _merge_chats_overlay(cfg, overlay)
+    return _apply_sessions_overlay(cfg, root)
 
 
 def cfg_get(cfg: dict[str, Any], dotted: str, default: Any = None) -> Any:

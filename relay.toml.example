@@ -900,6 +900,28 @@
 # prefixes = ["@grok", "/grok", "grok:"]
 # project = "mycelium"
 #
+# --- Multi-session Grok handles (v0.7) — two patterns -----------------------
+# Static: duplicate [backends.<handle>] with unique prefixes + fifo each.
+# Dynamic: register at runtime (docs/SESSIONS.md):
+#   bash scripts/register-session.sh --handle cabal
+#   bash scripts/register-session.sh --handle fleet
+# [sessions]
+# dir = "~/.claude/telegram-bridge/.sessions.d"
+#
+# [backends.cabal]
+# type = "grok"
+# delivery = "fifo"
+# fifo = "~/.grok/telegram-bridge/sessions/cabal.fifo"
+# tag = "cabal"
+# prefixes = ["@cabal", "/cabal", "cabal:"]
+#
+# [backends.fleet]
+# type = "grok"
+# delivery = "fifo"
+# fifo = "~/.grok/telegram-bridge/sessions/fleet.fifo"
+# tag = "fleet"
+# prefixes = ["@fleet", "/fleet", "fleet:"]
+#
 # [backends.ollama]
 # type = "ollama"
 # delivery = "cmd"

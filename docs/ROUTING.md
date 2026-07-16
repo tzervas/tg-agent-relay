@@ -166,6 +166,48 @@ bash install-grok-hooks.sh
 
 Writes `~/.grok/hooks/tg-agent-relay.json` only (merge-safe with other Grok hooks).
 
+## Multi-session Grok handles
+
+When several **Grok Build** sessions run on one machine, give each a unique
+**@handle** and FIFO so Telegram traffic is split automatically (no
+ignore-vs-handle logic in the agent).
+
+**Option A — static `relay.toml` (N backends):**
+
+```toml
+[backends.cabal]
+type = "grok"
+delivery = "fifo"
+fifo = "~/.grok/telegram-bridge/sessions/cabal.fifo"
+tag = "cabal"
+prefixes = ["@cabal", "/cabal", "cabal:"]
+
+[backends.fleet]
+type = "grok"
+delivery = "fifo"
+fifo = "~/.grok/telegram-bridge/sessions/fleet.fifo"
+tag = "fleet"
+prefixes = ["@fleet", "/fleet", "fleet:"]
+```
+
+Longest-prefix routing ensures `@cabal2` does not steal `@cabal` traffic.
+
+**Option B — dynamic registry (recommended for local sessions):**
+
+```toml
+[sessions]
+# dir = "~/.claude/telegram-bridge/.sessions.d"
+```
+
+```bash
+bash scripts/register-session.sh --handle cabal
+bash scripts/register-session.sh --handle fleet
+# Monitor per FIFO: adapters/backend-fifo-reader.sh <fifo>
+```
+
+Session JSON rows **overlay** static `[backends.<same-id>]` (session wins).
+Full operator guide: [SESSIONS.md](SESSIONS.md).
+
 ## Identifying who replied
 
 | Signal | How |

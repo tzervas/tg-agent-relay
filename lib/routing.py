@@ -21,8 +21,18 @@ from typing import Any
 
 
 def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
-    b = cfg.get("backends") or {}
-    return b if isinstance(b, dict) else {}
+    """Effective backends: static [backends.*] + .sessions.d overlay (sessions win)."""
+    if cfg.get("_sessions_merged"):
+        b = cfg.get("backends") or {}
+        return b if isinstance(b, dict) else {}
+    try:
+        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+
+        bridge = cfg.get("_bridge_dir")
+        return _sessions.merged_backends(cfg, bridge_dir=bridge)
+    except Exception:
+        b = cfg.get("backends") or {}
+        return b if isinstance(b, dict) else {}
 
 
 def _chats(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -53,10 +63,20 @@ def _backend_cfg_get(cfg: dict[str, Any], backend_id: str, field: str, default: 
 
 
 def has_routing_config(cfg: dict[str, Any]) -> bool:
-    """True if backends table or non-empty chats list is configured."""
+    """True if backends (static or sessions), or non-empty chats list is configured."""
+    if _chats(cfg):
+        return True
     if _backends(cfg):
         return True
-    return bool(_chats(cfg))
+    try:
+        import sessions as _sessions  # type: ignore  # noqa: PLC0415
+
+        bridge = cfg.get("_bridge_dir")
+        if _sessions.load_session_backends(cfg, bridge_dir=bridge):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def chat_binding(cfg: dict[str, Any], chat_id: str, thread_id: str = "") -> dict[str, Any] | None:
