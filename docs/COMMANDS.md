@@ -98,6 +98,30 @@ mode = "relay"
 handler = "handlers/help.sh"
 ```
 
+### `/config` — remote settings (relay.toml)
+
+**Relay-handled, zero model tokens.** View or change **allowlisted**
+`relay.toml` keys from Telegram. Never shows or writes secrets (`BOT_TOKEN`,
+`ALLOWED_USER_ID`, `.env`).
+
+| Command | Action |
+|---|---|
+| `/config` | Safe summary of current settings |
+| `/config get <dotted.key>` | One value |
+| `/config set <dotted.key> <value>` | Persist to `relay.toml` (`.bak` backup first) |
+| `/config charts <bar\|line\|both>` | `usage.charts.default` |
+| `/config usage window <7d\|30d\|…>` | `usage.window` |
+| `/config allot <provider> <period> <n>` | `usage.allotments.<provider>.<period>` |
+| `/config help` | Allowlisted keys |
+
+```toml
+[commands.config]
+keyword = "config"
+slash = "/config"
+mode = "relay"
+handler = "handlers/config.sh"
+```
+
 ### `/usage [today|all|<N>d|<N>h]`
 
 **OPT-IN — default disabled.** A token USAGE dashboard: tokens by
