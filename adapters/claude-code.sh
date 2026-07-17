@@ -160,7 +160,13 @@ if [[ "$_CC_USE_PY" == "1" ]]; then
                     RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
                     [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
                 fi
-                [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                if [[ -n "$SUMMARY" ]]; then
+                    export RELAY_HOOK_EVENT="$EVENT"
+                    _cc_cwd2="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)"
+                    [[ -z "$_cc_cwd2" || "$_cc_cwd2" == "null" ]] && _cc_cwd2="${CLAUDE_PROJECT_DIR:-}"
+                    [[ -n "$_cc_cwd2" && -d "$_cc_cwd2" ]] && export RELAY_CWD="$_cc_cwd2"
+                    TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                fi
                 exit 0
                 ;;
         esac
@@ -449,6 +455,12 @@ if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1;
     RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
     [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
 fi
-[[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+if [[ -n "$SUMMARY" ]]; then
+    export RELAY_HOOK_EVENT="$EVENT"
+    _cc_cwd="$(pf '.cwd // empty')"
+    [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    [[ -n "$_cc_cwd" && -d "$_cc_cwd" ]] && export RELAY_CWD="$_cc_cwd"
+    TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+fi
 
 exit 0

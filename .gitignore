@@ -37,6 +37,7 @@ actions-runner-linux-*.tar.gz
 .tg-buffer
 .tg-buffer-ts
 .tg-buffer.*
+.media/
 .metrics.log
 .tg-send.lock
 .chats.d/

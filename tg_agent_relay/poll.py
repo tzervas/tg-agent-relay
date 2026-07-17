@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from tg_agent_relay.config import cfg_get, load_config
+from tg_agent_relay.media_inbound import buffer_parts_for_update
 from tg_agent_relay.metrics import emit_metric
 from tg_agent_relay.routing import (
     has_routing_config,
@@ -646,15 +647,19 @@ def write_offset(bridge_dir: Path | str, offset: int) -> None:
         path.write_text(f"{offset}\n", encoding="utf-8")
 
 
+def _message_obj(update: dict[str, Any]) -> dict[str, Any]:
+    msg = update.get("message")
+    return msg if isinstance(msg, dict) else {}
+
+
 def _message_fields(update: dict[str, Any]) -> tuple[str, str, str, str]:
     """Extract from_id, text, chat_id, thread_id from an update object."""
-    msg = update.get("message")
-    if not isinstance(msg, dict):
+    msg = _message_obj(update)
+    if not msg:
         return "", "", "", ""
     from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
     chat_obj = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
     from_id = str(from_obj.get("id", "")) if from_obj else ""
-    # Text reassembly: plain text (caption not in shell parity).
     text = msg.get("text")
     text_s = str(text) if text is not None else ""
     chat_id = str(chat_obj.get("id", "")) if chat_obj else ""
@@ -670,6 +675,7 @@ def process_update(
     cfg: dict[str, Any],
     allowed_user_id: str,
     allowed_chat_id: str = "",
+    bot_token: str = "",
     now: int | None = None,
 ) -> list[str]:
     """Handle one Telegram update. Advances offset. May buffer (not flush).
@@ -685,9 +691,23 @@ def process_update(
         return []
 
     from_id, text, chat_id, thread_id = _message_fields(update)
+    msg = _message_obj(update)
     lines: list[str] = []
 
-    if not from_id or not text:
+    buffer_parts: list[str] = []
+    if msg and bot_token:
+        buffer_parts = buffer_parts_for_update(
+            msg,
+            bridge_dir=root,
+            token=bot_token,
+            update_id=uid,
+            chat_id=chat_id,
+            cfg=cfg,
+        )
+    elif text:
+        buffer_parts = [text]
+
+    if not from_id or not buffer_parts:
         write_offset(root, uid + 1)
         return lines
 
@@ -701,15 +721,15 @@ def process_update(
             write_offset(root, uid + 1)
             return lines
         multi = has_routing_config(cfg)
-        # Commit buffer BEFORE advancing offset (shell crash-safety).
-        append_message(
-            root,
-            text,
-            chat_id,
-            thread_id,
-            multi_chat=multi,
-            now=now,
-        )
+        for part in buffer_parts:
+            append_message(
+                root,
+                part,
+                chat_id,
+                thread_id,
+                multi_chat=multi,
+                now=now,
+            )
     # else: unrecognized sender — silently ignored (allowlist boundary).
 
     write_offset(root, uid + 1)
@@ -723,6 +743,7 @@ def process_result(
     cfg: dict[str, Any],
     allowed_user_id: str,
     allowed_chat_id: str = "",
+    bot_token: str = "",
     now: int | None = None,
 ) -> list[str]:
     """Process getUpdates result array. Returns immediate stdout lines."""
@@ -737,6 +758,7 @@ def process_result(
                 cfg=cfg,
                 allowed_user_id=allowed_user_id,
                 allowed_chat_id=allowed_chat_id,
+                bot_token=bot_token,
                 now=now,
             )
         )
@@ -843,6 +865,7 @@ def poll_once(
         cfg=cfg,
         allowed_user_id=allowed_user,
         allowed_chat_id=allowed_chat,
+        bot_token=token,
         now=now(),
     )
     _emit_lines(immediate, out_f, emit)

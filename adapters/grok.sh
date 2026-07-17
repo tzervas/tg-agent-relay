@@ -62,7 +62,13 @@ case "$LINE1" in
             RELAY_PROJECT="$(project_from_cwd "${CWD:-}")"
             [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
         fi
-        [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+        if [[ -n "$SUMMARY" ]]; then
+            _GROK_EV="$(printf '%s' "$PAYLOAD" | jq -r '.hookEventName // .hook_event_name // empty' 2>/dev/null)"
+            [[ -z "$_GROK_EV" || "$_GROK_EV" == "null" ]] && _GROK_EV="${GROK_HOOK_EVENT:-}"
+            export RELAY_HOOK_EVENT="$_GROK_EV"
+            [[ -n "$CWD" && -d "$CWD" ]] && export RELAY_CWD="$CWD"
+            TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+        fi
         ;;
     SKIP:*)
         emit_metric "hook" "grok_skip" "${LINE1#SKIP:}"

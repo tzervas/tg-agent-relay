@@ -527,9 +527,34 @@ while true; do
         CHAT_ID=$(printf '%s' "$UPDATE" | jq -r '.message.chat.id // empty' 2>/dev/null)
         THREAD_ID=$(printf '%s' "$UPDATE" | jq -r '.message.message_thread_id // empty' 2>/dev/null)
 
-        if [[ -z "$FROM_ID" || -z "$TEXT" ]]; then
-            # Nothing to buffer/emit (e.g. a non-text message) - still
-            # advance the offset so it's never redelivered.
+        # Inbound media + text parts (Python helper when available).
+        _INBOUND_PARTS=""
+        if [[ -f "$BRIDGE_DIR/lib/python.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$BRIDGE_DIR/lib/python.sh"
+            declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+            if relay_python -c "import tg_agent_relay.media_inbound" >/dev/null 2>&1; then
+                export BRIDGE_DIR
+                _INBOUND_PARTS="$(printf '%s' "$UPDATE" | relay_python -c "
+import json,sys,os
+from pathlib import Path
+from tg_agent_relay.media_inbound import buffer_parts_for_update
+u=json.load(sys.stdin)
+msg=u.get('message') or {}
+uid=int(u.get('update_id') or 0)
+chat=str((msg.get('chat') or {}).get('id') or '')
+bridge=Path(os.environ.get('BRIDGE_DIR','.'))
+token=os.environ.get('BOT_TOKEN','')
+parts=buffer_parts_for_update(msg, bridge_dir=bridge, token=token, update_id=uid, chat_id=chat, cfg={})
+print('\x1e'.join(parts), end='')
+" 2>/dev/null)" || _INBOUND_PARTS=""
+            fi
+        fi
+        if [[ -z "$_INBOUND_PARTS" && -n "$TEXT" ]]; then
+            _INBOUND_PARTS="$TEXT"
+        fi
+
+        if [[ -z "$FROM_ID" || -z "$_INBOUND_PARTS" ]]; then
             printf '%s\n' "$((UPDATE_ID + 1))" > "$OFFSET_FILE"
             continue
         fi
@@ -548,7 +573,9 @@ while true; do
             fi
             # Commit to the durable per-chat buffer BEFORE advancing offset.
             buffer_paths "$CHAT_ID" "$THREAD_ID"
-            printf '%s\x1e' "$TEXT" >> "$BUFFER_FILE"
+            while IFS= read -r -d $'\x1e' _part; do
+                [[ -n "$_part" ]] && printf '%s\x1e' "$_part" >> "$BUFFER_FILE"
+            done <<< "${_INBOUND_PARTS}"$'\x1e'
             date +%s > "$BUFFER_TS_FILE"
             printf '%s|%s\n' "$CHAT_ID" "$THREAD_ID" > "${BUFFER_FILE}.meta"
         fi
