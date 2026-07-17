@@ -1,5 +1,10 @@
 # TG Agent Relay
 
+<!-- FLEET-BADGES:BEGIN -->
+[![CI](https://github.com/tzervas/tg-agent-relay/actions/workflows/fleet-ci.yml/badge.svg?branch=main)](https://github.com/tzervas/tg-agent-relay/actions/workflows/fleet-ci.yml?query=branch%3Amain)
+[![Security](https://github.com/tzervas/tg-agent-relay/actions/workflows/fleet-security.yml/badge.svg?branch=main)](https://github.com/tzervas/tg-agent-relay/actions/workflows/fleet-security.yml?query=branch%3Amain)
+<!-- FLEET-BADGES:END -->
+
 **An agent/harness-agnostic Telegram relay:** full-output, paginated status
 pings go out to your phone for free; reassembled messages and commands come
 back in; and a set of built-in dashboard/stats commands answer straight from
