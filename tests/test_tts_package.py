@@ -293,5 +293,6 @@ check("plan_voice_send: multi-page upgrades to full", VP.spoken_mode == "full", 
 print(f"\n  tts package: {PASS} passed, {FAIL} failed")
 if FAIL:
     print("  FAILED:", ", ".join(FAILED))
+if __name__ == "__main__":
     sys.exit(1)
-sys.exit(0)
+    sys.exit(0)
