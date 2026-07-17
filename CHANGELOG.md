@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0] — 2026-07-16
+
+### Added
+
+- **Forum threads (P13)** — `tg_agent_relay/threads.py`: topic title builders,
+  outbound resolve order, mockable `createForumTopic`, overlay bind helpers.
+- **`/thread` commands** — `handlers/thread.sh` + `[commands.thread]` example:
+  `list`, `here`, `bind`, `ensure`.
+- **Outbound thread routing** — `relay-notify.sh` sets `RELAY_CHAT_ID` /
+  `RELAY_THREAD_ID` from `RELAY_SESSION`, `RELAY_PLATFORM`, `RELAY_WORKSTREAM`,
+  `RELAY_AGENT_HANDLE` with optional `🧵` title stamp.
+- **Docs** — `docs/THREADS.md` and ROUTING.md cross-link.
+
 ## [0.9.0] — 2026-07-16
 
 ### Added

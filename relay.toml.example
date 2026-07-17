@@ -784,6 +784,24 @@
 # # Writes gitignored .chats.d/bindings.json (merged over [[chats]]).
 # # See docs/ROUTING.md — forum topics OR one group per repo.
 #
+# [commands.thread]
+# keyword = "thread"
+# slash = "/thread"
+# mode = "relay"
+# handler = "handlers/thread.sh"
+# # Forum session/repo/workstream topics: list · here · bind · ensure
+# # See docs/THREADS.md (requires [threads] enabled).
+#
+# [threads]
+# enabled = false
+# auto_create = true
+# max_creates_per_hour = 30
+# [threads.platform_chats]
+# grok = -1001111111111
+# claude = -1002222222222
+# codex = -1003333333333
+# self_hosted = -1004444444444
+#
 # [commands.config]
 # keyword = "config"
 # slash = "/config"
