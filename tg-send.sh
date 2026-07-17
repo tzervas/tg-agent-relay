@@ -188,6 +188,9 @@ fi
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/relay-common.sh" ]] && source "$BRIDGE_DIR/lib/relay-common.sh"
 declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }  # lib missing -> no-op shim
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 
 # Fallback notice once emit_metric is available (QUIET=1 → metrics only).
 if [[ -n "${_PY_SEND_FALLBACK_KIND:-}" ]]; then
@@ -390,32 +393,41 @@ fi
 TTS_MAX_CHARS="$(cfg_get '.tts.max_chars' 600)"
 [[ "$TTS_MAX_CHARS" =~ ^[0-9]+$ ]] || TTS_MAX_CHARS=600
 
+EFFECTIVE_SPOKEN="$SPOKEN_MODE"
+if [[ "$SPOKEN_MODE" == "short" ]]; then
+    if (( TOTAL > 1 )) || (( ${#MSG} > SPOKEN_MAX_CHARS * 2 )); then
+        EFFECTIVE_SPOKEN="full"
+    elif command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+        _PLAN_HIT="$(printf '%s' "$MSG" | relay_python -c "
+from tg_agent_relay.comms_format import MessageKind, classify_message
+import sys
+print('1' if classify_message(sys.stdin.read()) == MessageKind.PLAN else '0')
+" 2>/dev/null)" || _PLAN_HIT="0"
+        [[ "$_PLAN_HIT" == "1" ]] && EFFECTIVE_SPOKEN="full"
+    fi
+fi
+
 TTS_ELIGIBLE=0
 TTS_VOICE_TEXT="$MSG"
 if [[ "$TTS_MODE" != "off" ]]; then
-    if (( IS_HOOK == 1 && HOOK_VOICE == 1 )); then
-        # Hook ping: eligible regardless of pagination/length - never
-        # silently skip voice just because the ping was long. Spoken
-        # coverage is then short-truncate or full-chunk (spoken_mode).
-        if (( ${#MSG} > 0 )); then
-            TTS_ELIGIBLE=1
-            TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
-            if [[ "$SPOKEN_MODE" == "short" ]]; then
-                _pre_len=${#TTS_VOICE_TEXT}
-                TTS_VOICE_TEXT="$(_tts_truncate_words "$TTS_VOICE_TEXT" "$SPOKEN_MAX_CHARS")"
-                if (( _pre_len > ${#TTS_VOICE_TEXT} )); then
-                    emit_metric "tts" "hook_voice_truncated" "spoken_chars=${_pre_len} max=${SPOKEN_MAX_CHARS} mode=short"
-                fi
+    if (( IS_HOOK == 1 && HOOK_VOICE == 1 )) && (( ${#MSG} > 0 )); then
+        TTS_ELIGIBLE=1
+        TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+        if [[ "$EFFECTIVE_SPOKEN" == "short" ]]; then
+            _pre_len=${#TTS_VOICE_TEXT}
+            TTS_VOICE_TEXT="$(_tts_truncate_words "$TTS_VOICE_TEXT" "$SPOKEN_MAX_CHARS")"
+            if (( _pre_len > ${#TTS_VOICE_TEXT} )); then
+                emit_metric "tts" "hook_voice_truncated" "spoken_chars=${_pre_len} max=${SPOKEN_MAX_CHARS} mode=short"
             fi
         fi
-    elif [[ "$TOTAL" -eq 1 ]]; then
-        # Direct/manual send (or a hook with hook_voice disabled): the
-        # original, unrelaxed eligibility rule - single page, within
-        # max_chars (checked on the raw text). The SPOKEN text is still the
-        # stripped prose (v0.5.2) - direct sends read clean too.
-        if (( ${#MSG} <= TTS_MAX_CHARS )); then
-            TTS_ELIGIBLE=1
-            TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+    elif [[ "$EFFECTIVE_SPOKEN" == "full" ]] && (( ${#MSG} > 0 )); then
+        TTS_ELIGIBLE=1
+        TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+    elif [[ "$TOTAL" -eq 1 ]] && (( ${#MSG} <= TTS_MAX_CHARS )); then
+        TTS_ELIGIBLE=1
+        TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
+        if [[ "$EFFECTIVE_SPOKEN" == "short" ]]; then
+            TTS_VOICE_TEXT="$(_tts_truncate_words "$TTS_VOICE_TEXT" "$SPOKEN_MAX_CHARS")"
         fi
     fi
 fi
@@ -429,7 +441,7 @@ fi
 VOICE_SENT=0
 if [[ "$TTS_MODE" != "off" && "$TTS_ELIGIBLE" -eq 1 ]]; then
     _TTS_CHUNK_MAX=0
-    if (( IS_HOOK == 1 && HOOK_VOICE == 1 )) && [[ "$SPOKEN_MODE" == "full" ]]; then
+    if [[ "$EFFECTIVE_SPOKEN" == "full" ]]; then
         _TTS_CHUNK_MAX="$CLIP_MAX_CHARS"
     fi
     declare -a TTS_VOICE_CHUNKS
@@ -459,6 +471,8 @@ _tg_post_send_message() {
     [[ -n "$parse_mode" ]] && curl_args+=(--data-urlencode "parse_mode=${parse_mode}")
     # Forum-topic isolation: optional message_thread_id (multi-backend rooms).
     [[ -n "${SEND_THREAD_ID:-}" ]] && curl_args+=(--data-urlencode "message_thread_id=${SEND_THREAD_ID}")
+    [[ -n "${RELAY_REPLY_MARKUP_JSON:-}" && -n "${_TG_USE_REPLY_MARKUP:-}" ]] \
+        && curl_args+=(--data-urlencode "reply_markup=${RELAY_REPLY_MARKUP_JSON}")
     resp="$(curl "${curl_args[@]}" 2>/dev/null)"
     [[ "$resp" == *'"ok":true'* ]]
 }
@@ -502,6 +516,10 @@ if [[ "$IS_HOOK" -eq 1 || "$TTS_MODE" != "voice-only" || "$VOICE_SENT" -eq 0 ]];
             SEND_TEXT="$PLAIN_SEND_TEXT"
         fi
 
+        _TG_USE_REPLY_MARKUP=""
+        if (( IDX == 1 )) && [[ -n "${RELAY_REPLY_MARKUP_JSON:-}" ]]; then
+            _TG_USE_REPLY_MARKUP=1
+        fi
         if ! _tg_post_send_message "$SEND_TEXT" "$FMT_PARSE_MODE"; then
             if [[ -n "$FMT_PARSE_MODE" ]]; then
                 emit_metric "format" "send_fallback" "page=${IDX}/${TOTAL} formatted send failed, retrying as plain text"

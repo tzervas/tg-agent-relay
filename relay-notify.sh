@@ -52,12 +52,16 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BRIDGE_DIR
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-config.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-common.sh"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
@@ -166,6 +170,34 @@ if [[ -f "$BRIDGE_DIR/lib/comms_format.sh" ]]; then
     source "$BRIDGE_DIR/lib/comms_format.sh"
     if declare -f comms_enrich_message >/dev/null 2>&1; then
         MSG="$(comms_enrich_message "$MSG")"
+    fi
+fi
+
+# Benign goal-mode tool failures: suppress hook spam (v0.9.0).
+if [[ "${TG_SEND_SOURCE:-}" == "hook" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _GOAL_FILTERED="$(printf '%s' "$MSG" | relay_python -c "
+from tg_agent_relay.goal_events import apply_goal_noise_policy
+import sys
+t=sys.stdin.read()
+r=apply_goal_noise_policy(t, hook_event='${RELAY_HOOK_EVENT:-}', is_hook=True)
+print('' if r is None else r)
+" 2>/dev/null)" || _GOAL_FILTERED=""
+    [[ -z "$_GOAL_FILTERED" ]] && exit 0
+    MSG="$_GOAL_FILTERED"
+fi
+
+# PLAN messages: attach approve/reject inline keyboard on first send page.
+unset RELAY_REPLY_MARKUP_JSON
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _PLAN_MARKUP="$(printf '%s' "$MSG" | relay_python -c "
+from tg_agent_relay.plan_approve import maybe_reply_markup_for_body
+import os, sys
+body=sys.stdin.read()
+m=maybe_reply_markup_for_body(body, os.environ.get('BRIDGE_DIR', '.'))
+print(m or '')
+" 2>/dev/null)" || _PLAN_MARKUP=""
+    if [[ -n "$_PLAN_MARKUP" ]]; then
+        export RELAY_REPLY_MARKUP_JSON="$_PLAN_MARKUP"
     fi
 fi
 

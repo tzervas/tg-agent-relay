@@ -216,6 +216,22 @@ Your agent's `Monitor`/hook logic is what actually *acts* on that tag —
 the relay only recognizes and labels the command, it doesn't know what
 "status" means to your agent.
 
+### Plan approval (mobile)
+
+When an outbound hook message classifies as **PLAN** (see
+`tg_agent_relay/comms_format.py`), the relay stores it under
+`.plans/<id>.json` and attaches an inline keyboard: **Approve** /
+**Reject** / **Later**.
+
+- Tap **Approve** or **Reject** → poll emits
+  `[telegram:plan] status=approved id=<id>` (or `rejected`) on stdout for
+  your agent/backend.
+- Text replies **`approve`**, **`lgtm`**, **`ship it`**, **`reject`**, etc.
+  apply to the latest pending plan the same way (allowlisted user only).
+
+No live Telegram is required for unit tests; storage is local JSON under
+the bridge directory.
+
 **Relay-handled** (the relay answers directly — e.g. a custom local
 script that doesn't need the model at all):
 

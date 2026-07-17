@@ -134,11 +134,24 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
     if [[ -n "${BOT_TOKEN:-}" && -n "${SEND_CHAT:-}" ]]; then
         CAPTION="Relay Dashboard — last ${WINDOW_HOURS}h"
         [[ -n "$TEST_MARK" ]] && CAPTION="🔧 dashboard test: ${CAPTION}"
-        curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${SEND_CHAT}" \
-            -F "photo=@${OUT_PNG}" \
-            --form-string "caption=${CAPTION}" \
-            >/dev/null 2>&1
+        USAGE_KB=""
+        if [[ -n "$USAGE_JSON_ARG" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+            USAGE_KB="$(relay_python -c "from tg_agent_relay.plan_approve import usage_keyboard_json; print(usage_keyboard_json())" 2>/dev/null)" || USAGE_KB=""
+        fi
+        if [[ -n "$USAGE_KB" ]]; then
+            curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                -F "chat_id=${SEND_CHAT}" \
+                -F "photo=@${OUT_PNG}" \
+                --form-string "caption=${CAPTION}" \
+                --form-string "reply_markup=${USAGE_KB}" \
+                >/dev/null 2>&1
+        else
+            curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                -F "chat_id=${SEND_CHAT}" \
+                -F "photo=@${OUT_PNG}" \
+                --form-string "caption=${CAPTION}" \
+                >/dev/null 2>&1
+        fi
         emit_metric "dashboard" "render" "image"
     fi
     # else: no token yet - silent no-op (setup not complete), matching the

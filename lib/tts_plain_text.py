@@ -88,8 +88,8 @@ _RE_EMOJI = re.compile(
     "\U0001fa70-\U0001faff"  # symbols & pictographs extended-A
     "\U0001f000-\U0001f02f"  # mahjong
     "\U0001f0a0-\U0001f0ff"  # playing cards
-    "\U00002702-\U000027b0"  # dingbats
-    "\U000027b1-\U000027bf"
+    "\U00002700-\U000027bf"  # dingbats (incl. ✂️ ✨)
+    "\U0001f3c0-\U0001f3ff"  # sports / activity (incl. 🏁)
     "\U00002600-\U000026ff"  # misc symbols (☀ ⚠ ⚡ ✅ …)
     "\U0000231a-\U0000231b"  # watch / hourglass
     "\U000023e9-\U000023f3"  # media controls

@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.0] — 2026-07-16
+
+### Added
+
+- **Goal noise handling** — benign `update_goal` / inactive-goal tool failures
+  are suppressed or softened on hook sends (`tg_agent_relay/goal_events.py`,
+  `provider_hook.py`, adapters, `relay-notify.sh`).
+- **Plan approve via Telegram** — PLAN outbound messages attach Approve /
+  Reject / Later keyboards; text and callback replies emit
+  `[telegram:plan] status=…` (`tg_agent_relay/plan_approve.py`, `poll.py`).
+- **Usage chart buttons** — usage PNGs include 24h / 7d / 30d / Refresh
+  inline keys (`handlers/usage.sh`, `handlers/dashboard.sh`).
+
+### Changed
+
+- **TTS** — broader emoji stripping (incl. 🏁); auto `spoken_mode=full` for
+  PLAN / multi-page / very long bodies with multi-clip voice for direct sends
+  too (`lib/tts_plain_text.py`, `tg_agent_relay/tts.py`, `tg-send.sh`,
+  `send.py`).
+- **Formatting** — clearer PR / PLAN / GOAL headers, PR URLs on their own line
+  (`tg_agent_relay/comms_format.py`).
+- **Outbound** — optional `RELAY_REPLY_MARKUP_JSON` on first `sendMessage` /
+  `sendPhoto` page (`tg-send.sh`, `send.py`).
+
 ## [0.8.1] — 2026-07-16
 
 ### Fixed

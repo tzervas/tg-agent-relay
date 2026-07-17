@@ -1,4 +1,22 @@
+## v0.9.0 (2026-07-16)
+
 ### Highlights
+
+- **Goal hook noise** — inactive-goal `update_goal` failures no longer spam Telegram.
+- **Plan approve** — PLAN messages ship inline Approve / Reject; replies route as `[telegram:plan]`.
+- **Voice** — PLAN / long / multi-page messages auto-use full spoken mode + multi-clip TTS.
+- **Usage UX** — usage chart PNGs include 24h / 7d / 30d / Refresh buttons.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.9.0
+bash scripts/deploy-local.sh --ref v0.9.0
+```
+
+---
+
+### Highlights (v0.6.1)
 
 - **Python send/poll is the default** — `tg-send.sh` / `tg-poll.sh` exec the package when import works; shell remains recovery and opt-out (`RELAY_PYTHON_SEND=0` / `RELAY_PYTHON_POLL=0`). See `docs/DECISIONS.md` (D1).
 - **Shell recovery** — clear first-failure notes, sticky re-probe window, secret redaction, validated `RELAY_PYTHON`, bounded import probe (`lib/python_fallback.sh`).

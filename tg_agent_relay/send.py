@@ -29,7 +29,7 @@ from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.format_api import format_message
 from tg_agent_relay.metrics import emit_metric
 from tg_agent_relay.protocols import SendRequest
-from tg_agent_relay.tts import strip_formatting
+from tg_agent_relay.tts import plan_voice_send, prepare_spoken, strip_formatting
 
 # ---------------------------------------------------------------------------
 # .env
@@ -270,6 +270,7 @@ def send_message(
     *,
     parse_mode: str = "",
     thread_id: str = "",
+    reply_markup: str = "",
     timeout: float = 10.0,
 ) -> bool:
     """POST sendMessage. Returns True if ok:true. No raise on network fail."""
@@ -278,6 +279,8 @@ def send_message(
         data["parse_mode"] = parse_mode
     if thread_id:
         data["message_thread_id"] = thread_id
+    if reply_markup:
+        data["reply_markup"] = reply_markup
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         _api_url(token, "sendMessage"),
@@ -299,6 +302,7 @@ def send_photo(
     *,
     caption: str = "",
     thread_id: str = "",
+    reply_markup: str = "",
     timeout: float = 30.0,
 ) -> bool:
     """POST sendPhoto (multipart). Returns True if ok:true."""
@@ -310,6 +314,7 @@ def send_photo(
         file_path=photo_path,
         caption=caption,
         thread_id=thread_id,
+        reply_markup=reply_markup,
         timeout=timeout,
     )
 
@@ -385,6 +390,7 @@ def _send_multipart(
     file_path: Path | str,
     caption: str = "",
     thread_id: str = "",
+    reply_markup: str = "",
     timeout: float = 30.0,
 ) -> bool:
     path = Path(file_path)
@@ -411,6 +417,8 @@ def _send_multipart(
         add_field("caption", caption)
     if thread_id:
         add_field("message_thread_id", str(thread_id))
+    if reply_markup:
+        add_field("reply_markup", reply_markup)
     parts.append(
         (
             f"--{boundary}\r\n"
@@ -482,6 +490,7 @@ def send_text_never_silent(
     plain_text: str,
     *,
     thread_id: str = "",
+    reply_markup: str = "",
     bridge_dir: Path | str | None = None,
     page_label: str = "",
 ) -> bool:
@@ -492,6 +501,7 @@ def send_text_never_silent(
         send_text,
         parse_mode=parse_mode,
         thread_id=thread_id,
+        reply_markup=reply_markup,
     )
     if ok:
         return True
@@ -868,6 +878,7 @@ class EnvSender:
 
             # Hook pings always send text; voice-only only skips text when voice succeeded.
             send_text_pages = is_hook or tts_mode != "voice-only" or not voice_sent
+            reply_markup = os.environ.get("RELAY_REPLY_MARKUP_JSON") or ""
             if send_text_pages:
                 payloads = build_page_payloads(
                     pages,
@@ -876,6 +887,7 @@ class EnvSender:
                 )
                 delay = self._page_delay()
                 for i, (send_text, parse_mode, plain) in enumerate(payloads, start=1):
+                    markup = reply_markup if i == 1 and reply_markup else ""
                     send_text_never_silent(
                         token,
                         chat,
@@ -883,6 +895,7 @@ class EnvSender:
                         parse_mode,
                         plain,
                         thread_id=thread,
+                        reply_markup=markup,
                         bridge_dir=self.bridge_dir,
                         page_label=f"{i}/{total}",
                     )
@@ -937,42 +950,50 @@ class EnvSender:
             return False
 
         hook_voice = _as_bool(cfg_get(self.config, "tts.hook_voice", True), True)
-        spoken_mode = str(cfg_get(self.config, "tts.spoken_mode", "short") or "short").lower()
-        spoken_mode = "full" if spoken_mode in ("full", "chunk", "complete") else "short"
+        spoken_mode_cfg = str(cfg_get(self.config, "tts.spoken_mode", "short") or "short")
         spoken_max = _as_int(cfg_get(self.config, "tts.spoken_max_chars", 600), 600)
         clip_max = cfg_get(self.config, "tts.clip_max_chars", None)
         if clip_max in ("", None):
             clip_max = cfg_get(self.config, "tts.hook_voice_max_chars", 1500)
         clip_max_i = _as_int(clip_max, 1500)
         tts_max = _as_int(cfg_get(self.config, "tts.max_chars", 600), 600)
+        hook_event = os.environ.get("RELAY_HOOK_EVENT") or ""
 
-        eligible = False
-        voice_text = msg
-        if is_hook and hook_voice:
-            if msg:
-                eligible = True
-                voice_text = spoken_transcript(msg, config=self.config)
-                if spoken_mode == "short":
-                    pre = len(voice_text)
-                    voice_text = truncate_words(voice_text, spoken_max)
-                    if pre > len(voice_text):
-                        emit_metric(
-                            "tts",
-                            "hook_voice_truncated",
-                            f"spoken_chars={pre} max={spoken_max} mode=short",
-                            bridge_dir=self.bridge_dir,
-                        )
-        elif total_pages == 1 and len(msg) <= tts_max:
-            eligible = True
-            voice_text = spoken_transcript(msg, config=self.config)
-
-        if not eligible or not voice_text:
+        vp = plan_voice_send(
+            msg,
+            tts_mode=tts_mode,
+            is_hook=is_hook,
+            hook_voice=hook_voice,
+            total_pages=total_pages,
+            tts_max_chars=tts_max,
+            spoken_mode_cfg=spoken_mode_cfg,
+            spoken_max_chars=spoken_max,
+            clip_max_chars=clip_max_i,
+            hook_event=hook_event or None,
+        )
+        if not vp.eligible or not msg:
             return False
 
-        chunk_max = 0
-        if is_hook and hook_voice and spoken_mode == "full":
-            chunk_max = clip_max_i
-        chunks = chunk_text(voice_text, chunk_max)
+        spoken_mode = vp.spoken_mode
+        clips = prepare_spoken(
+            msg,
+            spoken_mode=spoken_mode,
+            spoken_max_chars=spoken_max,
+            clip_max_chars=clip_max_i,
+            config=self.config,
+        )
+        voice_text = " ".join(clips.clips)
+        if not voice_text:
+            return False
+        if clips.truncated:
+            emit_metric(
+                "tts",
+                "hook_voice_truncated",
+                f"spoken_chars={clips.spoken_chars} max={spoken_max} mode=short",
+                bridge_dir=self.bridge_dir,
+            )
+        chunk_max = vp.chunk_max
+        chunks = list(clips.clips)
         if len(chunks) > 1:
             emit_metric(
                 "tts",

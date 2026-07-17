@@ -275,6 +275,21 @@ check(
     isinstance(PS2.as_list(), list) and PS2.as_list() == list(PS2.clips),
 )
 
+LONG_PLAN = "WAVE_PLAN " + ("step " * 400)
+VP = tts.plan_voice_send(
+    LONG_PLAN,
+    tts_mode="text+voice",
+    is_hook=False,
+    hook_voice=True,
+    total_pages=3,
+    tts_max_chars=600,
+    spoken_mode_cfg="short",
+    spoken_max_chars=600,
+    clip_max_chars=1500,
+)
+check("plan_voice_send: multi-page direct eligible", VP.eligible is True, repr(VP))
+check("plan_voice_send: multi-page upgrades to full", VP.spoken_mode == "full", repr(VP))
+
 print(f"\n  tts package: {PASS} passed, {FAIL} failed")
 if FAIL:
     print("  FAILED:", ", ".join(FAILED))

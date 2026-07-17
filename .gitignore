@@ -76,6 +76,7 @@ voices/*.part
 # The feature is opt-in (default `[usage].enabled = false`) and writes
 # nothing until explicitly turned on.
 .usage/
+.plans/
 *.usage.json
 usage-cache/*
 # ...except committed, SYNTHETIC test fixtures (fabricated project/model
