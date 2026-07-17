@@ -71,6 +71,10 @@ switching Telegram rooms.
 2. Create one topic per repo.
 3. In each topic: `/project bind mycelium` (records chat_id + thread_id).
 
+For **orchestrator sessions** and optional per-platform supergroups, use
+[THREADS.md](THREADS.md): flat topic titles encode `session · repo · workstream`,
+`/thread ensure`, and outbound `RELAY_SESSION` / `RELAY_PLATFORM` routing.
+
 **Pattern B — separate group per project:**
 
 1. Create a group per repo, add the bot.

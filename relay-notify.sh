@@ -205,6 +205,24 @@ MSG="$(cap_if_huge "$MSG" "$MAX_CHARS" "$PAGE_SIZE")"
 
 [[ -z "$MSG" ]] && exit 0
 
+# Forum thread outbound resolve (RELAY_SESSION / RELAY_PLATFORM / …) — P13.
+if [[ -z "$NOTIFY_CHAT_ID" || -z "$NOTIFY_THREAD_ID" ]] \
+    && [[ -n "${RELAY_SESSION:-}" || -n "${RELAY_PLATFORM:-}" || -n "${RELAY_WORKSTREAM:-}" \
+        || -n "${RELAY_AGENT_HANDLE:-}" ]] \
+    && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _THREAD_RES="$("${RELAY_PYTHON:-python3}" -m tg_agent_relay.threads resolve-outbound \
+        --bridge-dir "$BRIDGE_DIR" 2>/dev/null)" || _THREAD_RES=""
+    if [[ -n "$_THREAD_RES" && "${_THREAD_RES##*|}" != "none" ]]; then
+        IFS='|' read -r _tcid _ttid _ttitle _tkind <<< "$_THREAD_RES"
+        [[ -z "$NOTIFY_CHAT_ID" && -n "$_tcid" ]] && NOTIFY_CHAT_ID="$_tcid"
+        [[ -z "$NOTIFY_THREAD_ID" && -n "$_ttid" ]] && NOTIFY_THREAD_ID="$_ttid"
+        if [[ -n "$_ttitle" && "${RELAY_THREAD_STAMP:-1}" != "0" && "$MSG" != *"🧵"* ]]; then
+            MSG="🧵 ${_ttitle}
+${MSG}"
+        fi
+    fi
+fi
+
 # Multi-backend outbound tag + chat targeting — only when [backends]/[[chats]]
 # routing is configured. Without it, behavior stays byte-identical (no tag).
 # shellcheck disable=SC1091
