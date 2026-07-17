@@ -307,7 +307,7 @@ with ANY agent using ANY harness, maximum portability + usability.
 | Universal provider extensions | [#19](https://github.com/tzervas/tg-agent-relay/issues/19) | **Closed** (+ OpenAI/ADK later) |
 | Product polish | [#20](https://github.com/tzervas/tg-agent-relay/issues/20) | **Closed** |
 | Quality / CI / swarm packaging | [#21](https://github.com/tzervas/tg-agent-relay/issues/21) | **Closed** (local-ci primary) |
-| Optional Rust hotspots | [#22](https://github.com/tzervas/tg-agent-relay/issues/22) | Open · child [#41](https://github.com/tzervas/tg-agent-relay/issues/41) |
+| Optional Rust hotspots | [#22](https://github.com/tzervas/tg-agent-relay/issues/22) | Open · [**tgar-rs**](https://github.com/tzervas/tgar-rs) strangler · [docs/TGAR_RS.md](docs/TGAR_RS.md) |
 
 ### Landed (not re-issued)
 
