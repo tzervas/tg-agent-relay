@@ -137,12 +137,42 @@ def strip_prefix(cfg: dict[str, Any], text: str) -> tuple[str, str, str] | None:
     return best[1], best[2], best[3]
 
 
+def _try_agent_handle_route(cfg: dict[str, Any], text: str) -> tuple[str, str, str, str] | None:
+    """Route @orchestrator aliases or registered @repo-branch session handles."""
+    try:
+        from tg_agent_relay.agent_handle import (
+            backend_id_from_handle,
+            orchestrator_backend_id,
+            parse_leading_handle,
+            strip_orchestrator_prefix,
+        )
+    except ImportError:
+        return None
+
+    orch = strip_orchestrator_prefix(text)
+    if orch:
+        alias, stripped = orch
+        ob = orchestrator_backend_id(cfg, alias)
+        if ob:
+            project = _backend_cfg_get(cfg, ob, "project", "")
+            return ob, project, stripped, "orchestrator"
+
+    lead = parse_leading_handle(text)
+    if lead:
+        _handle, stripped = lead
+        hid = backend_id_from_handle(_handle)
+        if hid in _backends(cfg):
+            project = _backend_cfg_get(cfg, hid, "project", "")
+            return hid, project, stripped, "prefix"
+    return None
+
+
 def resolve(
     cfg: dict[str, Any], chat_id: str, thread_id: str, text: str
 ) -> tuple[str, str, str, str]:
     """Return (backend, project, stripped_text, match_kind).
 
-    match_kind ∈ chat | prefix | default | none | legacy
+    match_kind ∈ chat | prefix | default | orchestrator | none | legacy
     Pipe format: backend|project|text|match_kind
     """
     if not has_routing_config(cfg):
@@ -175,6 +205,10 @@ def resolve(
             project = _backend_cfg_get(cfg, backend, "project", "")
         return backend, project, stripped, "prefix"
 
+    handle_hit = _try_agent_handle_route(cfg, text)
+    if handle_hit:
+        return handle_hit
+
     default = str(_routing(cfg).get("default_backend") or "")
     if default:
         project = _backend_cfg_get(cfg, default, "project", "")
@@ -182,6 +216,17 @@ def resolve(
 
     require = _routing(cfg).get("require_prefix")
     if require in (True, "true", "1"):
+        ob = str(_routing(cfg).get("orchestrator_backend") or "").strip()
+        if not ob:
+            try:
+                from tg_agent_relay.agent_handle import orchestrator_backend_id
+
+                ob = orchestrator_backend_id(cfg)
+            except ImportError:
+                ob = ""
+        if ob:
+            project = _backend_cfg_get(cfg, ob, "project", "")
+            return ob, project, text, "orchestrator"
         return "", "", text, "none"
     return "", "", text, "legacy"
 
