@@ -246,6 +246,20 @@ handlers) rather than `handlers/example-echo.sh` (a test-only fixture
 used by `tests/run-tests.sh` to prove the dispatch seam works, not
 registered in `relay.toml.example`).
 
+## Inbound media (security)
+
+Photo, voice, video, and allowed audio/image documents from
+**`ALLOWED_USER_ID` only** are downloaded via Telegram `getFile` (bot token
+never logged or emitted on the agent stream). Files land under
+`<bridge>/.media/<chat>/<update_id>/` with directory mode **0700** and file
+mode **0600**. Size caps and MIME allowlists are configurable via
+`relay.toml` `[media]` (`max_image_bytes`, `max_video_bytes`,
+`max_audio_bytes`). The poll loop emits one structured line per attachment:
+
+`[telegram:media] kind=photo path=/abs/... mime=image/jpeg size=N caption=...`
+
+Never commit `.env` (bot token) or `.media/` contents.
+
 ## See also
 
 Commands are the inbound (phone → agent) side. For the outbound side —

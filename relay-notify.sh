@@ -160,6 +160,15 @@ else
     fi
 fi
 
+# Comms templates + agent stamp (hooks / PR / plan / stop — no model calls).
+if [[ -f "$BRIDGE_DIR/lib/comms_format.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$BRIDGE_DIR/lib/comms_format.sh"
+    if declare -f comms_enrich_message >/dev/null 2>&1; then
+        MSG="$(comms_enrich_message "$MSG")"
+    fi
+fi
+
 MSG="$(cap_if_huge "$MSG" "$MAX_CHARS" "$PAGE_SIZE")"
 
 [[ -z "$MSG" ]] && exit 0
