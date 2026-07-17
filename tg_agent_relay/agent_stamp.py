@@ -21,9 +21,12 @@ class StampInfo:
     branch_url: str
     pr_url: str
     pr_state: str
+    handle: str = ""
 
     def lines(self) -> list[str]:
         out: list[str] = []
+        if self.handle:
+            out.append(f"🤖 handle={self.handle}")
         if self.repo or self.branch:
             out.append(f"🏷 repo={self.repo} branch={self.branch}")
         if self.branch_url:
@@ -157,12 +160,23 @@ def build_stamp_info(
     if force_merged and pr_url:
         pr_state = "merged"
 
+    handle = ""
+    try:
+        from tg_agent_relay.agent_handle import build_handle_from_env
+
+        handle = build_handle_from_env(e)
+    except ImportError:
+        handle = (e.get("RELAY_AGENT_HANDLE") or "").strip()
+        if handle and not handle.startswith("@"):
+            handle = f"@{handle}"
+
     return StampInfo(
         repo=repo,
         branch=branch,
         branch_url=branch_url,
         pr_url=pr_url,
         pr_state=pr_state,
+        handle=handle,
     )
 
 

@@ -71,10 +71,7 @@ def parse_leading_handle(text: str) -> tuple[str, str] | None:
     token = m.group(0)
     hid = m.group(1)
     at = f"@{hid}"
-    if token.endswith(":"):
-        rest = raw[m.end() :].lstrip()
-    else:
-        rest = raw[len(token) :].lstrip()
+    rest = raw[m.end() :].lstrip() if token.endswith(":") else raw[len(token) :].lstrip()
     return at, rest
 
 
@@ -86,10 +83,7 @@ def strip_orchestrator_prefix(text: str) -> tuple[str, str] | None:
         return None
     alias = m.group("alias").lower()
     token = m.group(0)
-    if token.endswith(":"):
-        rest = raw[m.end() :].lstrip()
-    else:
-        rest = raw[len(token) :].lstrip()
+    rest = raw[m.end() :].lstrip() if token.endswith(":") else raw[len(token) :].lstrip()
     return alias, rest
 
 
