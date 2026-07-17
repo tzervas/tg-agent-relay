@@ -456,6 +456,7 @@ if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1;
     [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
 fi
 if [[ -n "$SUMMARY" ]]; then
+    # shellcheck disable=SC1091
     [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
     _CC_TOOL="$(pf '.tool_name // "tool"')"

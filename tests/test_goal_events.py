@@ -25,7 +25,12 @@ def test_post_tool_failure_skips() -> None:
         )
         == "skip"
     )
-    assert filter_hook_summary("⚠️ update_goal failed: Goal is not Active", hook_event="PostToolUseFailure") is None
+    assert (
+        filter_hook_summary(
+            "⚠️ update_goal failed: Goal is not Active", hook_event="PostToolUseFailure"
+        )
+        is None
+    )
 
 
 def test_apply_soft_on_generic() -> None:

@@ -146,12 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from tg_agent_relay.goal_events import filter_hook_summary
 
-        tool = (
-            payload.get("tool_name")
-            or payload.get("toolName")
-            or payload.get("tool")
-            or ""
-        )
+        tool = payload.get("tool_name") or payload.get("toolName") or payload.get("tool") or ""
         summary = filter_hook_summary(
             summary,
             tool_name=str(tool),

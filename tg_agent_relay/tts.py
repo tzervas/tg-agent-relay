@@ -45,17 +45,17 @@ __all__ = [
     "DEFAULT_LINK_REF",
     "DEFAULT_SPOKEN_MAX_CHARS",
     "SpokenClips",
+    "VoicePlan",
     "chunk_text",
     "collapse_adjacent_refs",
+    "effective_spoken_mode",
     "normalize_spoken_mode",
+    "plan_voice_send",
     "prepare_spoken",
     "prepare_spoken_from_config",
     "strip_emoji",
     "strip_formatting",
     "truncate_words",
-    "VoicePlan",
-    "effective_spoken_mode",
-    "plan_voice_send",
 ]
 
 
@@ -355,7 +355,7 @@ def effective_spoken_mode(
         pass
     try:
         sm = int(spoken_max_chars)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:
         sm = DEFAULT_SPOKEN_MAX_CHARS
     if sm > 0 and len(text or "") > sm * 2:
         return "full"
@@ -388,7 +388,7 @@ def plan_voice_send(
     )
     try:
         clip_i = int(clip_max_chars)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _exc:
         clip_i = DEFAULT_CLIP_MAX_CHARS
     chunk_max = clip_i if mode == "full" else 0
     if is_hook and hook_voice and msg:

@@ -17,4 +17,4 @@ Shell scripts call into this package via `lib/python.sh` / entry points.
 
 from __future__ import annotations
 
-__version__ = "0.6.2.dev0"
+__version__ = "0.9.0"

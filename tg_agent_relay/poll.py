@@ -34,6 +34,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
+from tg_agent_relay.agent_handle import build_handle_from_env, parse_leading_handle
 from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.media_inbound import buffer_parts_for_update
 from tg_agent_relay.metrics import emit_metric
@@ -167,6 +168,12 @@ def resolve_command_match(cfg: dict[str, Any], text: str) -> tuple[str, str]:
             name2 = classify_command(cfg, stripped)
             if name2:
                 return name2, stripped
+        lead = parse_leading_handle(text)
+        if lead:
+            _, stripped = lead
+            name3 = classify_command(cfg, stripped)
+            if name3:
+                return name3, stripped
     return "", ""
 
 
@@ -434,6 +441,11 @@ def deliver_to_backend(
         env["RELAY_TEXT"] = text
         env["RELAY_BACKEND"] = backend
         env["RELAY_PROJECT"] = project
+        agent_handle = build_handle_from_env(env)
+        if not agent_handle and backend:
+            agent_handle = f"@{backend}"
+        if agent_handle:
+            env["RELAY_AGENT_HANDLE"] = agent_handle
         env["RELAY_CHAT_ID"] = chat_id
         env["RELAY_THREAD_ID"] = thread_id
         env["RELAY_CWD"] = cwd
@@ -777,19 +789,22 @@ def process_update(
     cb_from, cb_data, cb_chat, cb_thread, _cb_id = _callback_fields(update)
     if cb_from and cb_data:
         write_offset(root, uid + 1)
-        if allowed_user_id and cb_from == str(allowed_user_id):
-            if chat_is_accepted(cfg, cb_chat, allowed_chat_id=allowed_chat_id):
-                lines.extend(
-                    _plan_or_usage_lines(
-                        root,
-                        cfg,
-                        cb_data,
-                        allowed_user_id=allowed_user_id,
-                        from_id=cb_from,
-                        chat_id=cb_chat,
-                        thread_id=cb_thread,
-                    )
+        if (
+            allowed_user_id
+            and cb_from == str(allowed_user_id)
+            and chat_is_accepted(cfg, cb_chat, allowed_chat_id=allowed_chat_id)
+        ):
+            lines.extend(
+                _plan_or_usage_lines(
+                    root,
+                    cfg,
+                    cb_data,
+                    allowed_user_id=allowed_user_id,
+                    from_id=cb_from,
+                    chat_id=cb_chat,
+                    thread_id=cb_thread,
                 )
+            )
         return lines
 
     from_id, text, chat_id, thread_id = _message_fields(update)

@@ -74,7 +74,7 @@ def load_plan(bridge_dir: Path | str, plan_id: str) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as _exc:
         return None
     return data if isinstance(data, dict) else None
 
@@ -87,7 +87,7 @@ def latest_pending_id(bridge_dir: Path | str) -> str:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             return str(data.get("id") or "")
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as _exc:
         pass
     return ""
 

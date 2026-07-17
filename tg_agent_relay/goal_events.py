@@ -41,9 +41,12 @@ def classify_goal_noise(
         return "pass"
 
     ev = (hook_event or "").strip()
-    if ev == "PostToolUseFailure" and is_update_goal_tool(tool_name):
-        if is_goal_noise_text(body) or not body:
-            return "skip"
+    if (
+        ev == "PostToolUseFailure"
+        and is_update_goal_tool(tool_name)
+        and (is_goal_noise_text(body) or not body)
+    ):
+        return "skip"
 
     if is_goal_noise_text(body):
         if ev in ("PostToolUseFailure", "Notification", "Stop", "StopFailure"):

@@ -420,7 +420,7 @@ if [[ "$TTS_MODE" != "off" ]]; then
                 emit_metric "tts" "hook_voice_truncated" "spoken_chars=${_pre_len} max=${SPOKEN_MAX_CHARS} mode=short"
             fi
         fi
-    elif [[ "$EFFECTIVE_SPOKEN" == "full" ]] && (( ${#MSG} > 0 )); then
+    elif [[ "$EFFECTIVE_SPOKEN" == "full" ]] && (( ${#MSG} > 0 )) && ! (( IS_HOOK == 1 && HOOK_VOICE == 0 )); then
         TTS_ELIGIBLE=1
         TTS_VOICE_TEXT="$(_tts_plain_text "$MSG")"
     elif [[ "$TOTAL" -eq 1 ]] && (( ${#MSG} <= TTS_MAX_CHARS )); then

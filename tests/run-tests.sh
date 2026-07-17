@@ -1103,12 +1103,12 @@ else
 fi
 rm -rf "$TTS6" "$STUB6" "$LOG6"
 
-# -- 7: pagination interaction - a multi-page message always skips TTS
-# -- entirely, even in voice-only mode (falls back to the paginated text).
+# -- 7: pagination interaction - multi-page direct sends upgrade to full
+# -- spoken mode and still get voice (v0.9.0), with all text pages.
 TTS7="$(setup_tts_bridge)"
 cat > "$TTS7/relay.toml" <<'TOML'
 [tts]
-mode = "voice-only"
+mode = "text+voice"
 engine = "auto"
 max_chars = 600
 TOML
@@ -1117,11 +1117,11 @@ LOG7="$(mktemp -u)"; write_stub_curl "$STUB7" "$LOG7"
 write_stub_espeak "$STUB7"; write_stub_ffmpeg "$STUB7"
 LONG_MSG="$(python3 -c "print('x' * 120)")"
 PATH="$STUB7" TG_PAGE_SIZE=50 "$TTS7/tg-send.sh" "$LONG_MSG" >/dev/null 2>&1
-SEND_COUNT="$(grep -c "sendMessage" "$LOG7" 2>/dev/null || echo 0)"
-if [[ "$SEND_COUNT" -ge 2 ]] && ! grep -q "sendVoice\|sendAudio" "$LOG7"; then
-    ok "tts: a paginated (multi-page) message always skips TTS - text-only"
+SEND_COUNT="$(grep -c "sendMessage" "$LOG7" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+if [[ "${SEND_COUNT:-0}" -ge 2 ]] && grep -qE "sendVoice|sendAudio" "$LOG7"; then
+    ok "tts: a paginated (multi-page) direct send gets long-form voice + all text pages"
 else
-    fail "tts: a paginated (multi-page) message always skips TTS" "pages=$SEND_COUNT log=$(cat "$LOG7" 2>/dev/null)"
+    fail "tts: a paginated (multi-page) direct send gets long-form voice + all text pages" "pages=${SEND_COUNT:-0} log=$(cat "$LOG7" 2>/dev/null)"
 fi
 rm -rf "$TTS7" "$STUB7" "$LOG7"
 
