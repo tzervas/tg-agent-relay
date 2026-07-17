@@ -49,6 +49,13 @@ declare -f emit_metric >/dev/null 2>&1 || emit_metric() { :; }
 
 TEXT="${1:-}"
 
+# Inbound window from poll callback: [telegram:cmd:usage] window=30d
+if [[ "$TEXT" =~ ^\[telegram:cmd:usage\][[:space:]]+window= ]]; then
+    WINDOW="${TEXT#*window=}"
+    WINDOW="${WINDOW%%[[:space:]]*}"
+    TEXT=""
+fi
+
 ENABLED="$(cfg_get '.usage.enabled' "false")"
 if [[ "$ENABLED" != "true" ]]; then
     MSG="📈 Token usage tracking is disabled.
@@ -198,11 +205,24 @@ if [[ "$MODE_LINE" == IMAGE:* && -s "$OUT_PNG" ]]; then
 
     if [[ -n "${BOT_TOKEN:-}" && -n "${SEND_CHAT:-}" ]]; then
         CAPTION="$PHOTO_CAPTION"
-        curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${SEND_CHAT}" \
-            -F "photo=@${OUT_PNG}" \
-            --form-string "caption=${CAPTION}" \
-            >/dev/null 2>&1
+        USAGE_KB=""
+        if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+            USAGE_KB="$(relay_python -c "from tg_agent_relay.plan_approve import usage_keyboard_json; print(usage_keyboard_json())" 2>/dev/null)" || USAGE_KB=""
+        fi
+        if [[ -n "$USAGE_KB" ]]; then
+            curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                -F "chat_id=${SEND_CHAT}" \
+                -F "photo=@${OUT_PNG}" \
+                --form-string "caption=${CAPTION}" \
+                --form-string "reply_markup=${USAGE_KB}" \
+                >/dev/null 2>&1
+        else
+            curl -s -m 20 -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                -F "chat_id=${SEND_CHAT}" \
+                -F "photo=@${OUT_PNG}" \
+                --form-string "caption=${CAPTION}" \
+                >/dev/null 2>&1
+        fi
         emit_metric "usage" "render" "image"
     fi
     # else: no token yet - silent no-op (setup not complete), matching the

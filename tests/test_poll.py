@@ -597,6 +597,26 @@ eq(
     cabal_fifo_lines,
 )
 
+# inline callback: usage window
+bridge_cb = _tmp_bridge()
+cb_lines = process_update(
+    {
+        "update_id": 50,
+        "callback_query": {
+            "id": "cb1",
+            "from": {"id": 1},
+            "data": "usage:window:24h",
+            "message": {"chat": {"id": -100}},
+        },
+    },
+    bridge_dir=bridge_cb,
+    cfg=CMD_CFG,
+    allowed_user_id="1",
+    allowed_chat_id="-100",
+)
+eq("usage callback emits cmd line", ["[telegram:cmd:usage] window=24h"], cb_lines)
+eq("callback advances offset", 51, read_offset(bridge_cb))
+
 
 # deliver cmd mode with RELAY_* env (sync)
 bridge12 = _tmp_bridge()
@@ -650,4 +670,5 @@ true("main_poll callable", callable(main_poll))
 
 print()
 print(f"{PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
+if __name__ == "__main__":
+    sys.exit(1 if FAIL else 0)

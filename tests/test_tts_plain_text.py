@@ -221,6 +221,9 @@ def main() -> int:
     ACC = strip("café costs €12 — résumé ready")
     check("emoji: accented letters preserved", "café" in ACC and "résumé" in ACC, repr(ACC))
     check("emoji: euro sign preserved (not emoji block)", "€" in ACC, repr(ACC))
+    FINISH = strip("🏁 done — goal complete")
+    check("emoji: checkered flag stripped", "🏁" not in FINISH, repr(FINISH))
+    check("emoji: finish prose kept", "done" in FINISH and "goal" in FINISH, repr(FINISH))
     # Existing flattened sample starts with ✅ — must not voice it
     check("flattened: leading ✅ emoji stripped", "✅" not in FLAT, repr(FLAT))
     print(f"\n  tts_plain_text: {PASS} passed, {FAIL} failed")

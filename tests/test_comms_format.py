@@ -23,6 +23,12 @@ def test_format_stop_adds_header_and_stamp(monkeypatch) -> None:
 def test_format_pr_header() -> None:
     out = format_outbound("review summary for https://github.com/a/b/pull/3", skip_stamp=True)
     assert out.startswith("📣 PR")
+    assert "https://github.com/a/b/pull/3" in out
+
+
+def test_format_goal_header() -> None:
+    out = format_outbound("goal completed: ship v0.9", skip_stamp=True)
+    assert out.startswith("🎯 GOAL")
 
 
 def test_idempotent_when_already_stamped() -> None:

@@ -34,6 +34,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
+from tg_agent_relay.agent_handle import build_handle_from_env, parse_leading_handle
 from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.media_inbound import buffer_parts_for_update
 from tg_agent_relay.metrics import emit_metric
@@ -167,6 +168,12 @@ def resolve_command_match(cfg: dict[str, Any], text: str) -> tuple[str, str]:
             name2 = classify_command(cfg, stripped)
             if name2:
                 return name2, stripped
+        lead = parse_leading_handle(text)
+        if lead:
+            _, stripped = lead
+            name3 = classify_command(cfg, stripped)
+            if name3:
+                return name3, stripped
     return "", ""
 
 
@@ -434,6 +441,11 @@ def deliver_to_backend(
         env["RELAY_TEXT"] = text
         env["RELAY_BACKEND"] = backend
         env["RELAY_PROJECT"] = project
+        agent_handle = build_handle_from_env(env)
+        if not agent_handle and backend:
+            agent_handle = f"@{backend}"
+        if agent_handle:
+            env["RELAY_AGENT_HANDLE"] = agent_handle
         env["RELAY_CHAT_ID"] = chat_id
         env["RELAY_THREAD_ID"] = thread_id
         env["RELAY_CWD"] = cwd
@@ -540,6 +552,16 @@ def flush_buffer(
 
     lines: list[str] = []
     work_cfg = cfg if cfg.get("_bridge_dir") else {**cfg, "_bridge_dir": str(root)}
+    from tg_agent_relay.plan_approve import agent_emit_line, parse_text_reply, set_plan_status
+
+    plan_hit = parse_text_reply(out, bridge_dir=root)
+    if plan_hit:
+        action, plan_id = plan_hit
+        status = "approved" if action == "approve" else "rejected"
+        if set_plan_status(root, plan_id, status):
+            _clear_buffer(buf, ts)
+            return [agent_emit_line(status, plan_id)]
+
     name, cmd_text = resolve_command_match(work_cfg, out)
     if name:
         os.environ["RELAY_CHAT_ID"] = chat_id
@@ -652,6 +674,79 @@ def _message_obj(update: dict[str, Any]) -> dict[str, Any]:
     return msg if isinstance(msg, dict) else {}
 
 
+def _callback_fields(update: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """from_id, data, chat_id, thread_id, callback_id from callback_query."""
+    cq = update.get("callback_query")
+    if not isinstance(cq, dict):
+        return "", "", "", "", ""
+    from_obj = cq.get("from") if isinstance(cq.get("from"), dict) else {}
+    msg = cq.get("message") if isinstance(cq.get("message"), dict) else {}
+    chat_obj = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
+    from_id = str(from_obj.get("id", "")) if from_obj else ""
+    data = str(cq.get("data") or "")
+    chat_id = str(chat_obj.get("id", "")) if chat_obj else ""
+    thread = msg.get("message_thread_id")
+    thread_id = str(thread) if thread is not None else ""
+    cb_id = str(cq.get("id") or "")
+    return from_id, data, chat_id, thread_id, cb_id
+
+
+def _plan_or_usage_lines(
+    bridge_dir: Path,
+    cfg: dict[str, Any],
+    data: str,
+    *,
+    allowed_user_id: str,
+    from_id: str,
+    chat_id: str = "",
+    thread_id: str = "",
+) -> list[str]:
+    if not data or not allowed_user_id or from_id != str(allowed_user_id):
+        return []
+    from tg_agent_relay.plan_approve import (
+        agent_emit_line,
+        parse_callback_data,
+        set_plan_status,
+        usage_agent_cmd,
+    )
+
+    if data.startswith("usage:window:"):
+        window = data.split(":", 2)[2] if data.count(":") >= 2 else "7d"
+        usage_name = ""
+        commands = cfg.get("commands")
+        if isinstance(commands, dict):
+            for key, entry in commands.items():
+                if not isinstance(entry, dict):
+                    continue
+                slash = str(entry.get("slash") or "")
+                keyword = str(entry.get("keyword") or "")
+                if slash in ("/usage", "usage") or keyword == "usage":
+                    usage_name = str(key)
+                    break
+        if usage_name and command_field(cfg, usage_name, "mode", "forward") == "relay":
+            dispatch_command(
+                cfg,
+                usage_name,
+                f"/usage {window}",
+                bridge_dir=bridge_dir,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
+            return []
+        return [usage_agent_cmd(window)]
+
+    parsed = parse_callback_data(data)
+    if not parsed:
+        return []
+    action, plan_id = parsed
+    if action == "later":
+        return []
+    status = "approved" if action == "approve" else "rejected"
+    if not set_plan_status(bridge_dir, plan_id, status):
+        return []
+    return [agent_emit_line(status, plan_id)]
+
+
 def _message_fields(update: dict[str, Any]) -> tuple[str, str, str, str]:
     """Extract from_id, text, chat_id, thread_id from an update object."""
     msg = _message_obj(update)
@@ -690,9 +785,30 @@ def process_update(
     except (TypeError, ValueError) as _exc:
         return []
 
+    lines: list[str] = []
+    cb_from, cb_data, cb_chat, cb_thread, _cb_id = _callback_fields(update)
+    if cb_from and cb_data:
+        write_offset(root, uid + 1)
+        if (
+            allowed_user_id
+            and cb_from == str(allowed_user_id)
+            and chat_is_accepted(cfg, cb_chat, allowed_chat_id=allowed_chat_id)
+        ):
+            lines.extend(
+                _plan_or_usage_lines(
+                    root,
+                    cfg,
+                    cb_data,
+                    allowed_user_id=allowed_user_id,
+                    from_id=cb_from,
+                    chat_id=cb_chat,
+                    thread_id=cb_thread,
+                )
+            )
+        return lines
+
     from_id, text, chat_id, thread_id = _message_fields(update)
     msg = _message_obj(update)
-    lines: list[str] = []
 
     buffer_parts: list[str] = []
     if msg and bot_token:

@@ -143,6 +143,21 @@ def main(argv: list[str] | None = None) -> int:
         print("SKIP:empty_summary")
         return 0
 
+    try:
+        from tg_agent_relay.goal_events import filter_hook_summary
+
+        tool = payload.get("tool_name") or payload.get("toolName") or payload.get("tool") or ""
+        summary = filter_hook_summary(
+            summary,
+            tool_name=str(tool),
+            hook_event=norm,
+        )
+    except Exception:
+        pass
+    if not summary:
+        print("SKIP:goal_noise")
+        return 0
+
     print(f"OK:{summary}")
     if args.emit_meta:
         cwd = payload.get("cwd") or payload.get("workspaceRoot") or ""

@@ -19,6 +19,11 @@ _PLAN = re.compile(
     r"\bplan\s+dump\b|\bimplementation\s+plan\b)",
     re.I,
 )
+_GOAL = re.compile(
+    r"(\bgoal\s+(completed|blocked|updated)\b|update_goal\b|\[goal\])",
+    re.I,
+)
+_GH_URL = re.compile(r"(https?://github\.com/[^\s/]+/[^\s/]+/pull/\d+)", re.I)
 _STOP_TEXT = re.compile(
     r"(permission\s+wait|need[\s-]human|waiting\s+for\s+(you|approval)|"
     r"human[\s-]input|approve\s+to\s+continue)",
@@ -34,6 +39,7 @@ _PERMISSION_EVENTS = frozenset({"PermissionDenied", "PermissionRequest"})
 _KIND_HEADER: dict[str, str] = {
     "PR": "📣 PR",
     "PLAN": "📋 PLAN",
+    "GOAL": "🎯 GOAL",
     "STOP": "🛑 STOP",
     "SUBAGENT": "🤖 SUBAGENT",
     "NOTIFY": "🔔 NOTIFY",
@@ -44,6 +50,7 @@ _KIND_HEADER: dict[str, str] = {
 class MessageKind(StrEnum):
     PR = "PR"
     PLAN = "PLAN"
+    GOAL = "GOAL"
     STOP = "STOP"
     SUBAGENT = "SUBAGENT"
     NOTIFY = "NOTIFY"
@@ -67,6 +74,8 @@ def classify_message(text: str, hook_event: str | None = None) -> MessageKind:
         return MessageKind.PR
     if _PLAN.search(body):
         return MessageKind.PLAN
+    if _GOAL.search(body) or ev in frozenset({"GoalUpdate", "GoalComplete"}):
+        return MessageKind.GOAL
     if _STOP_TEXT.search(body):
         return MessageKind.STOP
     if re.search(r"\bsubagent\b", body, re.I):
@@ -85,6 +94,16 @@ def _normalize_body(text: str) -> str:
         out.append(ln)
         prev_blank = blank
     return "\n".join(out).strip()
+
+
+def _layout_pr_urls(text: str) -> str:
+    """Put GitHub PR URLs on their own line for mobile skimming."""
+    body = text or ""
+
+    def repl(m: re.Match[str]) -> str:
+        return f"\n{m.group(1)}\n"
+
+    return _GH_URL.sub(repl, body).strip()
 
 
 def format_outbound(
@@ -117,10 +136,13 @@ def format_outbound(
             stamp = stamp + ("\n" if stamp else "") + "📌 status=merged"
 
     normalized = _normalize_body(raw)
+    if kind == MessageKind.PR:
+        normalized = _layout_pr_urls(normalized)
     parts: list[str] = []
     header = _KIND_HEADER.get(kind.value, "")
     if header and kind != MessageKind.GENERIC:
         parts.append(header)
+        parts.append("")  # blank line after header
     parts.append(normalized)
     if stamp:
         parts.append(stamp)
