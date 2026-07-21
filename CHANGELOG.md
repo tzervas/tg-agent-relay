@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2 — 2026-07-21
+
+### Fixed
+- `RELEASE_NOTES.md` had skipped straight from v0.9.0 to v0.10.1, missing
+  standalone entries for v0.10.0 and v0.10.1; backfilled both so per-version
+  deploy notes are complete for operators upgrading step by step.
+
+No functional/code changes vs 0.10.1.
+
 ## 0.10.1 — 2026-07-20
 
 ### Fixed

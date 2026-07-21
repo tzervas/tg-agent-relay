@@ -1,3 +1,64 @@
+## v0.10.2 (2026-07-21)
+
+### Highlights
+
+- **Docs polish** — `RELEASE_NOTES.md` had skipped straight from v0.9.0 to
+  the CHANGELOG's v0.10.0/v0.10.1; backfilled below so operators upgrading
+  off v0.9.0 have full deploy notes for each step.
+- No functional/code changes vs v0.10.1.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.2
+bash scripts/deploy-local.sh --ref v0.10.2
+```
+
+---
+
+## v0.10.1 (2026-07-20)
+
+### Highlights
+
+- **Inbound FIFO fix** — `ensure-inbound` no longer starts log-draining FIFO
+  readers that steal messages from Grok/Claude Monitors; it only runs
+  `tg-poll` and RDWR keepalives (no read). Dual readers on the same FIFO
+  path are deduped; agent Monitors own the read path.
+- `/status` ships as a zero-token relay-mode alias of `/stats`.
+- README architecture diagram: relay vs agent split, keepalives,
+  multi-backend FIFOs (sanitized).
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.1
+bash scripts/deploy-local.sh --ref v0.10.1
+```
+
+---
+
+## v0.10.0 (2026-07-16)
+
+### Highlights
+
+- **Forum threads (P13)** — topic title builders, outbound resolve order,
+  mockable `createForumTopic`, overlay bind helpers (`tg_agent_relay/threads.py`).
+- **`/thread` commands** — `handlers/thread.sh` + `[commands.thread]`
+  example: `list`, `here`, `bind`, `ensure`.
+- **Outbound thread routing** — `relay-notify.sh` sets `RELAY_CHAT_ID` /
+  `RELAY_THREAD_ID` from session/platform/workstream/handle, with optional
+  `🧵` title stamp.
+- **Docs** — `docs/THREADS.md`, cross-linked from `docs/ROUTING.md`.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.0
+bash scripts/deploy-local.sh --ref v0.10.0
+```
+
+---
+
 ## v0.9.0 (2026-07-16)
 
 ### Highlights
