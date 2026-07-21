@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tg-agent-relay"
-version = "0.10.0"
+version = "0.10.1"
 description = "Harness-agnostic Telegram relay for agent status + inbound commands"
 readme = "README.md"
 # Prefer 3.14 (see .python-version + lib/python.sh). 3.13 only if hard-required.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.1 — 2026-07-20
+
+### Fixed
+- **Inbound to agent harnesses:** `ensure-inbound` no longer starts log-draining FIFO readers that steal messages from Grok/Claude Monitors. It only runs `tg-poll` and RDWR keepalives (no read).
+- Dual readers on the same FIFO path are deduped; agent Monitors own the read path.
+- Avoid `pgrep -f` in ensure-inbound (self-matches bash wrappers).
+
+### Added
+- `/status` as relay-mode alias of `/stats` (zero-token).
+- README architecture diagram: relay vs agent split, keepalives, multi-backend FIFOs (sanitized).
+
 ## [0.10.0] — 2026-07-16
 
 ### Added
