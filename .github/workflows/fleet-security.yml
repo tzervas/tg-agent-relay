@@ -16,7 +16,6 @@ concurrency:
   group: fleet-security-${{ github.ref }}
   cancel-in-progress: true
 
-# Minimal token surface for checkout + scan (no write, no id-token).
 permissions:
   contents: read
 
@@ -28,14 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # History only needed for schedule full-repo scan
           fetch-depth: ${{ github.event_name == 'schedule' && 0 || 1 }}
           persist-credentials: false
 
       - name: Ensure gitleaks (pinned + checksum)
         run: |
           set -euo pipefail
-          # Pin must match packaging/Containerfile when image is rebuilt
           GITLEAKS_VERSION="8.30.1"
           GITLEAKS_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
           if command -v gitleaks >/dev/null 2>&1; then
@@ -61,8 +58,6 @@ jobs:
             echo "gitleaks not available after install — FAIL (honest security gate)" >&2
             exit 1
           fi
-          # PR/push: tip only (avoids historical test-fixture false positives blocking delivery).
-          # Schedule: full git history (deeper audit).
           if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
             gitleaks detect --source . --verbose --redact --exit-code 1
           else
@@ -72,8 +67,6 @@ jobs:
   trivy-fs:
     name: trivy filesystem (vuln+secret+license)
     runs-on: [self-hosted, linux, x64, podman]
-    # Advisory for missing scanner; real findings still fail the step when trivy present.
-    # Job stays green only if: trivy missing OR scan clean. Documented in FLEET_STANDARDS.
     continue-on-error: true
     timeout-minutes: 30
     steps:

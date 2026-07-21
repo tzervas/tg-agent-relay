@@ -18,7 +18,8 @@ jobs:
   # with zero jobs (Actions UI shows workflow path as failed).
   gate:
     name: gate
-    runs-on: ubuntu-latest
+    # Meta jobs also use self-hosted; gha-runner-ctl fleet must stay warm.
+    runs-on: [self-hosted, linux, x64, podman]
     steps:
       - name: noop
         run: echo "reopen workflow loaded"
@@ -26,7 +27,8 @@ jobs:
   reopen:
     name: Reopen issues closed off-main
     needs: [gate]
-    runs-on: ubuntu-latest
+    # Meta jobs also use self-hosted; gha-runner-ctl fleet must stay warm.
+    runs-on: [self-hosted, linux, x64, podman]
     if: >
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
