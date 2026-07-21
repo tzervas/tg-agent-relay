@@ -87,7 +87,7 @@ sys.exit(0 if any(a.endswith(suf) for a in args if a) else 1)
             if (( DRY_RUN == 0 )); then
                 kill "$pid" 2>/dev/null || true
                 sleep 0.15
-                kill -9 "$pid" 2>/dev/null || true
+                
                 rm -f "$pidf"
             fi
         fi
@@ -103,7 +103,14 @@ start_fifo_keepalive() {
 
     mkdir -p "$(dirname "$fifo")" 2>/dev/null || true
     if [[ ! -p "$fifo" ]]; then
-        mkfifo "$fifo" 2>/dev/null || true
+        if [[ -e "$fifo" ]]; then
+            printf 'ensure-inbound: ERROR %s exists and is not a FIFO\n' "$fifo" >&2
+            return 1
+        fi
+        if ! mkfifo "$fifo" 2>/dev/null; then
+            printf 'ensure-inbound: ERROR mkfifo failed for %s\n' "$fifo" >&2
+            return 1
+        fi
     fi
 
     local real="$fifo"

@@ -131,8 +131,11 @@ bash scripts/ensure-inbound.sh
 # or from the bridge dir: bash scripts/ensure-inbound.sh --bridge-dir ~/.claude/telegram-bridge
 ```
 
-`ensure-inbound.sh` uses pid files under `.run/` and `flock` so duplicate
-pollers/readers are not started. Logs: `.run/logs/`.
+`ensure-inbound.sh` starts **tg-poll** and **RDWR keepalives** on each unique
+FIFO (no data drain). It does **not** start log-only readers — your harness
+**Monitor** must run `adapters/backend-fifo-reader.sh <fifo>` or agent-bound
+messages sit in the pipe buffer until a Monitor attaches. Pid files under
+`.run/`; logs under `.run/logs/`.
 
 Deploy also installs the Python package (`uv pip install -e .` into
 `DEST/.venv` when possible) or sets `PYTHONPATH` via `lib/exec-env.sh` and
