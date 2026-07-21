@@ -46,46 +46,69 @@ tokens** and you are only billed when *you* message the bot:
 
 ## Architecture
 
+Sanitized schematic — no tokens, chat IDs, phone numbers, or host-specific paths beyond the conventional deploy root name.
+
 ```mermaid
-flowchart LR
-    subgraph agent["Agent / harness (any)"]
-        CC["Claude Code hook\n(SubagentStop, Notification, ...)"]
-        ANY["Any script or agent"]
-    end
+flowchart TB
+  subgraph phone["Telegram client"]
+    U["Allowlisted user only"]
+  end
 
-    subgraph relay["TG Agent Relay (~/.claude/telegram-bridge/)"]
-        HN["hook-notify.sh\n(shim)"]
-        AD["adapters/claude-code.sh"]
-        RN["relay-notify.sh\n(generic core)"]
-        TS["tg-send.sh\n(paginate k-of-n, dedup)"]
-        TP["tg-poll.sh\n(reassembly + command parser)"]
-        DISP{"command matched?"}
-        HD["handlers/*.sh\n(dashboard, stats, uptime, help, usage)"]
-    end
+  subgraph outbound["Outbound (0 model tokens)"]
+    HOOK["Harness hooks / scripts"]
+    RN["relay-notify / adapters"]
+    TS["tg-send paginate + dedup"]
+    HOOK --> RN --> TS
+  end
 
-    PHONE(["Your phone (Telegram)"])
+  subgraph inbound["Inbound poll"]
+    TP["tg-poll getUpdates"]
+    CLS{"classify"}
+    HD["handlers/* mode=relay<br/>/status /stats /help /dashboard …"]
+    ROUTE["route by backend + project"]
+  end
 
-    CC -->|hook JSON on stdin| HN --> AD -->|raw formatted text| RN
-    ANY -->|"free text, or label:text"| RN
-    RN --> TS -->|sendMessage, paginated| PHONE
+  subgraph fifos["Backend FIFOs"]
+    KA["ensure-inbound keepalive<br/>RDWR hold — does NOT read"]
+    FC["cabal.fifo"]
+    FF["fleet.fifo"]
+    FX["other backends…"]
+    KA -.-> FC
+    KA -.-> FF
+    KA -.-> FX
+  end
 
-    PHONE -->|message| TP
-    TP --> DISP
-    DISP -->|"relay-handled\nmode is relay"| HD
-    HD -->|"sendPhoto / sendMessage\nzero model tokens"| PHONE
-    DISP -->|"no match, or\nmode is forward"| OUT["tagged telegram event\non stdout"]
-    OUT -->|stdout event| AGENT_IN["Agent / Monitor\n(billed only here)"]
+  subgraph harness["Agent harness Monitors"]
+    M1["Grok Build Monitor<br/>backend-fifo-reader → cabal"]
+    M2["Grok work session<br/>→ fleet"]
+    M3["Claude / Codex / …"]
+  end
+
+  U <-->|Bot API| TS
+  U -->|messages / media| TP
+  TS --> U
+  TP --> CLS
+  CLS -->|"mode=relay"| HD
+  HD -->|reply sendMessage/sendPhoto| U
+  CLS -->|"chat or mode=forward"| ROUTE
+  ROUTE --> FC
+  ROUTE --> FF
+  ROUTE --> FX
+  FC --> M1
+  FF --> M2
+  FX --> M3
 ```
 
-- **Outbound (top path):** agent/hook → adapter or `relay-notify.sh` →
-  `tg-send.sh` → Telegram → your phone. Never costs a model turn.
-- **Inbound (bottom path):** phone → Telegram → `tg-poll.sh`. A flushed
-  message is either **relay-handled** (a built-in command like
-  `/dashboard` runs a local script and replies via `sendPhoto`/
-  `sendMessage` — zero model tokens) or **forwarded** as a
-  `[telegram] ...` / `[telegram:cmd:<tag>] ...` line on stdout for your
-  agent's event source (a `Monitor`-style loop) to read — costing a model
-  turn only when you actually send something.
+### Inbound rules (who sees what)
+
+| Class | Handled by | Reaches agent? |
+|-------|------------|----------------|
+| `mode = "relay"` commands (`/status`, `/stats`, `/help`, …) | Local `handlers/*.sh` | **No** — zero-token reply on Telegram |
+| `mode = "forward"` commands | Tagged line on backend FIFO | **Yes** — harness Monitor |
+| Normal chat / media (after allowlist) | Backend FIFO (`default_backend`, `@handle`, …) | **Yes** |
+| Non-allowlisted senders | Dropped | No |
+
+**Anti-pattern (fixed):** log-only FIFO readers that drain the pipe so Monitors never see events. **`ensure-inbound` only keeps FIFOs open; the agent harness owns the read.**
 
 ## The dashboard, at a glance
 
