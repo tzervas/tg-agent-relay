@@ -64,11 +64,15 @@ def is_agent_reader_cmdline(cmdline: bytes | str) -> bool:
     for p in parts:
         # Per-element basename only — never substring-search a giant bash -c blob
         # (operator notes often *mention* backend-fifo-reader / tgar-session@).
-        base = os.path.basename(p.strip().lower())
+        raw_p = p.strip()
+        if not raw_p or "\n" in raw_p or len(raw_p) > 240:
+            # Long / multi-line argv is almost always `bash -c '…docs…'`, not a unit.
+            continue
+        base = os.path.basename(raw_p.lower())
         if base in ("backend-fifo-reader.sh", "backend-fifo-reader"):
             return True
-        # systemd unit argv, e.g. tgar-session@fleet.service
-        if base.startswith("tgar-session@"):
+        # systemd unit argv: tgar-session@fleet.service or systemd:tgar-session@…
+        if base.startswith("tgar-session@") or "tgar-session@" in base:
             return True
     return False
 
@@ -89,7 +93,7 @@ def fifo_path_in_cmdline(cmdline: bytes | str, fifo: str | Path) -> bool:
         fifo_real = fifo_s
     for p in parts:
         pe = os.path.expanduser(p)
-        if pe == fifo_s or pe == fifo_real:
+        if pe in (fifo_s, fifo_real):
             return True
         try:
             if Path(pe).resolve() == Path(fifo_real):

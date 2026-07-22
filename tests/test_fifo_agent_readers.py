@@ -11,7 +11,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
 
-from fifo_agent_readers import (  # noqa: E402
+from fifo_agent_readers import (
     count_agent_readers,
     fifo_has_agent_reader,
     fifo_path_in_cmdline,
