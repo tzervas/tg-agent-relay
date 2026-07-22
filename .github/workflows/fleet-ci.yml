@@ -73,11 +73,11 @@ jobs:
         with:
           version: "latest"
           enable-cache: true
-      - name: Sync (best-effort)
+      - name: Sync dependencies
         run: |
           set -euo pipefail
           if [ -f uv.lock ] || [ -f pyproject.toml ]; then
-            uv sync --all-groups 2>/dev/null || uv sync 2>/dev/null || true
+            if ! uv sync --all-groups; then uv sync; fi
           fi
       - name: Ruff (if configured)
         run: |
@@ -91,17 +91,25 @@ jobs:
         run: |
           set -euo pipefail
           if [ -d tests ] || [ -d test ]; then
-            uv run pytest -q 2>/dev/null || pytest -q 2>/dev/null || echo "pytest failed or missing — mark job fail" >&2
+            if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
+              uv run pytest -q
+            elif command -v pytest >/dev/null 2>&1; then
+              pytest -q
+            else
+              echo "::error title=FAIL_ENV::pytest not available after env setup"
+              exit 1
+            fi
           else
             echo "no tests/ directory — skip"
           fi
 
   noop:
-    name: no stack detected
+    name: fleet-ci stub (no stack — not a product gate)
     needs: detect
     if: needs.detect.outputs.rust != 'true' && needs.detect.outputs.python != 'true'
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - run: |
-          echo "No Cargo.toml / pyproject detected. fleet-ci reports success with no gates."
+          echo "::notice title=SKIP_STUB::No Cargo.toml / pyproject detected; fleet-ci stub is not a product gate"
+          echo "HONEST_CI class=SKIP_STUB detail=no_stack_detected"
           echo "Add stack files or a product-specific CI job for real coverage."
