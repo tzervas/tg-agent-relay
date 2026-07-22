@@ -39,15 +39,17 @@ reproduce.
 - Fully **synchronous, single-threaded** blocking long-poll — **no `asyncio`, no
   threads, no sockets opened directly**. Concurrency is by *process separation*.
   (So, as with `gha-runner-ctl`, Mycelium's missing `async` is **not** a blocker.)
-- Talks to exactly **one** network host: `api.telegram.org` (+ its file-download host;
-  `huggingface.co` only in `fetch-voices.sh`). **No LLM-provider calls** — "providers"
-  are local hook/usage descriptors, not API clients.
+- The **core relay** talks to `api.telegram.org` (+ its file-download host; `huggingface.co`
+  only in `fetch-voices.sh`) and does **not** call an LLM itself — "providers" are primarily
+  local hook/usage descriptors. (Some *optional* provider integrations reach other hosts —
+  e.g. `generativelanguage.googleapis.com` (ADK/Gemini), `openrouter.ai` — so "one host" is
+  the core-relay path, not an absolute.)
 
 ## Capability map: native-now vs. new-stdlib vs. Rust-bridge
 
 | Capability | Class | Detail |
 |---|---|---|
-| Pagination/`[k/n]` chunking, dedup, message reassembly, template/format rendering, TTS **text-prep**, usage accounting, routing (longest-prefix) | **(a) native today** | Pure string/collection/logic — the **majority** of the ~11k non-test Python lines. This is where Mycelium can genuinely shine. |
+| Pagination/`[k/n]` chunking, dedup, message reassembly, template/format rendering, TTS **text-prep**, usage accounting, routing (longest-prefix) | **(a) native today** | Pure string/collection/logic — the **majority** of the ~13k non-test Python lines. This is where Mycelium can genuinely shine. |
 | Offset/buffer/metrics-TSV/config-overlay file I/O | (a) | Covered by the thin `std-sys` fs floor (richer `std-fs` is in-memory only, M-541) |
 | **TOML** parsing (`relay.toml`, 46 KB surface) | **(b) new stdlib** | no TOML parser; writable in-language but non-trivial |
 | **JSON** parse/serialize (Telegram responses, hook payloads) | **(b) new stdlib** | pure; today only `Value`↔JSON exists |
