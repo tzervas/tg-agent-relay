@@ -254,3 +254,80 @@ printf 'ensure-inbound: Grok cabal Monitor command:\n'
 printf '  %s/adapters/backend-fifo-reader.sh %s/.grok/telegram-bridge/sessions/cabal.fifo\n' \
     "$BRIDGE_DIR" "${HOME}"
 printf 'ensure-inbound: logs in %s\n' "$LOG_DIR"
+
+# --- Honesty check: keepalive ≠ agent reader ---
+# Keepalives make poll open/write succeed; without a Monitor the agent TUI
+# never sees inbound traffic. Flag default_backend + common handles loudly.
+_check_agent_reader() {
+    local label="$1" fifo="$2"
+    fifo="${fifo/#\~/$HOME}"
+    [[ -n "$fifo" && "$fifo" != "stdout" ]] || return 0
+    [[ -p "$fifo" || -e "$fifo" ]] || return 0
+    if PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$BRIDGE_DIR" python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from tg_agent_relay.poll import fifo_has_agent_reader
+sys.exit(0 if fifo_has_agent_reader(sys.argv[2]) else 1)
+' "$BRIDGE_DIR" "$fifo" 2>/dev/null; then
+        return 0
+    fi
+    printf 'ensure-inbound: ERROR no agent reader for %s (fifo=%s)\n' "$label" "$fifo" >&2
+    printf 'ensure-inbound: ERROR attach Monitor: %s/adapters/backend-fifo-reader.sh %s\n' \
+        "$BRIDGE_DIR" "$fifo" >&2
+    printf 'ensure-inbound: ERROR keepalive alone is not delivery — poll will emit message_orphaned\n' >&2
+    return 1
+}
+
+DEFAULT_BACKEND=""
+if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+    DEFAULT_BACKEND="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '.routing.default_backend // empty' 2>/dev/null || true)"
+fi
+
+# default_backend fifo (if any)
+if [[ -n "$DEFAULT_BACKEND" ]] && command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+    _db_fifo="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$DEFAULT_BACKEND" '
+        .backends[$b].fifo // empty' 2>/dev/null || true)"
+    _db_del="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$DEFAULT_BACKEND" '
+        .backends[$b].delivery // "fifo"' 2>/dev/null || true)"
+    if [[ -n "$_db_fifo" && "$_db_del" == "fifo" ]]; then
+        _check_agent_reader "default_backend=${DEFAULT_BACKEND}" "$_db_fifo" || true
+    fi
+fi
+
+# cabal / fleet (common multi-session handles — static backends or sessions)
+for _handle in cabal fleet; do
+    _h_fifo=""
+    if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+        _h_fifo="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$_handle" '
+            .backends[$b].fifo // empty' 2>/dev/null || true)"
+    fi
+    if [[ -z "$_h_fifo" && -f "$SESSIONS_DIR/${_handle}.json" ]]; then
+        _h_fifo="$(jq -r '.fifo // empty' "$SESSIONS_DIR/${_handle}.json" 2>/dev/null || true)"
+    fi
+    # Also try conventional paths used by register-session / Grok deploy
+    if [[ -z "$_h_fifo" ]]; then
+        for _cand in \
+            "$BRIDGE_DIR/sessions/${_handle}.fifo" \
+            "${HOME}/.grok/telegram-bridge/sessions/${_handle}.fifo" \
+            "${HOME}/.claude/telegram-bridge/sessions/${_handle}.fifo"
+        do
+            if [[ -p "$_cand" || -e "$_cand" ]]; then
+                _h_fifo="$_cand"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$_h_fifo" ]]; then
+        # Skip duplicate of default_backend already checked
+        if [[ -n "${DEFAULT_BACKEND:-}" && "$_handle" == "$DEFAULT_BACKEND" ]]; then
+            continue
+        fi
+        _check_agent_reader "$_handle" "$_h_fifo" || true
+    fi
+done
+
+printf 'ensure-inbound: doctor:  bash %s/scripts/doctor-inbound.sh --bridge-dir %s\n' \
+    "$BRIDGE_DIR" "$BRIDGE_DIR"
+printf 'ensure-inbound: health:  bash %s/scripts/inbound-health.sh --bridge-dir %s\n' \
+    "$BRIDGE_DIR" "$BRIDGE_DIR"
