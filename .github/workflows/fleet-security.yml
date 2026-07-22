@@ -65,7 +65,7 @@ jobs:
           fi
 
   trivy-fs:
-    name: trivy filesystem (vuln+secret+license)
+    name: trivy filesystem (advisory)
     runs-on: [self-hosted, linux, x64, podman]
     continue-on-error: true
     timeout-minutes: 30
