@@ -62,6 +62,57 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _import_fifo_helpers():
+    """Load lib/fifo_agent_readers without requiring package install of lib/."""
+    import importlib.util
+    import sys
+
+    lib_path = _repo_root() / "lib" / "fifo_agent_readers.py"
+    if lib_path.is_file():
+        spec = importlib.util.spec_from_file_location(
+            "tg_agent_relay_fifo_agent_readers", lib_path
+        )
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            return mod
+    # Fallback: optional package-adjacent path already on sys.path
+    import fifo_agent_readers as mod  # type: ignore
+
+    return mod
+
+
+_fifo_mod = None
+
+
+def _fifo_helpers():
+    global _fifo_mod
+    if _fifo_mod is None:
+        _fifo_mod = _import_fifo_helpers()
+    return _fifo_mod
+
+
+def is_agent_reader_cmdline(cmdline: bytes | str) -> bool:
+    return _fifo_helpers().is_agent_reader_cmdline(cmdline)
+
+
+def _parse_fdinfo_flags(fdinfo: str) -> int | None:
+    return _fifo_helpers().parse_fdinfo_flags(fdinfo)
+
+
+def _fifo_has_agent_reader(
+    fifo_path: str | Path,
+    *,
+    proc_root: Path | str | None = None,
+) -> bool:
+    """See lib/fifo_agent_readers.fifo_has_agent_reader (agent Monitor vs keepalive)."""
+    return _fifo_helpers().fifo_has_agent_reader(fifo_path, proc_root=proc_root)
+
+
+fifo_has_agent_reader = _fifo_has_agent_reader
+
+
 def _safe_id(value: str) -> str:
     return _SAFE_RE.sub("_", str(value))
 
@@ -406,6 +457,10 @@ def deliver_to_backend(
         line = f"{tag} {text}\n"
         try:
             # Best-effort non-blocking-ish write (may fail without a reader).
+            # Keepalives (ensure-inbound RDWR hold) make open succeed even when
+            # no agent Monitor is attached — that is NOT true delivery into the
+            # agent TUI. Write success still returns [] (do not drop if the
+            # kernel buffer accepts); honesty comes from message_orphaned.
             fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
             try:
                 os.write(fd, line.encode("utf-8"))
@@ -417,6 +472,16 @@ def deliver_to_backend(
                 f"backend={backend} mode=fifo",
                 bridge_dir=root,
             )
+            # Honesty: message_delivered means the FIFO accepted the write, not
+            # that an agent reader (Monitor) consumed it. Keepalive-only /
+            # no-reader → message_orphaned; attach backend-fifo-reader.sh.
+            if not _fifo_has_agent_reader(fifo):
+                emit_metric(
+                    "tg-poll",
+                    "message_orphaned",
+                    f"backend={backend} reason=no_agent_reader",
+                    bridge_dir=root,
+                )
         except OSError as _exc:
             emit_metric(
                 "tg-poll",
