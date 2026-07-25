@@ -712,6 +712,8 @@ define your own.
 | `SETUP.md` | Step-by-step setup + security notes. |
 | `docs/USAGE.md` | How to send status, receive/reassemble messages, run commands, and read the dashboard. |
 | `docs/COMMANDS.md` | The built-in commands, relay-handled vs. forwarded, and how to define your own. |
+| `docs/branch-sync.md` | Automated non-destructive back-merge of `main` into `dev`/`sec` after each promote. |
+| `docs/maintenance-and-security.md` | Maintenance and security workflow notes (fleet gates, schedules, operator runbooks). |
 | `ROADMAP.md` | Where this is headed. |
 
 ## Security
