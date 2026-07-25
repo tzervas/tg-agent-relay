@@ -16,6 +16,13 @@ Issues stay open on `dev` merges. Task issues and epic ship issues close when
 their keywords land on **`main`** (GitHub auto-close + optional self-hosted
 workflow). See [WORKFLOW.md](WORKFLOW.md) §0 and [SELF_HOSTED_RUNNER.md](SELF_HOSTED_RUNNER.md).
 
+> **Step 4 below is not optional.** It was skipped after the 0.8.1 promote and
+> `dev` then sat dormant for ten releases while every PR went straight into
+> `main` — 17 commits and ~5,700 lines of divergence by 0.10.2. A `dev` that is
+> behind `main` is worse than no `dev`: retargeting a PR at it silently
+> reintroduces the gap into that PR's diff. If a promote lands and the
+> back-merge does not, `dev` is broken until someone re-baselines it.
+
 Release / promote flow (PR only into main):
 
 ```bash
@@ -99,16 +106,53 @@ Pushing a tag does **not** auto-run release jobs (avoids the v0.6.0 remote flaki
 
 ## Version policy
 
+**Hard rule, operator-set and fleet-global: this repo stays on `0.x.x` until a
+human explicitly authorizes `1.x.x`.** No agent, and no `cz bump`, may cut or
+propose a `1.0.0`. `major_version_zero = true` in `.cz.toml` enforces the machine
+half of that — a `feat!:` / `BREAKING CHANGE` bumps the MINOR while the major is
+0 instead of promoting out of `0.x`. Cutting `1.0.0` is a deliberate human act.
+
+A GitHub Release is **not** a registry publication. Tagging `vX.Y.Z` here
+publishes nothing to PyPI or crates.io.
+
 | Kind | Example | When |
 |---|---|---|
 | **dev** | `0.6.1-dev` | Default on feature branches (`VERSION` file) |
 | **patch** | `v0.5.3` | Fixes only (TTS, docs, small bugs) |
 | **minor** | `v0.6.0` | Features (providers, project rooms, Python ports) |
-| **major** | `v1.0.0` | Breaking defaults or public API changes |
+| **major** | `v1.0.0` | **Blocked.** Requires explicit human authorization. |
 
 - Git tags are always `vMAJOR.MINOR.PATCH` (optional `-rc.N`).
 - `VERSION` file holds the **next** in-progress version (`X.Y.Z-dev` until cut).
-- **Python: 3.14 preferred** (see `lib/python.sh` / uv).
+- **Python: 3.14 preferred** (see `lib/python.sh` / uv). `requires-python = ">=3.14"`;
+  the fleet floor is 3.11 and nothing at or below 3.10 is supported.
+
+### Commitizen
+
+`.cz.toml` is the fleet-standard commitizen config — `tag_format = "v$version"`,
+`version_scheme = "semver"`, `major_version_zero = true`, the same keys as
+`gha-runner-ctl/.cz.toml`. The CLI is optional; the rules hold either way.
+
+```bash
+uv tool install commitizen          # optional
+
+cz bump --dry-run --yes             # what the next version would be, and why
+cz bump --files-only --yes          # rewrite the version files; no commit, no tag
+```
+
+`version_files` keeps three files in lockstep — `VERSION`, `pyproject.toml`, and
+`tg_agent_relay/__init__.py`. A release that bumps only `VERSION` is a bug:
+`__version__` is what the package and the deploy stamp report.
+
+**`update_changelog_on_bump = false`** is the one deliberate deviation from the
+fleet config. `CHANGELOG.md` here predates commitizen and is curated
+Keep-a-Changelog prose (`## X.Y.Z — DATE`, then `### Security` / `### Fixed` /
+`### Added`); `cz` writes `## vX.Y.Z` headings and splices its section into the
+middle of the file. Use `cz changelog --dry-run` as the **source** for the entry,
+then write it by hand.
+
+Tagging stays with `scripts/release.sh` (local-first, re-runs the full gate).
+`cz bump` is not the tagging path — do not let it create the tag.
 
 ---
 

@@ -1,0 +1,42 @@
+# Commitizen configuration (commitizen-tools).
+#
+# Install (optional):  uv tool install commitizen   OR   pip install commitizen
+# This file is valid without the CLI: agents and humans follow docs/RELEASING.md
+# for the same rules, and scripts/release.sh remains the local-first tag path.
+#
+# Fleet convention — matches gha-runner-ctl/.cz.toml. Do not diverge.
+#
+# VERSIONING POLICY (operator-set, global, non-negotiable):
+#   Every repo stays on 0.x.x until a HUMAN explicitly authorizes 1.x.x.
+#   major_version_zero = true keeps `cz bump` from ever promoting a breaking
+#   change out of 0.x on its own — a `feat!:` / BREAKING CHANGE bumps the MINOR
+#   while the major is 0, which is exactly the intent. Cutting 1.0.0 is a
+#   deliberate human act, not a side effect of a commit message.
+#
+#   A GitHub Release is not a registry publication. Tagging vX.Y.Z here does not
+#   publish tg-agent-relay anywhere.
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.10.3"
+tag_format = "v$version"
+version_scheme = "semver"
+major_version_zero = true
+
+# Keep these three in lockstep on every bump. `cz bump` rewrites all of them;
+# a release that touches only VERSION is a bug (tg_agent_relay.__version__ is
+# what `tg-relay --version` and the deploy stamp report).
+version_files = [
+    "VERSION",
+    "pyproject.toml:^version",
+    "tg_agent_relay/__init__.py:__version__",
+]
+
+# CHANGELOG.md predates commitizen and is curated Keep-a-Changelog prose ("## X.Y.Z
+# — DATE", ### Security/Fixed/Added). `cz bump` writes "## vX.Y.Z" and would
+# splice its section into the middle of the file. Use `cz changelog --dry-run` as
+# the SOURCE for the entry and write it by hand; `cz bump --files-only` for the
+# three version files. This is the one deliberate deviation from the fleet .cz.toml.
+update_changelog_on_bump = false
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true

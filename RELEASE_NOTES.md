@@ -1,3 +1,46 @@
+## v0.10.3 (2026-07-25)
+
+Security + correctness patch. **Upgrade promptly if you run hooks.**
+
+### Highlights
+
+- **Security — code injection via hook payloads.** `relay-notify.sh` and
+  `adapters/claude-code.sh` interpolated `tool_name` and the hook event name
+  into the *source text* of a `python -c` program. `tool_name` is whatever tool
+  the model asked for, including a name supplied by an MCP server, so a crafted
+  name closed the string literal and ran arbitrary code inside the relay's own
+  interpreter — while the notification still delivered normally, so nothing
+  looked wrong from Telegram. Both sites now pass values through the
+  environment. If you run the relay with hooks wired to any agent that can load
+  third-party MCP servers, treat this as the reason to upgrade.
+- **Fixed: the relay could go silently deaf.** If `tg_agent_relay` was not
+  importable — a deployed bridge without the package on its path, a partial
+  deploy — the goal-noise filter's failure was read as "policy said drop this"
+  and *every* hook notification was discarded with nothing logged. The filter
+  now fails open. Set `RELAY_DEBUG=1` to see when it does.
+- **Fixed: `[sessions] dir` in `relay.toml` was ignored.** Routing only consulted
+  the session registry when an internal `_bridge_dir` was set, so configuring
+  sessions the documented way produced no session backends at all — `@handle`
+  prefixes silently did not resolve. Now honoured, along with
+  `$RELAY_SESSIONS_DIR`.
+- **CI is fail-closed.** The fleet python gate could not fail a job (`|| true`,
+  and an `echo` standing in for a failure). A green `python lint/test` badge on
+  `main` was reporting nothing. Missing tooling is now `FAIL_ENV`; the advisory
+  trivy job is labelled advisory.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.3
+bash scripts/deploy-local.sh --ref v0.10.3
+```
+
+Deployed bridges that were rsynced from a working tree rather than checked out
+will not pick this up from `git pull` — verify with `cat .deploy-stamp` and
+redeploy from the tag.
+
+---
+
 ## v0.10.2 (2026-07-21)
 
 ### Highlights
