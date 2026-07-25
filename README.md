@@ -731,6 +731,34 @@ define your own.
 
 See [`SETUP.md`](SETUP.md#security-model) for the full security model.
 
+## Automated CI fixing (opt-in, and off by default)
+
+Two workflows can close the loop on **mechanically fixable** CI failures. Both ship
+**inert** — this repo runs remote Actions manual-only by choice, and that is not
+reversed for you.
+
+- `.github/workflows/auto-fix.yml` — applies a **closed list** (`ruff format`,
+  `ruff check --fix` with **safe rules only**, `cargo fmt`, and a lockfile refresh
+  matching a manifest change in the same PR) and pushes to the **PR's own head
+  branch**. It refuses `main`/`master`/`dev`/`sec`/`release/**`, refuses fork PRs,
+  never force-pushes, and never makes an empty commit. Anything semantic — code
+  behaviour, test logic, versions, dependency bumps — is **never** auto-applied.
+- `.github/workflows/ci-triage.yml` — everything else gets one sticky comment with
+  the real error from the job log, whether the failure also reproduces on the base
+  branch, and a bounded attempt count, then a label for the host-side worker
+  ([`grok-triage-poll.sh`](https://github.com/tzervas/gha-runner-ctl/blob/main/scripts/grok-triage-poll.sh)
+  in `gha-runner-ctl`). It never patches and never merges.
+
+The push uses `AUTOFIX_TOKEN` — a fine-grained PAT scoped to **this repository
+only**, **Contents: write** and nothing else — because a push made with
+`GITHUB_TOKEN` does not trigger workflows, so the checks would never re-run.
+
+Enable: `gh variable set AUTOFIX_ENABLED --body true`.
+Disable: `gh variable set AUTOFIX_ENABLED --body false`.
+
+Full design, threat model, loop bounds, and what is **not** verified:
+[`docs/AUTO_FIX.md`](docs/AUTO_FIX.md).
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Tyler Zervas.
