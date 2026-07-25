@@ -69,9 +69,7 @@ def _import_fifo_helpers():
 
     lib_path = _repo_root() / "lib" / "fifo_agent_readers.py"
     if lib_path.is_file():
-        spec = importlib.util.spec_from_file_location(
-            "tg_agent_relay_fifo_agent_readers", lib_path
-        )
+        spec = importlib.util.spec_from_file_location("tg_agent_relay_fifo_agent_readers", lib_path)
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = mod
