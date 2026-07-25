@@ -20,6 +20,39 @@ from pathlib import Path
 from typing import Any
 
 
+def _sessions_source(cfg: dict[str, Any]) -> str | None:
+    """The EXPLICIT session-registry source for *cfg*, or None if there is none.
+
+    sessions.sessions_dir_from_cfg() resolves in the order
+
+        cfg["sessions"]["dir"]  ->  $RELAY_SESSIONS_DIR  ->  <bridge>/.sessions.d
+                                ->  ~/.claude/telegram-bridge/.sessions.d
+
+    so ``_bridge_dir`` is only one of four sources and the FIRST is the documented
+    ``cfg["sessions"]["dir"]``. Gating the overlay on ``_bridge_dir`` alone meant a
+    caller that configured sessions the documented way got NO session backends at
+    all: strip_prefix() returned None and resolve() produced an empty backend, with
+    nothing logged to say why (the three test_sessions_routing assertions).
+
+    The last source is deliberately NOT accepted here. Falling all the way through
+    to the home default would mean a config that says nothing about sessions —
+    a CI checkout, another user's relay.toml, `python lib/routing.py resolve` in a
+    scratch dir — silently inherits whatever live handles happen to be registered
+    in $HOME. Honouring the three explicit sources fixes the reported bug; the
+    implicit fourth is a widening nobody asked for.
+    """
+    sessions = cfg.get("sessions")
+    if isinstance(sessions, dict) and sessions.get("dir"):
+        return str(sessions["dir"])
+    env = os.environ.get("RELAY_SESSIONS_DIR", "").strip()
+    if env:
+        return env
+    bridge = cfg.get("_bridge_dir")
+    if bridge:
+        return str(bridge)
+    return None
+
+
 def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
     """Effective backends: static [backends.*] + .sessions.d overlay (sessions win)."""
     if cfg.get("_sessions_merged"):
@@ -27,24 +60,15 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
         return b if isinstance(b, dict) else {}
     static = cfg.get("backends") or {}
     static = static if isinstance(static, dict) else {}
-    bridge = cfg.get("_bridge_dir")
-    # Do NOT gate the session overlay on _bridge_dir alone.
-    #
-    # sessions.sessions_dir_from_cfg() resolves the registry in the order
-    #     cfg["sessions"]["dir"]  ->  env  ->  <bridge>/.sessions.d  ->  home default
-    # so _bridge_dir is only ONE of four sources — and the FIRST is the explicit
-    # cfg["sessions"]["dir"]. Returning `static` whenever _bridge_dir was unset meant a
-    # caller that configured sessions the documented way got NO session backends at all:
-    # strip_prefix() returned None and resolve() produced an empty backend, with nothing
-    # logged to say why. That is the failure behind the three test_sessions_routing
-    # assertions (backend == '' and strip_prefix -> None).
-    #
-    # Passing bridge through as None is safe: the resolver falls through to the remaining
-    # sources, and the except below still catches anything unresolvable.
+    if _sessions_source(cfg) is None:
+        return static
     try:
         import sessions as _sessions  # type: ignore
 
-        return _sessions.merged_backends(cfg, bridge_dir=bridge)
+        # bridge_dir may be None: cfg["sessions"]["dir"] / $RELAY_SESSIONS_DIR take
+        # precedence inside sessions_dir_from_cfg anyway, and _sessions_source has
+        # already established that at least one of the three is set.
+        return _sessions.merged_backends(cfg, bridge_dir=cfg.get("_bridge_dir"))
     except Exception:
         return static
 
@@ -82,13 +106,16 @@ def has_routing_config(cfg: dict[str, Any]) -> bool:
         return True
     if _backends(cfg):
         return True
-    bridge = cfg.get("_bridge_dir")
-    if not bridge:
+    # _backends() already merges the session overlay whenever an explicit source
+    # exists, so a second probe only matters when merged_backends() raised. Keep
+    # it, but gate it the same way — it used to check _bridge_dir alone, which is
+    # the very inconsistency that hid the cfg["sessions"]["dir"] bug.
+    if _sessions_source(cfg) is None:
         return False
     try:
         import sessions as _sessions  # type: ignore
 
-        if _sessions.load_session_backends(cfg, bridge_dir=bridge):
+        if _sessions.load_session_backends(cfg, bridge_dir=cfg.get("_bridge_dir")):
             return True
     except Exception:
         pass
