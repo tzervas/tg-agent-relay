@@ -17,6 +17,7 @@ Run:  python3 tests/test_poll.py
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
@@ -27,9 +28,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from tg_agent_relay.metrics import emit_metric
 from tg_agent_relay.poll import (
     JOINER,
     RS,
+    _fifo_has_agent_reader,
+    _parse_fdinfo_flags,
     append_message,
     buffer_paths,
     chat_is_accepted,
@@ -37,8 +41,10 @@ from tg_agent_relay.poll import (
     command_field,
     deliver_to_backend,
     dispatch_command,
+    fifo_has_agent_reader,
     flush_buffer,
     flush_stale_buffers,
+    is_agent_reader_cmdline,
     join_buffer_parts,
     poll_loop,
     poll_once,
@@ -664,6 +670,211 @@ if marker.is_file():
 from tg_agent_relay.cli import main_poll
 
 true("main_poll callable", callable(main_poll))
+
+
+# --- is_agent_reader_cmdline / _fifo_has_agent_reader (orphan honesty) -------
+true(
+    "agent cmdline: backend-fifo-reader",
+    is_agent_reader_cmdline(b"bash\0/path/adapters/backend-fifo-reader.sh\0/tmp/x.fifo\0"),
+)
+true(
+    "agent cmdline: tgar-session@",
+    is_agent_reader_cmdline("systemd:tgar-session@cabal.service"),
+)
+true(
+    "keepalive cmdline is not agent reader",
+    not is_agent_reader_cmdline(
+        b"bash\0-c\0fifo-keepalive: label=backend-cabal fifo=/tmp/x.fifo\0"
+    ),
+)
+true(
+    "fifo-ka pidfile path in cmdline is not agent",
+    not is_agent_reader_cmdline("/run/fifo-ka-tmp_x.fifo.pid sleep 3600"),
+)
+true("empty cmdline not agent", not is_agent_reader_cmdline(b""))
+eq(
+    "fdinfo flags O_RDONLY (accmode)",
+    0,
+    (_parse_fdinfo_flags("pos:\t0\nflags:\t02000000\n") or 0) & 0o3,
+)
+eq("fdinfo flags O_WRONLY", 0o1, (_parse_fdinfo_flags("flags:\t01\n") or 0) & 0o3)
+eq("fdinfo flags O_RDWR", 0o2, (_parse_fdinfo_flags("flags:\t02\n") or 0) & 0o3)
+true(
+    "fdinfo full flags parsed as octal",
+    (_parse_fdinfo_flags("flags:\t02000000\n") or 0) == 0o2000000,
+)
+
+
+def _fake_proc(
+    root: Path,
+    pid: int,
+    *,
+    fifo: Path,
+    cmdline: bytes,
+    flags_octal: str = "00",
+    link_as_path: bool = True,
+) -> None:
+    """Build a minimal /proc/<pid> tree for _fifo_has_agent_reader tests."""
+    pdir = root / str(pid)
+    (pdir / "fd").mkdir(parents=True)
+    (pdir / "fdinfo").mkdir(parents=True)
+    fd_path = pdir / "fd" / "3"
+    if link_as_path:
+        try:
+            fd_path.symlink_to(str(fifo.resolve()))
+        except OSError:
+            # Fallback: write a plain file and rely on path text via readlink fail
+            # — create symlink to relative name instead
+            fd_path.symlink_to(str(fifo))
+    (pdir / "fdinfo" / "3").write_text(f"pos:\t0\nflags:\t{flags_octal}\n", encoding="utf-8")
+    (pdir / "cmdline").write_bytes(cmdline)
+
+
+# Injected empty proc → no agent reader
+proc_empty = Path(tempfile.mkdtemp(prefix="tg-proc-empty-"))
+(proc_empty / "self").mkdir()  # non-numeric ignored
+eq(
+    "empty proc_root → no agent reader",
+    False,
+    _fifo_has_agent_reader("/nonexistent/orphan.fifo", proc_root=proc_empty),
+)
+eq(
+    "public alias matches private",
+    fifo_has_agent_reader("/nonexistent/orphan.fifo", proc_root=proc_empty),
+    _fifo_has_agent_reader("/nonexistent/orphan.fifo", proc_root=proc_empty),
+)
+
+# Keepalive-only process holding fifo RDWR
+proc_ka = Path(tempfile.mkdtemp(prefix="tg-proc-ka-"))
+fifo_ka = Path(tempfile.mkdtemp(prefix="tg-fifo-")) / "cabal.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_ka)
+_fake_proc(
+    proc_ka,
+    1001,
+    fifo=fifo_ka,
+    cmdline=b"bash\0-c\0echo fifo-keepalive: label=backend-cabal\0sleep\03600\0",
+    flags_octal="02",  # O_RDWR
+)
+eq(
+    "keepalive-only → no agent reader",
+    False,
+    _fifo_has_agent_reader(fifo_ka, proc_root=proc_ka),
+)
+
+# Agent reader present
+proc_agent = Path(tempfile.mkdtemp(prefix="tg-proc-agent-"))
+fifo_ag = Path(tempfile.mkdtemp(prefix="tg-fifo-")) / "fleet.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_ag)
+_fake_proc(
+    proc_agent,
+    2002,
+    fifo=fifo_ag,
+    cmdline=b"/bin/bash\0/opt/tg/adapters/backend-fifo-reader.sh\0" + str(fifo_ag).encode() + b"\0",
+    flags_octal="00",  # O_RDONLY
+)
+eq(
+    "backend-fifo-reader → has agent reader",
+    True,
+    _fifo_has_agent_reader(fifo_ag, proc_root=proc_agent),
+)
+
+# Writer-only (O_WRONLY) must not count even with agent-looking cmdline
+proc_w = Path(tempfile.mkdtemp(prefix="tg-proc-w-"))
+fifo_w = Path(tempfile.mkdtemp(prefix="tg-fifo-")) / "w.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_w)
+_fake_proc(
+    proc_w,
+    3003,
+    fifo=fifo_w,
+    cmdline=b"tg-poll backend-fifo-reader-not-really\0",  # would match marker if counted
+    flags_octal="01",  # O_WRONLY
+)
+# Note: cmdline still matches agent marker but fd is write-only → skip process
+eq(
+    "O_WRONLY holder not counted as agent reader",
+    False,
+    _fifo_has_agent_reader(fifo_w, proc_root=proc_w),
+)
+
+# deliver_to_backend fifo: message_delivered + message_orphaned when no agent
+bridge_orphan = _tmp_bridge()
+fifo_orphan = bridge_orphan / "sessions" / "cabal.fifo"
+fifo_orphan.parent.mkdir(parents=True)
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_orphan)
+# Hold fifo open RDWR in background so non-blocking write succeeds (keepalive sim)
+_ka_fd = os.open(str(fifo_orphan), os.O_RDWR | os.O_NONBLOCK)
+cfg_orphan = {
+    "backends": {
+        "cabal": {
+            "tag": "cabal",
+            "delivery": "fifo",
+            "fifo": str(fifo_orphan),
+            "prefixes": ["@cabal"],
+        }
+    }
+}
+# Point metrics at bridge dir
+metrics_file = bridge_orphan / ".metrics.log"
+out_orphan = deliver_to_backend(
+    cfg_orphan,
+    "cabal",
+    "",
+    "hello orphan",
+    bridge_dir=bridge_orphan,
+)
+eq("fifo deliver returns no stdout lines", [], out_orphan)
+metrics_text = metrics_file.read_text(encoding="utf-8") if metrics_file.is_file() else ""
+true(
+    "message_delivered emitted on fifo write",
+    "message_delivered" in metrics_text and "mode=fifo" in metrics_text,
+    metrics_text,
+)
+true(
+    "message_orphaned emitted without agent reader",
+    "message_orphaned" in metrics_text and "reason=no_agent_reader" in metrics_text,
+    metrics_text,
+)
+true(
+    "orphan metric names backend",
+    "backend=cabal" in metrics_text,
+    metrics_text,
+)
+os.close(_ka_fd)
+
+# When agent reader is forced true via monkeypatch, no orphan metric
+bridge_ok = _tmp_bridge()
+fifo_ok = bridge_ok / "ok.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_ok)
+_ok_fd = os.open(str(fifo_ok), os.O_RDWR | os.O_NONBLOCK)
+cfg_ok = {
+    "backends": {
+        "fleet": {"delivery": "fifo", "fifo": str(fifo_ok), "tag": "fleet"},
+    }
+}
+import tg_agent_relay.poll as poll_mod
+
+_orig = poll_mod._fifo_has_agent_reader
+poll_mod._fifo_has_agent_reader = lambda *a, **k: True  # type: ignore[assignment]
+try:
+    deliver_to_backend(cfg_ok, "fleet", "", "with reader", bridge_dir=bridge_ok)
+finally:
+    poll_mod._fifo_has_agent_reader = _orig  # type: ignore[assignment]
+ok_metrics = (bridge_ok / ".metrics.log").read_text(encoding="utf-8")
+true("delivered with agent reader", "message_delivered" in ok_metrics, ok_metrics)
+true(
+    "no orphan when agent reader present",
+    "message_orphaned" not in ok_metrics,
+    ok_metrics,
+)
+os.close(_ok_fd)
+
+# emit_metric helper still works (sanity)
+emit_metric("test", "ping", "x", bridge_dir=bridge_ok)
 
 
 # cleanup note: temp dirs left for OS tmp cleaner; no assert on cleanup

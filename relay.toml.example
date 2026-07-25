@@ -964,6 +964,19 @@
 # [sessions]
 # dir = "~/.claude/telegram-bridge/.sessions.d"
 #
+# --- Multi-agent orch (fleet general + cabal L0 coding leaf) ---------------
+# Recommended for phone → orchestrator + coding leaf:
+#   - fleet  = general Grok / orchestrator session (default for untagged msgs)
+#   - cabal  = L0 coding leaf (explicit @cabal … only)
+# Untagged messages need an agent Monitor on the default_backend FIFO.
+# Keepalives alone are NOT enough (writes succeed; agent never sees lines).
+# Diagnose: bash scripts/doctor-inbound.sh
+#
+# [routing]
+# default_backend = "fleet"
+# require_prefix = false   # true if shared/noisy chat — then always @handle
+# tag_style = "bracket"
+#
 # [backends.cabal]
 # type = "grok"
 # delivery = "fifo"
@@ -977,6 +990,10 @@
 # fifo = "~/.grok/telegram-bridge/sessions/fleet.fifo"
 # tag = "fleet"
 # prefixes = ["@fleet", "/fleet", "fleet:"]
+#
+# Monitor per FIFO (in each Grok harness session):
+#   adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/fleet.fifo
+#   adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/cabal.fifo
 #
 # [backends.ollama]
 # type = "ollama"

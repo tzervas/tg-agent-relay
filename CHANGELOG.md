@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Inbound FIFO honesty:** successful non-blocking FIFO writes no longer imply
+  an agent TUI received the message. When only a keepalive (or no process)
+  holds the pipe open for read, `poll.py` still returns write success but emits
+  `message_orphaned backend=… reason=no_agent_reader`. Attach a Monitor with
+  `adapters/backend-fifo-reader.sh <fifo>` (or `tgar-session@`).
+
+### Added
+- `lib/fifo_agent_readers.py` — pure helpers + Linux `/proc/*/fd` scan
+  distinguishing agent readers (`backend-fifo-reader`, `tgar-session@`) from
+  ensure-inbound keepalives; used by `poll.py` (`fifo_has_agent_reader`).
+- `scripts/doctor-inbound.sh` — prints `default_backend`, per-FIFO agent reader
+  counts, and Monitor commands for fleet/cabal; exit 1 if the default backend
+  FIFO has no agent reader.
+- `scripts/inbound-health.sh` — per-backend/session keepalive, agent_reader,
+  and orphan metric report; exit 1 when any fifo target lacks a reader.
+- `ensure-inbound.sh` ERROR lines when `default_backend` / cabal / fleet have
+  no agent reader; points at `doctor-inbound.sh` / `inbound-health.sh`.
+- Docs + `relay.toml.example`: multi-agent orch recommends
+  `default_backend = "fleet"` (general Grok); cabal is the L0 coding leaf.
+  Untagged messages need a Monitor on the default backend FIFO.
+- `docs/SESSIONS.md` — “Why my Grok gets nothing” troubleshooting
+  (`default_backend`, `@fleet` prefix, Monitor, health checks).
+- Offline unit tests: `tests/test_fifo_agent_readers.py` + orphan metric cases
+  in `tests/test_poll.py`.
+
 ## 0.10.2 — 2026-07-21
 
 ### Fixed

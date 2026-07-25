@@ -41,7 +41,9 @@ In `relay.toml` (optional but recommended for unified chat):
 
 ```toml
 [routing]
-require_prefix = true   # optional: ignore unprefixed noise in shared chats
+# Multi-agent orch: fleet = general Grok; cabal = L0 coding leaf.
+default_backend = "fleet"   # untagged messages → fleet.fifo (needs a Monitor)
+require_prefix = true       # optional: ignore unprefixed noise in shared chats
 
 [sessions]
 # dir = "~/.claude/telegram-bridge/.sessions.d"  # default under bridge dir: .sessions.d
@@ -143,14 +145,67 @@ Deploy also installs the Python package (`uv pip install -e .` into
 
 ## Mobile checklist
 
-1. [ ] `require_prefix = true` if the chat is shared/noisy
-2. [ ] One `register-session.sh --handle …` per Grok window
-3. [ ] One `backend-fifo-reader.sh` Monitor per handle
-4. [ ] Send `@handle …` — verify only that session reacts
-5. [ ] `list-sessions.sh` shows `pid` alive/dead
+1. [ ] `default_backend = "fleet"` for multi-agent orch (cabal = `@cabal` L0 leaf)
+2. [ ] `require_prefix = true` if the chat is shared/noisy
+3. [ ] One `register-session.sh --handle …` per Grok window
+4. [ ] One `backend-fifo-reader.sh` Monitor per handle (**including default_backend**)
+5. [ ] `bash scripts/doctor-inbound.sh` exits 0
+6. [ ] Send `@handle …` / untagged — verify only the intended session reacts
+7. [ ] `list-sessions.sh` shows `pid` alive/dead
+
+## Why my Grok gets nothing
+
+Outbound hooks (agent → Telegram) can work while **inbound** (Telegram → agent
+TUI) is silent. Usual causes:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Unprefixed TG messages never appear | `routing.default_backend` points at a FIFO with **no Monitor** (only keepalive) | Attach `backend-fifo-reader.sh` for that backend’s fifo, **or** send `@fleet …` / `@cabal …` to a handle that has a Monitor |
+| `message_delivered mode=fifo` in `.metrics.log` but TUI empty | Write succeeded (keepalive holds the pipe open) but **no agent reader** consumed the line | Look for `message_orphaned … reason=no_agent_reader`; attach Monitor |
+| Only one of cabal/fleet works | Second session never registered a reader | Second Grok window: Monitor command from `register-session.sh` |
+| After reboot / deploy | `tg-poll` or keepalives down | `bash scripts/ensure-inbound.sh` then re-attach Monitors |
+
+### Check health
+
+```bash
+# default_backend + per-FIFO agent reader counts + Monitor commands
+bash scripts/doctor-inbound.sh --bridge-dir ~/.claude/telegram-bridge
+# exit 1 if default_backend FIFO has no agent reader
+
+# Per-FIFO: keepalive? agent_reader? orphan metric counts
+bash scripts/inbound-health.sh --bridge-dir ~/.claude/telegram-bridge
+# Exit 1 when any fifo backend lacks an agent reader
+
+# ensure-inbound also prints ERROR if default_backend / cabal / fleet lack readers
+bash scripts/ensure-inbound.sh
+```
+
+### Monitor command (per handle)
+
+```bash
+# Example — use the path printed by register-session / doctor-inbound / ensure-inbound
+adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/fleet.fifo
+# coding leaf:
+adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/cabal.fifo
+```
+
+### Routing reminders
+
+- **Recommended multi-agent orch:** `default_backend = "fleet"` (general Grok /
+  orchestrator). **cabal** is the L0 coding leaf — route with `@cabal …`.
+- **`default_backend = "cabal"`** sends **untagged** messages to cabal’s FIFO
+  only. If cabal has no Monitor, Grok “gets nothing” for plain text.
+- Prefer **`@fleet …` / `@cabal …`** when multiple sessions share one chat
+  (`require_prefix = true` is safest in shared chats).
+- **`message_delivered` ≠ agent saw it.** Orphan detection emits
+  `message_orphaned backend=… reason=no_agent_reader` after a successful FIFO
+  write with only keepalive (or no) readers. Bytes may sit in the kernel
+  buffer until a Monitor attaches — do not treat keepalive alone as delivery.
 
 ## See also
 
 - [ROUTING.md](ROUTING.md) — prefixes, FIFO delivery, static multi-backend
 - [SETUP.md](../SETUP.md) — bridge install
-- `relay.toml.example` — commented multi-handle example
+- `relay.toml.example` — commented multi-handle / fleet-orch example
+- `scripts/doctor-inbound.sh` — default_backend + agent reader gate
+- `scripts/inbound-health.sh` — keepalive / agent_reader / orphan metrics
