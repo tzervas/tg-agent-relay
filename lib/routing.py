@@ -28,8 +28,19 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
     static = cfg.get("backends") or {}
     static = static if isinstance(static, dict) else {}
     bridge = cfg.get("_bridge_dir")
-    if not bridge:
-        return static
+    # Do NOT gate the session overlay on _bridge_dir alone.
+    #
+    # sessions.sessions_dir_from_cfg() resolves the registry in the order
+    #     cfg["sessions"]["dir"]  ->  env  ->  <bridge>/.sessions.d  ->  home default
+    # so _bridge_dir is only ONE of four sources — and the FIRST is the explicit
+    # cfg["sessions"]["dir"]. Returning `static` whenever _bridge_dir was unset meant a
+    # caller that configured sessions the documented way got NO session backends at all:
+    # strip_prefix() returned None and resolve() produced an empty backend, with nothing
+    # logged to say why. That is the failure behind the three test_sessions_routing
+    # assertions (backend == '' and strip_prefix -> None).
+    #
+    # Passing bridge through as None is safe: the resolver falls through to the remaining
+    # sources, and the except below still catches anything unresolvable.
     try:
         import sessions as _sessions  # type: ignore
 
