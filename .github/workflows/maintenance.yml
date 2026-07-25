@@ -1,0 +1,291 @@
+# Weekly maintenance — right-sized for the self-hosted podman fleet.
+# Exit contract: broken -> fail; success -> pass; nothing to do -> pass (exit 0);
+# cannot tell (tool/API crash) -> fail loudly. Empty != unknown.
+#
+# Sizing (measured fleet caps): micro 0.25c/512MiB | small 0.5c/1g | medium 2c/4g.
+# Explicit tier labels OVERRIDE the name heuristic. Names containing ruff/lint/format
+# silently force MICRO (512 MiB) without an explicit tier — do not rely on that.
+name: maintenance
+
+on:
+  schedule:
+    # Weekly Monday 08:17 UTC (offset from security cron to avoid pile-up)
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+# NEVER cancel-in-progress with schedule: on self-hosted — silent cancel trap.
+concurrency:
+  group: maintenance-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Ruff check + format --check.
+  # Size: medium (2c/4g). Basis: job name contains "ruff" which would force
+  # MICRO (512 MiB); we install the project's dev group via `uv sync` (pytest,
+  # ruff, pygments). Any project-dep install must be >= medium on this fleet —
+  # undersizing is the #1 false-CI cause (compile OOM at micro measured 1225 MiB
+  # peak / SIGKILL 137). Python equivalent risk is uv sync + tool bootstrap.
+  # ---------------------------------------------------------------------------
+  ruff-style:
+    name: maintenance python style (ruff)
+    runs-on: [self-hosted, linux, x64, podman, medium]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Sync dev group
+        run: |
+          set -euo pipefail
+          if [ ! -f pyproject.toml ]; then
+            echo "UNKNOWN: pyproject.toml missing — cannot lint" >&2
+            exit 1
+          fi
+          uv sync --group dev
+
+      - name: Ruff check
+        run: |
+          set -euo pipefail
+          # Scope matches pyproject [tool.ruff] src; empty tree would still exit 0 from ruff.
+          uv run ruff check tg_agent_relay providers lib tests
+
+      - name: Ruff format --check
+        run: |
+          set -euo pipefail
+          uv run ruff format --check tg_agent_relay providers lib tests
+
+  # ---------------------------------------------------------------------------
+  # Dependency staleness report (report-only; never fails solely because
+  # packages are outdated — that is information, not a broken gate).
+  # Size: medium. Basis: `uv sync` installs the locked tree (optional extras may
+  # pull native wheels such as matplotlib/numpy); installs require >= medium.
+  # ---------------------------------------------------------------------------
+  dependency-age:
+    name: maintenance dependency age report
+    runs-on: [self-hosted, linux, x64, podman, medium]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Report outdated packages
+        run: |
+          set -euo pipefail
+          if [ ! -f pyproject.toml ]; then
+            echo "UNKNOWN: pyproject.toml missing — cannot assess deps" >&2
+            exit 1
+          fi
+
+          # Install default + dev group (not optional extras) for a stable report.
+          uv sync --group dev
+
+          report="${RUNNER_TEMP:-/tmp}/outdated-report.txt"
+          {
+            echo "# Dependency age report"
+            echo
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Tool: uv $(uv --version 2>/dev/null || echo unknown)"
+            echo "Scope: default + dependency-group dev (not optional extras adk/dashboard)"
+            echo
+          } > "$report"
+
+          # Prefer uv's outdated listing; fall back to pip list --outdated.
+          set +e
+          uv pip list --outdated > "${report}.raw" 2> "${report}.err"
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            # Distinguishing empty vs unknown: tool crash / bad env is unknown.
+            if [ ! -s "${report}.raw" ] && [ -s "${report}.err" ]; then
+              echo "UNKNOWN: uv pip list --outdated failed" >&2
+              cat "${report}.err" >&2
+              exit 1
+            fi
+          fi
+
+          if [ ! -s "${report}.raw" ] || ! grep -q '[a-zA-Z]' "${report}.raw"; then
+            {
+              echo "## Result: EMPTY"
+              echo
+              echo "No outdated packages in the synced environment."
+              echo "Nothing to do — PASS."
+            } >> "$report"
+            cat "$report"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
+
+          {
+            echo "## Result: OUTDATED PACKAGES PRESENT (informational)"
+            echo
+            echo '```'
+            cat "${report}.raw"
+            echo '```'
+            echo
+            echo "This job is report-only: outdated deps do not fail the gate."
+            echo "Bump via \`uv lock --upgrade-package <name>\` and a normal PR."
+          } >> "$report"
+          cat "$report"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Informational only — exit 0 even when outdated packages exist.
+          exit 0
+
+  # ---------------------------------------------------------------------------
+  # Stale / already-merged branch report. REPORT ONLY — never deletes branches.
+  # Size: micro (0.25c/512MiB). Basis: gh API + shell only; no installs, no
+  # compile, no pytest. Name has no micro-forcing substring; explicit micro.
+  # ---------------------------------------------------------------------------
+  merged-branch-report:
+    name: maintenance merged branch report
+    runs-on: [self-hosted, linux, x64, podman, micro]
+    timeout-minutes: 15
+    steps:
+      - name: Report merged remote branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          default_branch="${{ github.event.repository.default_branch }}"
+          default_branch="${default_branch:-main}"
+
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "UNKNOWN: gh CLI not available — cannot query branches" >&2
+            exit 1
+          fi
+
+          set +e
+          names=$(gh api "repos/${repo}/branches?per_page=100" --paginate --jq '.[].name' 2>/tmp/gh-branches.err)
+          brc=$?
+          set -e
+          if [ "$brc" -ne 0 ]; then
+            echo "UNKNOWN: gh api branches failed (rc=$brc)" >&2
+            cat /tmp/gh-branches.err >&2 || true
+            exit 1
+          fi
+
+          report="${RUNNER_TEMP:-/tmp}/merged-branch-report.md"
+          {
+            echo "# Merged / stale branch report"
+            echo
+            echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Repository: ${repo}"
+            echo "Default branch: ${default_branch}"
+            echo
+            echo "Policy: **report only** — this job never deletes or force-pushes."
+            echo "Protected from listing noise: main, master, dev, sec."
+            echo
+            echo "| Branch | Merged into default? | Last commit (UTC) | Note |"
+            echo "|--------|----------------------|-------------------|------|"
+          } > "$report"
+
+          count=0
+          if [ -z "${names}" ]; then
+            {
+              echo
+              echo "## Result: EMPTY"
+              echo
+              echo "API returned zero branches (unexpected for a live repo)."
+              echo "Treating as nothing to report — PASS for candidate list."
+            } >> "$report"
+            cat "$report"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
+
+          while IFS= read -r name; do
+            case "$name" in
+              main|master|dev|sec) continue ;;
+              "") continue ;;
+            esac
+
+            set +e
+            # identical/behind => tip is contained in default (merged or fully rebased-in).
+            merged=$(gh api "repos/${repo}/compare/${default_branch}...${name}" --jq '
+              if .status == "identical" or .status == "behind" then "yes"
+              elif .status == "ahead" or .status == "diverged" then "no"
+              else "unknown"
+              end
+            ' 2>/tmp/gh-cmp.err)
+            mrc=$?
+            set -e
+            if [ "$mrc" -ne 0 ] || [ -z "$merged" ]; then
+              echo "UNKNOWN: compare ${default_branch}...${name} failed" >&2
+              cat /tmp/gh-cmp.err >&2 || true
+              exit 1
+            fi
+            if [ "$merged" = "unknown" ]; then
+              echo "UNKNOWN: compare status unrecognised for ${name}" >&2
+              exit 1
+            fi
+            if [ "$merged" != "yes" ]; then
+              sleep 1
+              continue
+            fi
+
+            set +e
+            last=$(gh api "repos/${repo}/branches/${name}" --jq '.commit.commit.committer.date // .commit.commit.author.date // "unknown"' 2>/tmp/gh-br.err)
+            lrc=$?
+            set -e
+            if [ "$lrc" -ne 0 ]; then
+              echo "UNKNOWN: branch metadata for ${name} failed" >&2
+              cat /tmp/gh-br.err >&2 || true
+              exit 1
+            fi
+
+            echo "| \`${name}\` | ${merged} | ${last} | candidate for manual deletion |" >> "$report"
+            count=$((count + 1))
+            sleep 1
+          done < <(printf '%s\n' "$names")
+
+          if [ "$count" -eq 0 ]; then
+            {
+              echo
+              echo "## Result: EMPTY"
+              echo
+              echo "No merged-into-default feature branches found."
+              echo "Nothing to do — PASS."
+            } >> "$report"
+          else
+            {
+              echo
+              echo "## Result: ${count} candidate(s)"
+              echo
+              echo "Review and delete manually if desired. This job never mutates refs."
+            } >> "$report"
+          fi
+
+          cat "$report"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
