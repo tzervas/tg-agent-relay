@@ -68,9 +68,7 @@ def test_is_agent_reader_cmdline(cmdline: bytes | str, expected: bool) -> None:
         ),
     ],
 )
-def test_fifo_path_in_cmdline(
-    cmdline: bytes | str, fifo: str, expected: bool
-) -> None:
+def test_fifo_path_in_cmdline(cmdline: bytes | str, fifo: str, expected: bool) -> None:
     assert fifo_path_in_cmdline(cmdline, fifo) is expected
 
 
@@ -105,7 +103,7 @@ def test_count_agent_readers_fake_proc(tmp_path: Path) -> None:
 
 
 def test_fifo_has_agent_reader_fd_scan(tmp_path: Path) -> None:
-    """ /proc/*/fd + fdinfo: agent reader yes; keepalive / O_WRONLY no. """
+    """/proc/*/fd + fdinfo: agent reader yes; keepalive / O_WRONLY no."""
     fifo = tmp_path / "cabal.fifo"
     os.mkfifo(fifo)
     proc = tmp_path / "proc"
@@ -184,7 +182,13 @@ def test_doctor_inbound_orphan_exit(tmp_path: Path) -> None:
     # Use real config loader + reader helper from the repo
     lib = bridge / "lib"
     lib.mkdir()
-    for name in ("relay-config.sh", "python.sh", "toml_to_json.py", "sessions.py", "fifo_agent_readers.py"):
+    for name in (
+        "relay-config.sh",
+        "python.sh",
+        "toml_to_json.py",
+        "sessions.py",
+        "fifo_agent_readers.py",
+    ):
         src = REPO / "lib" / name
         if src.is_file():
             shutil.copy(src, lib / name)
