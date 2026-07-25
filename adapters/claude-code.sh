@@ -461,12 +461,22 @@ if [[ -n "$SUMMARY" ]]; then
     declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
     _CC_TOOL="$(pf '.tool_name // "tool"')"
     if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
-        _CC_FILTERED="$(printf '%s' "$SUMMARY" | relay_python -c "
-from tg_agent_relay.goal_events import filter_hook_summary
+        # tool_name and the event name come straight off the hook payload, so they
+        # are passed through the ENVIRONMENT — interpolating them into the -c source
+        # let a crafted tool_name close the string literal and run arbitrary code in
+        # the relay's interpreter. Same reasoning as relay-notify.sh's goal filter.
+        _CC_FILTERED="$(printf '%s' "$SUMMARY" \
+            | RELAY_GOAL_TOOL="$_CC_TOOL" RELAY_GOAL_EVENT="$EVENT" relay_python -c "
+import os
 import sys
-s=sys.stdin.read()
-r=filter_hook_summary(s, tool_name='${_CC_TOOL}', hook_event='${EVENT}')
-print('' if r is None else r)
+from tg_agent_relay.goal_events import filter_hook_summary
+s = sys.stdin.read()
+r = filter_hook_summary(
+    s,
+    tool_name=os.environ.get('RELAY_GOAL_TOOL', ''),
+    hook_event=os.environ.get('RELAY_GOAL_EVENT', ''),
+)
+sys.stdout.write('' if r is None else r)
 " 2>/dev/null)" || _CC_FILTERED=""
         [[ -n "$_CC_FILTERED" ]] && SUMMARY="$_CC_FILTERED"
     fi
