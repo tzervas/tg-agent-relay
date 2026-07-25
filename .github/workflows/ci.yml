@@ -1,65 +1,80 @@
-# CI — DISABLED for automatic runs (maintainer: remote Actions off).
-# Day-to-day and releases use local gates only:
-#   bash scripts/local-ci.sh
-#   bash scripts/release.sh vX.Y.Z
+# Centralized CI — calls tzervas/mycelium-workflows.
 #
-# workflow_dispatch remains so the YAML can be re-enabled manually if desired.
+# PIN: @v1 is a moving major tag. Minor/patch policy changes arrive automatically;
+# a breaking change lands on v2 and this file must opt in.
+#
+# ON THE PREVIOUS HEADER ("DISABLED for automatic runs — remote Actions off"):
+# that posture is already not in effect. fleet-ci.yml and fleet-security.yml in
+# this repo run on every push and pull_request and have been doing so — see the
+# Actions tab. Keeping ci.yml dispatch-only did not stop remote Actions; it only
+# meant the repo's own product gate was the one thing that never ran on a PR.
+# This restores it. `scripts/local-ci.sh` remains the local gate and is unchanged.
+#
+# TIERING: the tier comes from the branch under test — a PR's BASE branch — so a
+# PR into main is gated at main strength BEFORE it merges.
+#
+#   dev   check+test  (ruff, ruff format, byte-compile, offline suite)
+#   main  full        (+ uv build)
+#
+# NO MATRIX: pyproject declares requires-python = ">=3.14", so a 3.11/3.12/3.13
+# breadth matrix would be a guaranteed red herring. The interpreter stays 3.14,
+# which is above the fleet floor of 3.11 anyway.
 name: ci
 
 on:
   workflow_dispatch:
     inputs:
-      run_tests:
-        description: "Run full offline test suite"
-        type: boolean
-        default: true
-      python_version:
-        description: "Python version for uv"
-        type: string
-        default: "3.14"
-
-concurrency:
-  group: ci-manual-${{ github.ref }}
-  cancel-in-progress: true
+      depth:
+        description: 'Gate depth (overrides the tier default)'
+        type: choice
+        options: [lint, check, check+test, full]
+        default: check+test
+      runner:
+        description: 'Where to run'
+        type: choice
+        options: [self-hosted-fleet, github-hosted]
+        default: self-hosted-fleet
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  python:
-    name: uv + ruff + tests (${{ inputs.python_version }})
-    runs-on: [self-hosted, linux, x64, podman]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          version: "latest"
-          enable-cache: true
-          cache-dependency-glob: |
-            uv.lock
-            pyproject.toml
-
-      - name: Python ${{ inputs.python_version }} via uv
-        run: uv python install ${{ inputs.python_version }}
-
-      - name: Sync project (dev group)
-        run: uv sync --all-groups
-
-      - name: Ruff check
-        run: uv run ruff check tg_agent_relay providers lib tests
-
-      - name: Ruff format --check
-        run: uv run ruff format --check tg_agent_relay providers lib tests
-
-      - name: Offline tests
-        if: ${{ inputs.run_tests }}
-        run: |
-          export RELAY_PYTHON="$(pwd)/.venv/bin/python"
-          bash tests/run-tests.sh
+  ci:
+    uses: tzervas/mycelium-workflows/.github/workflows/reusable-python-ci.yml@v1
+    with:
+      # Unchanged from the previous gate.
+      python-version: '3.14'
+      python-versions: '[]'
+      depth: >-
+        ${{ inputs.depth
+            || ((github.base_ref || github.ref_name) == 'main' && 'full' || 'check+test') }}
+      # This repo already ran on the fleet at both tiers; keep it there rather
+      # than moving the gate onto GitHub-hosted runners as a side effect.
+      runner-labels: >-
+        ${{ inputs.runner == 'github-hosted'
+            && '["ubuntu-latest"]'
+            || '["self-hosted","linux","x64","podman"]' }}
+      # Exactly the previous ruff surface.
+      lint-paths: 'tg_agent_relay providers lib tests'
+      format-check: true
+      # The gate is the offline harness, not bare pytest. RELAY_PYTHON must point
+      # at the interpreter uv just synced, which is what the previous inline step
+      # did with `export RELAY_PYTHON="$(pwd)/.venv/bin/python"`.
+      test-command: 'bash tests/run-tests.sh'
+      test-env: |
+        RELAY_PYTHON=$PWD/.venv/bin/python
 
   rust:
+    # Kept verbatim: the MSRV pin assertions are repo-specific and the Python
+    # reusable has no equivalent. Centralizing must not cost this gate.
     name: rust toolchain (MSRV 1.96)
     runs-on: [self-hosted, linux, x64, podman]
     steps:
