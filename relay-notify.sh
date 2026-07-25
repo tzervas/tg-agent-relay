@@ -174,16 +174,49 @@ if [[ -f "$BRIDGE_DIR/lib/comms_format.sh" ]]; then
 fi
 
 # Benign goal-mode tool failures: suppress hook spam (v0.9.0).
+# Fail *open* when the filter cannot run (import/error): never silence all
+# hook traffic because tg_agent_relay is not on PYTHONPATH (temp bridges,
+# partial deploys, bare python -c). Only suppress on the explicit SKIP code.
+#
+# Exit-code protocol (why not "empty stdout means skip"): apply_goal_noise_policy
+# returns str | None, and that str can legitimately be empty. Overloading empty
+# stdout would conflate "policy said drop this" with "policy returned ''" and
+# with "python died before printing anything". Three distinct codes remove the
+# ambiguity:
+#   0     -> stdout is the filtered message
+#   3     -> policy returned None; drop the message (the ONLY silencing path)
+#   other -> filter unavailable or crashed; fail open, send MSG unchanged
+#
+# RELAY_HOOK_EVENT is passed through the ENVIRONMENT, never interpolated into the
+# -c source. It originates in the harness hook payload (adapters/*.sh export it
+# from the event name), so a quote in it used to produce a SyntaxError inside the
+# filter — which under the old fail-closed branch silently ate the message.
 if [[ "${TG_SEND_SOURCE:-}" == "hook" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
-    _GOAL_FILTERED="$(printf '%s' "$MSG" | relay_python -c "
-from tg_agent_relay.goal_events import apply_goal_noise_policy
+    _GOAL_RC=0
+    _GOAL_FILTERED="$(printf '%s' "$MSG" | RELAY_HOOK_EVENT="${RELAY_HOOK_EVENT:-}" relay_python -c "
+import os
 import sys
-t=sys.stdin.read()
-r=apply_goal_noise_policy(t, hook_event='${RELAY_HOOK_EVENT:-}', is_hook=True)
-print('' if r is None else r)
-" 2>/dev/null)" || _GOAL_FILTERED=""
-    [[ -z "$_GOAL_FILTERED" ]] && exit 0
-    MSG="$_GOAL_FILTERED"
+try:
+    from tg_agent_relay.goal_events import apply_goal_noise_policy
+except Exception:
+    sys.exit(1)
+t = sys.stdin.read()
+r = apply_goal_noise_policy(t, hook_event=os.environ.get('RELAY_HOOK_EVENT', ''), is_hook=True)
+if r is None:
+    sys.exit(3)
+sys.stdout.write(r)
+" 2>/dev/null)" || _GOAL_RC=$?
+    if (( _GOAL_RC == 0 )); then
+        MSG="$_GOAL_FILTERED"
+    elif (( _GOAL_RC == 3 )); then
+        exit 0 # intentional goal-noise skip
+    else
+        # Filter unavailable or crashed — keep MSG unchanged (fail open).
+        if [[ -n "${RELAY_DEBUG:-}" ]]; then
+            printf 'relay-notify: goal-noise filter unavailable (rc=%s); sending unfiltered\n' \
+                "$_GOAL_RC" >&2
+        fi
+    fi
 fi
 
 # PLAN messages: attach approve/reject inline keyboard on first send page.
