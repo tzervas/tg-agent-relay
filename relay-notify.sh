@@ -174,16 +174,31 @@ if [[ -f "$BRIDGE_DIR/lib/comms_format.sh" ]]; then
 fi
 
 # Benign goal-mode tool failures: suppress hook spam (v0.9.0).
+# Fail *open* when the filter cannot run (import/error): never silence all
+# hook traffic because tg_agent_relay is not on PYTHONPATH (temp bridges,
+# partial deploys, bare python -c). Only suppress when the filter runs and
+# returns None (empty stdout + exit 0).
 if [[ "${TG_SEND_SOURCE:-}" == "hook" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _GOAL_RC=0
     _GOAL_FILTERED="$(printf '%s' "$MSG" | relay_python -c "
-from tg_agent_relay.goal_events import apply_goal_noise_policy
 import sys
-t=sys.stdin.read()
-r=apply_goal_noise_policy(t, hook_event='${RELAY_HOOK_EVENT:-}', is_hook=True)
-print('' if r is None else r)
-" 2>/dev/null)" || _GOAL_FILTERED=""
-    [[ -z "$_GOAL_FILTERED" ]] && exit 0
-    MSG="$_GOAL_FILTERED"
+try:
+    from tg_agent_relay.goal_events import apply_goal_noise_policy
+except Exception:
+    sys.exit(1)
+t = sys.stdin.read()
+r = apply_goal_noise_policy(t, hook_event='${RELAY_HOOK_EVENT:-}', is_hook=True)
+if r is None:
+    sys.exit(0)
+print(r)
+" 2>/dev/null)" || _GOAL_RC=$?
+    if (( _GOAL_RC != 0 )); then
+        : # filter unavailable — keep MSG
+    elif [[ -z "$_GOAL_FILTERED" ]]; then
+        exit 0 # intentional goal-noise skip
+    else
+        MSG="$_GOAL_FILTERED"
+    fi
 fi
 
 # PLAN messages: attach approve/reject inline keyboard on first send page.
