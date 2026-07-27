@@ -174,49 +174,89 @@ if (( KILL_STEALERS == 1 )); then
     printf 'ensure-inbound: --kill-stealers complete (also ensuring poll/keepalives)\n'
 fi
 
-# --- tg-poll ---
-POLL_LOCK="$RUN_DIR/tg-poll.lock"
-POLL_PID="$RUN_DIR/tg-poll.pid"
-POLL_LOG="$LOG_DIR/tg-poll.log"
-if (( RESTART_POLL == 1 )) && pid_alive "$(cat "$POLL_PID" 2>/dev/null || true)"; then
-    old_pid="$(cat "$POLL_PID" 2>/dev/null || true)"
-    kill "$old_pid" 2>/dev/null || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        pid_alive "$old_pid" || break
-        sleep 0.2
-    done
-    if pid_alive "$old_pid"; then
-        kill -9 "$old_pid" 2>/dev/null || true
+# --- tg-poll (one loop per bot) ---
+#
+# Telegram's getUpdates cursor is per bot, so each configured bot needs its own
+# poll process AND its own state dir (tg_agent_relay.bots.bot_state_dir).  Two
+# loops sharing one .offset would advance past each other's updates and eat
+# messages silently.  With no [bots.*] table this runs exactly one unnamed loop
+# with the legacy pidfile/log names, so single-bot installs are unchanged.
+start_poll_for_bot() {
+    local bot="${1:-}" label lock pidf log
+    if [[ -z "$bot" ]]; then
+        label="tg-poll"
+    else
+        label="tg-poll-${bot}"
     fi
-    rm -f "$POLL_PID"
-    printf 'ensure-inbound: restarted tg-poll (was pid %s)\n' "$old_pid"
-fi
-if pid_alive "$(cat "$POLL_PID" 2>/dev/null || true)"; then
-    printf 'ensure-inbound: tg-poll already running (pid %s)\n' "$(cat "$POLL_PID")"
-else
-    rm -f "$POLL_PID"
+    lock="$RUN_DIR/${label}.lock"
+    pidf="$RUN_DIR/${label}.pid"
+    log="$LOG_DIR/${label}.log"
+
+    if (( RESTART_POLL == 1 )) && pid_alive "$(cat "$pidf" 2>/dev/null || true)"; then
+        local old_pid
+        old_pid="$(cat "$pidf" 2>/dev/null || true)"
+        kill "$old_pid" 2>/dev/null || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            pid_alive "$old_pid" || break
+            sleep 0.2
+        done
+        if pid_alive "$old_pid"; then
+            kill -9 "$old_pid" 2>/dev/null || true
+        fi
+        rm -f "$pidf"
+        printf 'ensure-inbound: restarted %s (was pid %s)\n' "$label" "$old_pid"
+    fi
+
+    if pid_alive "$(cat "$pidf" 2>/dev/null || true)"; then
+        printf 'ensure-inbound: %s already running (pid %s)\n' "$label" "$(cat "$pidf")"
+        return 0
+    fi
+
+    rm -f "$pidf"
     if (( DRY_RUN == 1 )); then
-        printf 'ensure-inbound: [dry-run] would start tg-poll\n'
-    elif command -v flock >/dev/null 2>&1; then
-        flock -n "$POLL_LOCK" bash -c '
+        printf 'ensure-inbound: [dry-run] would start %s (RELAY_BOT=%s)\n' \
+            "$label" "${bot:-default}"
+        return 0
+    fi
+
+    if command -v flock >/dev/null 2>&1; then
+        RELAY_BOT="$bot" flock -n "$lock" bash -c '
             pidf=$1; log=$2; poll=$3
             echo $$ >"$pidf"
             exec >>"$log" 2>&1
-            echo "tg-poll: starting at $(date -Iseconds)"
+            echo "tg-poll: starting at $(date -Iseconds) bot=${RELAY_BOT:-default}"
             exec "$poll"
-        ' _ "$POLL_PID" "$POLL_LOG" "$BRIDGE_DIR/tg-poll.sh" &
+        ' _ "$pidf" "$log" "$BRIDGE_DIR/tg-poll.sh" &
         disown "$!" 2>/dev/null || true
         sleep 0.5
-        if pid_alive "$(cat "$POLL_PID" 2>/dev/null || true)"; then
-            printf 'ensure-inbound: tg-poll started (pid %s)\n' "$(cat "$POLL_PID")"
+        if pid_alive "$(cat "$pidf" 2>/dev/null || true)"; then
+            printf 'ensure-inbound: %s started (pid %s)\n' "$label" "$(cat "$pidf")"
         else
-            printf 'ensure-inbound: tg-poll launch requested (see %s)\n' "$POLL_LOG"
+            printf 'ensure-inbound: %s launch requested (see %s)\n' "$label" "$log"
         fi
     else
-        nohup "$BRIDGE_DIR/tg-poll.sh" >>"$POLL_LOG" 2>&1 &
-        echo $! >"$POLL_PID"
-        printf 'ensure-inbound: tg-poll started without flock (pid %s)\n' "$(cat "$POLL_PID")"
+        RELAY_BOT="$bot" nohup "$BRIDGE_DIR/tg-poll.sh" >>"$log" 2>&1 &
+        echo $! >"$pidf"
+        printf 'ensure-inbound: %s started without flock (pid %s)\n' "$label" "$(cat "$pidf")"
     fi
+}
+
+# Discover configured bots. No [bots.*] → one unnamed (legacy) loop.
+if declare -f load_relay_config >/dev/null 2>&1; then
+    load_relay_config "$BRIDGE_DIR/relay.toml"
+fi
+declare -a POLL_BOTS=()
+if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
+    while IFS= read -r _bot; do
+        [[ -n "$_bot" ]] && POLL_BOTS+=("$_bot")
+    done < <(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '(.bots // {}) | keys[]' 2>/dev/null || true)
+fi
+if (( ${#POLL_BOTS[@]} == 0 )); then
+    start_poll_for_bot ""
+else
+    for _bot in "${POLL_BOTS[@]}"; do
+        start_poll_for_bot "$_bot"
+    done
 fi
 
 # --- Keepalives: registered sessions ---
