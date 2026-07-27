@@ -91,7 +91,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -d tests ] || [ -d test ]; then
-            uv run pytest -q 2>/dev/null || pytest -q 2>/dev/null || echo "pytest failed or missing — mark job fail" >&2
+            # Decide the runner UP FRONT. Never fall back on an exit code: || fires on any
+            # non-zero, so `uv run pytest || pytest` retries in a different environment when the
+            # first run failed *because tests failed*, and a pass there greens a red suite.
+            if command -v uv >/dev/null 2>&1 && { [ -f uv.lock ] || [ -f pyproject.toml ]; }; then
+              RUN="uv run pytest"
+            else
+              RUN="pytest"
+            fi
+            # No 2>/dev/null: a CI log is where stderr belongs, and discarding it makes
+            # "tests failed" indistinguishable from "pytest is absent".
+            $RUN -q
           else
             echo "no tests/ directory — skip"
           fi
