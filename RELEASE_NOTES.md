@@ -1,3 +1,49 @@
+## v0.10.3 (2026-07-27)
+
+### Highlights
+
+- **Inbound messages now actually reach the running session.** `ensure-inbound`
+  keeps every backend FIFO open `RDWR` so writers never `ENXIO`; combined with
+  treating a successful write as delivery, that meant lines went into the 64K
+  kernel pipe buffer with nothing reading them — invisible until a Monitor
+  attached and dumped the backlog, or dropped for good once the buffer filled.
+  Delivery is now gated on an attested agent reader, and anything undeliverable
+  is spooled to disk and replayed, in order, when a session attaches.
+- `message_delivered` is trustworthy again: it is emitted only when a reader was
+  attested **and** the write landed. Orphans report `message_orphaned … spooled=1`.
+- **Registered `@handle` sessions were invisible to the routing API** when the
+  config carried `sessions.dir` but no `_bridge_dir` — `resolve` silently fell
+  through to `default_backend`. Live inbound routing was unaffected.
+
+### Upgrade notes
+
+Attach a Monitor per backend FIFO — the spool makes missed messages
+recoverable, it does not attach a reader for you:
+
+```bash
+bash scripts/doctor-inbound.sh          # agent_readers=0 means nothing is listening
+adapters/backend-fifo-reader.sh ~/.claude/telegram-bridge/sessions/fleet.fifo
+```
+
+Inspect or drain a backlog by hand:
+
+```bash
+python -m tg_agent_relay.spool count fleet
+python -m tg_agent_relay.spool drain fleet
+```
+
+See `docs/INBOUND-DELIVERY.md`. No config changes are required; keepalives are
+unchanged and still needed.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.3
+bash scripts/deploy-local.sh --ref v0.10.3
+```
+
+---
+
 ## v0.10.2 (2026-07-21)
 
 ### Highlights

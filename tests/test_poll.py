@@ -799,7 +799,10 @@ eq(
     _fifo_has_agent_reader(fifo_w, proc_root=proc_w),
 )
 
-# deliver_to_backend fifo: message_delivered + message_orphaned when no agent
+# deliver_to_backend fifo: no agent reader → spooled + message_orphaned, and
+# explicitly NOT message_delivered. A keepalive-held FIFO accepts the write into
+# the kernel buffer, so the old code reported delivery for a line no agent ever
+# saw; the line is now persisted for replay instead of written into the void.
 bridge_orphan = _tmp_bridge()
 fifo_orphan = bridge_orphan / "sessions" / "cabal.fifo"
 fifo_orphan.parent.mkdir(parents=True)
@@ -829,8 +832,8 @@ out_orphan = deliver_to_backend(
 eq("fifo deliver returns no stdout lines", [], out_orphan)
 metrics_text = metrics_file.read_text(encoding="utf-8") if metrics_file.is_file() else ""
 true(
-    "message_delivered emitted on fifo write",
-    "message_delivered" in metrics_text and "mode=fifo" in metrics_text,
+    "message_delivered NOT emitted without an agent reader",
+    "message_delivered" not in metrics_text,
     metrics_text,
 )
 true(
@@ -839,10 +842,33 @@ true(
     metrics_text,
 )
 true(
+    "orphan metric records that the line was spooled",
+    "spooled=1" in metrics_text,
+    metrics_text,
+)
+true(
     "orphan metric names backend",
     "backend=cabal" in metrics_text,
     metrics_text,
 )
+
+# The orphaned line is recoverable, not lost in the kernel buffer.
+from tg_agent_relay.spool import drain as _spool_drain
+from tg_agent_relay.spool import pending_count as _spool_pending
+
+eq("orphaned line is spooled", 1, _spool_pending("cabal", bridge_orphan))
+_replayed: list[str] = []
+eq(
+    "drain replays the orphaned line",
+    1,
+    _spool_drain("cabal", _replayed.append, bridge_orphan),
+)
+true(
+    "replayed line carries tag and text",
+    _replayed and "hello orphan" in _replayed[0] and "cabal" in _replayed[0],
+    str(_replayed),
+)
+eq("spool empty after drain", 0, _spool_pending("cabal", bridge_orphan))
 os.close(_ka_fd)
 
 # When agent reader is forced true via monkeypatch, no orphan metric
@@ -866,6 +892,41 @@ finally:
     poll_mod._fifo_has_agent_reader = _orig  # type: ignore[assignment]
 ok_metrics = (bridge_ok / ".metrics.log").read_text(encoding="utf-8")
 true("delivered with agent reader", "message_delivered" in ok_metrics, ok_metrics)
+
+# Ordering: with a reader attached but a replay still pending, a new message
+# must queue behind the backlog rather than jumping straight into the FIFO —
+# otherwise the agent sees a newer line before the older ones it follows.
+from tg_agent_relay.spool import drain as _drain_ord
+from tg_agent_relay.spool import spool_message as _spool_ord
+
+bridge_ord = _tmp_bridge()
+fifo_ord = bridge_ord / "ord.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_ord)
+_ord_fd = os.open(str(fifo_ord), os.O_RDWR | os.O_NONBLOCK)
+cfg_ord = {"backends": {"fleet": {"delivery": "fifo", "fifo": str(fifo_ord), "tag": "fleet"}}}
+_spool_ord("fleet", "[telegram:fleet] backlog one", bridge_ord)
+_spool_ord("fleet", "[telegram:fleet] backlog two", bridge_ord)
+
+poll_mod._fifo_has_agent_reader = lambda *a, **k: True  # type: ignore[assignment]
+try:
+    deliver_to_backend(cfg_ord, "fleet", "", "newest", bridge_dir=bridge_ord)
+finally:
+    poll_mod._fifo_has_agent_reader = _orig  # type: ignore[assignment]
+
+ordered: list[str] = []
+_drain_ord("fleet", ordered.append, bridge_ord)
+true(
+    "new message queues behind pending backlog",
+    len(ordered) == 3 and "newest" in ordered[2],
+    str(ordered),
+)
+true(
+    "backlog replays before the newer line",
+    "backlog one" in ordered[0] and "backlog two" in ordered[1],
+    str(ordered),
+)
+os.close(_ord_fd)
 true(
     "no orphan when agent reader present",
     "message_orphaned" not in ok_metrics,
