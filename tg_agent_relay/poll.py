@@ -46,6 +46,7 @@ from tg_agent_relay.routing import (
     strip_prefix,
 )
 from tg_agent_relay.send import load_env
+from tg_agent_relay.spool import spool_message
 
 # Record separator — never appears in normal Telegram text.
 RS = "\x1e"
@@ -453,40 +454,49 @@ def deliver_to_backend(
         except OSError as _exc:
             pass
         line = f"{tag} {text}\n"
+
+        # Check for a real agent reader BEFORE writing. Keepalives
+        # (ensure-inbound RDWR hold) make the write succeed into the 64K kernel
+        # pipe buffer even when no Monitor is attached — the line would sit
+        # there unseen until some later reader dumps it as a burst, or be lost
+        # entirely once the buffer fills. Spool instead: the drain in
+        # adapters/backend-fifo-reader.sh replays it, in order, on attach.
+        if not _fifo_has_agent_reader(fifo):
+            spooled = spool_message(backend, line, root, reason="no_agent_reader")
+            emit_metric(
+                "tg-poll",
+                "message_orphaned",
+                f"backend={backend} reason=no_agent_reader spooled={1 if spooled else 0}",
+                bridge_dir=root,
+            )
+            return []
+
         try:
-            # Best-effort non-blocking-ish write (may fail without a reader).
-            # Keepalives (ensure-inbound RDWR hold) make open succeed even when
-            # no agent Monitor is attached — that is NOT true delivery into the
-            # agent TUI. Write success still returns [] (do not drop if the
-            # kernel buffer accepts); honesty comes from message_orphaned.
             fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
             try:
                 os.write(fd, line.encode("utf-8"))
             finally:
                 os.close(fd)
-            emit_metric(
-                "tg-poll",
-                "message_delivered",
-                f"backend={backend} mode=fifo",
-                bridge_dir=root,
-            )
-            # Honesty: message_delivered means the FIFO accepted the write, not
-            # that an agent reader (Monitor) consumed it. Keepalive-only /
-            # no-reader → message_orphaned; attach backend-fifo-reader.sh.
-            if not _fifo_has_agent_reader(fifo):
-                emit_metric(
-                    "tg-poll",
-                    "message_orphaned",
-                    f"backend={backend} reason=no_agent_reader",
-                    bridge_dir=root,
-                )
-        except OSError as _exc:
+        except OSError:
+            # Reader attested but the write still failed (full buffer, reader
+            # died in the race). Spool rather than drop — this path used to
+            # lose the message permanently.
+            spooled = spool_message(backend, line, root, reason="fifo_write_failed")
             emit_metric(
                 "tg-poll",
                 "deliver_skip",
-                f"backend={backend} reason=fifo_timeout",
+                f"backend={backend} reason=fifo_timeout spooled={1 if spooled else 0}",
                 bridge_dir=root,
             )
+            return []
+
+        # Only now is the claim true: a reader was attested and the write landed.
+        emit_metric(
+            "tg-poll",
+            "message_delivered",
+            f"backend={backend} mode=fifo",
+            bridge_dir=root,
+        )
         return []
 
     if delivery == "cmd":

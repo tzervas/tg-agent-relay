@@ -51,7 +51,10 @@ TOML="$BRIDGE_DIR/relay.toml"
 if [[ -f "$TOML" ]] && declare -f load_relay_config >/dev/null 2>&1; then
     load_relay_config "$TOML"
 else
-    RELAY_CONFIG_JSON="${RELAY_CONFIG_JSON:-{}}"
+    # Brace-quoted so the default is the JSON object "{}" — `${VAR:-{}}` ends
+    # the expansion at the first `}` and leaves a stray brace, which reaches jq
+    # as malformed input ("Unmatched '}'") on every no-relay.toml run.
+    RELAY_CONFIG_JSON="${RELAY_CONFIG_JSON:-"{}"}"
 fi
 
 DEFAULT_BACKEND="$(cfg_get '.routing.default_backend' "")"
@@ -125,6 +128,17 @@ agent_reader_pids() {
 monitor_cmd() {
     local fifo="$1"
     printf '%s/adapters/backend-fifo-reader.sh %s' "$BRIDGE_DIR" "$fifo"
+}
+
+# Lines held for replay because no agent reader was attached when they arrived.
+# A non-zero depth is not an error — it is exactly what the spool is for — but a
+# depth that never falls means nothing is draining it (no Monitor attached).
+spool_depth() {
+    local backend="$1"
+    [[ -f "$BRIDGE_DIR/tg_agent_relay/spool.py" ]] || { printf 'n/a'; return; }
+    PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$BRIDGE_DIR" \
+        relay_python -m tg_agent_relay.spool count "$backend" \
+        --bridge-dir "$BRIDGE_DIR" 2>/dev/null || printf 'n/a'
 }
 
 declare -a BACKEND_IDS=()
@@ -202,6 +216,15 @@ for bid in "${BACKEND_IDS[@]+"${BACKEND_IDS[@]}"}"; do
         "$bid" "$fifo" "$exists" "$count"
     if [[ -n "$pids" ]]; then
         printf ' pids=%s' "$pids"
+    fi
+    depth="$(spool_depth "$bid")"
+    if [[ "$depth" != "n/a" && "$depth" != "0" ]]; then
+        printf ' spooled=%s' "$depth"
+        if (( has == 1 )); then
+            status="$status (replaying $depth spooled)"
+        else
+            status="$status — $depth message(s) held for replay"
+        fi
     fi
     printf '  [%s]\n' "$status"
     if [[ "$bid" == "$DEFAULT_BACKEND" ]]; then
