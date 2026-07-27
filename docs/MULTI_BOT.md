@@ -107,6 +107,34 @@ bash scripts/register-session.sh --handle grok --type grok
 adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/grok.fifo
 ```
 
+### Driving it from Telegram
+
+Enable the `/session` handler (`[commands.session]` in `relay.toml.example`)
+to manage sessions from the chat itself, at zero model tokens:
+
+```
+/session                  list sessions, and whether a Monitor is actually attached
+/session status grok      reader state + how many messages are held for replay
+/session start grok       register the handle
+/session stop grok        unregister it
+```
+
+`start` registers the session and creates its FIFO — both inert. It runs a
+process **only** if you set `[sessions].launch_cmd`, the same opt-in shape as
+`backends.*.delivery = "cmd"`:
+
+```toml
+[sessions]
+launch_cmd = "tmux new-session -d -s grok-$RELAY_SESSION_HANDLE 'grok --monitor $RELAY_SESSION_FIFO'"
+```
+
+The Telegram message supplies a handle and nothing else. It must match
+`^[A-Za-z0-9_-]{1,32}$` and be the sole argument — `/session start a && rm -rf x`
+is refused rather than truncated to `a` — and it reaches `launch_cmd` through
+`$RELAY_SESSION_HANDLE` / `$RELAY_SESSION_FIFO` rather than being interpolated
+into a shell string. `ALLOWED_USER_ID` remains the outer boundary: only the
+allowlisted sender's commands are dispatched at all.
+
 Messages sent while that session is down are spooled and replayed in order when
 it attaches — see [INBOUND-DELIVERY.md](INBOUND-DELIVERY.md).
 
