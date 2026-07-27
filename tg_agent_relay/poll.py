@@ -46,7 +46,7 @@ from tg_agent_relay.routing import (
     strip_prefix,
 )
 from tg_agent_relay.send import load_env
-from tg_agent_relay.spool import spool_message
+from tg_agent_relay.spool import pending_count, spool_message
 
 # Record separator — never appears in normal Telegram text.
 RS = "\x1e"
@@ -469,7 +469,35 @@ def deliver_to_backend(
                 f"backend={backend} reason=no_agent_reader spooled={1 if spooled else 0}",
                 bridge_dir=root,
             )
+            if spooled:
+                return []
+            # Spool unwritable (full disk, permissions). Fall back to the old
+            # best-effort write: the kernel buffer is a poor destination, but
+            # it is recoverable by a later reader and dropping here is not.
+            with contextlib.suppress(OSError):
+                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    os.write(fd, line.encode("utf-8"))
+                finally:
+                    os.close(fd)
             return []
+
+        # A reader is attached, but if a replay is still draining, writing
+        # straight to the FIFO would jump the queue: the direct write is read
+        # immediately while spooled lines wait for the next drain tick, so a
+        # newer message could reach the agent before the backlog it follows.
+        # Appending keeps delivery in arrival order; direct writes resume once
+        # the spool is empty.
+        if pending_count(backend, root):
+            spooled = spool_message(backend, line, root, reason="drain_in_flight")
+            if spooled:
+                emit_metric(
+                    "tg-poll",
+                    "message_spooled_ordered",
+                    f"backend={backend} reason=drain_in_flight",
+                    bridge_dir=root,
+                )
+                return []
 
         try:
             fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)

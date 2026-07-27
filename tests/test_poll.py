@@ -892,6 +892,41 @@ finally:
     poll_mod._fifo_has_agent_reader = _orig  # type: ignore[assignment]
 ok_metrics = (bridge_ok / ".metrics.log").read_text(encoding="utf-8")
 true("delivered with agent reader", "message_delivered" in ok_metrics, ok_metrics)
+
+# Ordering: with a reader attached but a replay still pending, a new message
+# must queue behind the backlog rather than jumping straight into the FIFO —
+# otherwise the agent sees a newer line before the older ones it follows.
+from tg_agent_relay.spool import drain as _drain_ord
+from tg_agent_relay.spool import spool_message as _spool_ord
+
+bridge_ord = _tmp_bridge()
+fifo_ord = bridge_ord / "ord.fifo"
+with contextlib.suppress(FileExistsError):
+    os.mkfifo(fifo_ord)
+_ord_fd = os.open(str(fifo_ord), os.O_RDWR | os.O_NONBLOCK)
+cfg_ord = {"backends": {"fleet": {"delivery": "fifo", "fifo": str(fifo_ord), "tag": "fleet"}}}
+_spool_ord("fleet", "[telegram:fleet] backlog one", bridge_ord)
+_spool_ord("fleet", "[telegram:fleet] backlog two", bridge_ord)
+
+poll_mod._fifo_has_agent_reader = lambda *a, **k: True  # type: ignore[assignment]
+try:
+    deliver_to_backend(cfg_ord, "fleet", "", "newest", bridge_dir=bridge_ord)
+finally:
+    poll_mod._fifo_has_agent_reader = _orig  # type: ignore[assignment]
+
+ordered: list[str] = []
+_drain_ord("fleet", ordered.append, bridge_ord)
+true(
+    "new message queues behind pending backlog",
+    len(ordered) == 3 and "newest" in ordered[2],
+    str(ordered),
+)
+true(
+    "backlog replays before the newer line",
+    "backlog one" in ordered[0] and "backlog two" in ordered[1],
+    str(ordered),
+)
+os.close(_ord_fd)
 true(
     "no orphan when agent reader present",
     "message_orphaned" not in ok_metrics,

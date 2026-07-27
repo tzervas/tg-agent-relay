@@ -95,6 +95,7 @@ python -m tg_agent_relay.spool drain fleet
 | `message_orphaned … spooled=1` | No reader; held for replay. Recoverable. |
 | `message_orphaned … spooled=0` | No reader **and** the spool was unwritable. Investigate — this is the only remaining loss path. |
 | `deliver_skip … reason=fifo_timeout spooled=1` | Write failed after a reader was attested; held for replay. |
+| `message_spooled_ordered … reason=drain_in_flight` | A reader is attached, but a replay was still draining, so this line was appended behind the backlog instead of jumping the queue. |
 | `spool_drained count=N` | A reader replayed `N` messages. |
 | `spool_overflow` | Cap exceeded, oldest dropped. Raise `RELAY_SPOOL_MAX` or attach a reader. |
 
@@ -106,6 +107,20 @@ python -m tg_agent_relay.spool drain fleet
 | `RELAY_SPOOL_POLL_SECS` | `2` | Reader drain interval. |
 | `RELAY_SPOOL_CLAIM_TTL` | `300` | Seconds before a dead drainer's claim is reclaimed. |
 | `RELAY_SPOOL_REPLAY=0` | — | Disable replay in the reader (FIFO-only, legacy). |
+
+## Ordering
+
+Messages are delivered in arrival order across both channels. That is not
+automatic: once a reader attaches, a direct FIFO write is read immediately
+while spooled lines wait for the next drain tick, so a new message could
+otherwise reach the agent *before* the backlog it follows. Both pollers
+therefore append to the spool whenever a replay is still in flight
+(`message_spooled_ordered`), and resume direct writes once the spool is empty.
+
+The remaining loss path is a spool that cannot be written at all (full disk,
+permissions). There the pollers fall back to the old best-effort FIFO write —
+the kernel buffer is a poor destination, but it is recoverable by a later
+reader, and dropping is not. That case is visible as `spooled=0`.
 
 ## Two implementation notes
 

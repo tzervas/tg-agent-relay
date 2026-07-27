@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+## 0.10.3 — 2026-07-27
+
+### Fixed
+- **Inbound messages reached the queue but not the session.** `ensure-inbound`
+  holds every backend FIFO open `RDWR` (keepalive) so writers never `ENXIO`,
+  and `deliver_to_backend` treated a successful write as delivery. With a
+  keepalive attached the write always succeeds — into the 64K kernel pipe
+  buffer, where nothing consumes it. Lines waited there until a Monitor
+  attached and drained the backlog as one burst, or were **dropped
+  permanently** once the buffer filled. There was no spool, retry or ack.
+  Both pollers now check for a real agent reader *before* writing and spool
+  when there is none; `message_delivered` is emitted only when a reader was
+  attested **and** the write landed.
+- `tg-poll.sh` emitted `message_delivered` unconditionally — including on the
+  failure branch that had just emitted `deliver_skip` — and had no orphan
+  detection at all.
+- **Registered `@handle` sessions were invisible to the routing API.**
+  `lib/routing.py` gated the `.sessions.d` overlay on `cfg["_bridge_dir"]`,
+  but `sessions.dir` and `RELAY_SESSIONS_DIR` resolve without it (and are
+  preferred over it). Any caller not going through `load_config`/`poll` lost
+  every registered handle: `strip_prefix` returned `None`, `resolve` fell
+  through to `default_backend`, and `merged_backends` disagreed with `resolve`
+  on the same config. Affected the documented `resolve` join API and
+  `python -m tg_agent_relay.routing --config`. Live inbound routing was not
+  affected (`poll.py` injects `_bridge_dir`). Fixes the three long-standing
+  `tests/test_sessions_routing.py` failures at the source.
+- `scripts/doctor-inbound.sh`: `${VAR:-{}}` left a stray brace, so `jq` failed
+  with `Unmatched '}'` on every run without a `relay.toml`.
+
+### Added
+- `tg_agent_relay/spool.py` — durable per-backend inbound spool: ordered
+  replay, atomic claim (concurrent drains never double-deliver), emit failure
+  leaves the line pending, stale claims from a dead drainer reclaimed, bounded
+  by `RELAY_SPOOL_MAX` with a loud `spool_overflow` rather than silent
+  truncation, and backend ids sanitised so a `relay.toml` value cannot escape
+  the spool root. CLI: `put` / `drain` / `count`.
+- `adapters/backend-fifo-reader.sh` drains the spool on attach and on an
+  interval, so a session replays what it missed, in order. Installs no signal
+  trap deliberately — the loop blocks in `read < fifo` and bash defers traps
+  until the foreground command returns, so a `TERM` trap makes an idle Monitor
+  unkillable; the drain child watches for parent death instead.
+- Arrival-order guarantee across both channels: while a replay is draining,
+  new messages append to the spool (`message_spooled_ordered`) instead of
+  jumping the queue via a direct FIFO write.
+- `scripts/doctor-inbound.sh` reports spool depth per backend.
+- `docs/INBOUND-DELIVERY.md` — operator guide: diagnosis, live verification,
+  metric semantics, ordering, tuning.
+- `tests/test_spool.py` — 33 offline assertions (ordering, claim races, emit
+  failure, reclaim, overflow, path traversal, partial writes).
+
 ### Fixed
 - **Inbound FIFO honesty:** successful non-blocking FIFO writes no longer imply
   an agent TUI received the message. When only a keepalive (or no process)

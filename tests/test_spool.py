@@ -29,7 +29,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from tg_agent_relay.spool import (  # noqa: E402
+from tg_agent_relay.spool import (
     drain,
     pending_count,
     pending_paths,

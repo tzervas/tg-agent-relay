@@ -195,6 +195,18 @@ fifo_has_agent_reader() {
     esac
 }
 
+# Count lines already held for replay on $1. Prints 0 when unknown.
+spool_count() {
+    local backend="$1" out
+    [[ -f "$BRIDGE_DIR/tg_agent_relay/spool.py" ]] || { printf '0'; return; }
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    out="$(PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$BRIDGE_DIR" \
+        relay_python -m tg_agent_relay.spool count "$backend" \
+        --bridge-dir "$BRIDGE_DIR" 2>/dev/null)" || out=0
+    [[ "$out" =~ ^[0-9]+$ ]] || out=0
+    printf '%s' "$out"
+}
+
 # Persist one inbound line for replay. Shares tg_agent_relay.spool's on-disk
 # format rather than reimplementing it here. Returns non-zero if not stored,
 # so the caller never claims a message is safely queued when it is not.
@@ -248,9 +260,21 @@ deliver_to_backend() {
             if ! fifo_has_agent_reader "$fifo"; then
                 if spool_line "$backend" "$tag" "$text" "no_agent_reader"; then
                     emit_metric "tg-poll" "message_orphaned" "backend=$backend reason=no_agent_reader spooled=1"
-                else
-                    emit_metric "tg-poll" "message_orphaned" "backend=$backend reason=no_agent_reader spooled=0"
+                    return 0
                 fi
+                emit_metric "tg-poll" "message_orphaned" "backend=$backend reason=no_agent_reader spooled=0"
+                # Spool unwritable — fall back to the old best-effort write.
+                # The kernel buffer is a poor destination but is recoverable by
+                # a later reader; dropping here is not.
+                printf '%s %s\n' "$tag" "$text" > "$fifo" 2>/dev/null &
+                return 0
+            fi
+            # Reader attached, but a replay still draining must not be jumped:
+            # a direct write is read immediately while spooled lines wait for
+            # the next drain tick. Append so arrival order is preserved.
+            if [[ "$(spool_count "$backend")" != "0" ]] \
+                && spool_line "$backend" "$tag" "$text" "drain_in_flight"; then
+                emit_metric "tg-poll" "message_spooled_ordered" "backend=$backend reason=drain_in_flight"
                 return 0
             fi
             if command -v timeout >/dev/null 2>&1; then

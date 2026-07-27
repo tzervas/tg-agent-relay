@@ -92,7 +92,7 @@ def _spool_max() -> int:
     raw = os.environ.get("RELAY_SPOOL_MAX", "")
     try:
         val = int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return DEFAULT_SPOOL_MAX
     return val if val > 0 else DEFAULT_SPOOL_MAX
 
@@ -101,7 +101,7 @@ def _claim_ttl() -> int:
     raw = os.environ.get("RELAY_SPOOL_CLAIM_TTL", "")
     try:
         val = int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return DEFAULT_CLAIM_TTL
     return val if val > 0 else DEFAULT_CLAIM_TTL
 
@@ -208,9 +208,7 @@ def reclaim_stale(
 ) -> int:
     """Return claims abandoned by dead drainers to pending. Returns count."""
     d = spool_dir(backend, bridge_dir)
-    cutoff = (now if now is not None else time.time()) - (
-        ttl if ttl is not None else _claim_ttl()
-    )
+    cutoff = (now if now is not None else time.time()) - (ttl if ttl is not None else _claim_ttl())
     recovered = 0
     try:
         entries = list(d.iterdir())
@@ -309,8 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 2:
         print(
-            "usage: spool.py {put|drain|count} <backend> "
-            "[--bridge-dir PATH] [--reason R]",
+            "usage: spool.py {put|drain|count} <backend> [--bridge-dir PATH] [--reason R]",
             file=sys.stderr,
         )
         return 2
