@@ -20,6 +20,25 @@ from pathlib import Path
 from typing import Any
 
 
+def _sessions_lookup_possible(cfg: dict[str, Any]) -> bool:
+    """True if the sessions dir can be resolved for *cfg*.
+
+    ``_bridge_dir`` is only one of the ways to locate ``.sessions.d`` —
+    ``sessions.dir`` in the config and ``RELAY_SESSIONS_DIR`` both resolve
+    without it (see sessions.sessions_dir_from_cfg). Gating the overlay on
+    ``_bridge_dir`` alone silently dropped every registered @handle for any
+    caller that did not go through load_config/poll, including the documented
+    ``resolve`` join API and ``python -m tg_agent_relay.routing --config``,
+    where a JSON config carries ``sessions.dir`` but no ``_bridge_dir``.
+    """
+    if cfg.get("_bridge_dir"):
+        return True
+    sessions = cfg.get("sessions")
+    if isinstance(sessions, dict) and sessions.get("dir"):
+        return True
+    return bool(os.environ.get("RELAY_SESSIONS_DIR", "").strip())
+
+
 def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
     """Effective backends: static [backends.*] + .sessions.d overlay (sessions win)."""
     if cfg.get("_sessions_merged"):
@@ -27,13 +46,13 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
         return b if isinstance(b, dict) else {}
     static = cfg.get("backends") or {}
     static = static if isinstance(static, dict) else {}
-    bridge = cfg.get("_bridge_dir")
-    if not bridge:
+    if not _sessions_lookup_possible(cfg):
         return static
     try:
         import sessions as _sessions  # type: ignore
 
-        return _sessions.merged_backends(cfg, bridge_dir=bridge)
+        # bridge_dir may be None: sessions_dir_from_cfg prefers cfg/env anyway.
+        return _sessions.merged_backends(cfg, bridge_dir=cfg.get("_bridge_dir"))
     except Exception:
         return static
 
@@ -71,13 +90,12 @@ def has_routing_config(cfg: dict[str, Any]) -> bool:
         return True
     if _backends(cfg):
         return True
-    bridge = cfg.get("_bridge_dir")
-    if not bridge:
+    if not _sessions_lookup_possible(cfg):
         return False
     try:
         import sessions as _sessions  # type: ignore
 
-        if _sessions.load_session_backends(cfg, bridge_dir=bridge):
+        if _sessions.load_session_backends(cfg, bridge_dir=cfg.get("_bridge_dir")):
             return True
     except Exception:
         pass
