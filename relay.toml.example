@@ -756,6 +756,28 @@
 # handler = "handlers/uptime.sh"
 # # How long the poll daemon (tg-poll.sh) has been running.
 #
+# [commands.session]
+# keyword = "session"
+# slash = "/session"
+# mode = "relay"
+# handler = "handlers/session.sh"
+# # Manage @handle agent sessions from Telegram, zero model tokens:
+# #   /session                  list sessions + whether a Monitor is attached
+# #   /session status <handle>  reader state + messages held for replay
+# #   /session start <handle>   register the handle (launch if configured below)
+# #   /session stop <handle>    unregister the handle
+# #
+# # `start` only CREATES the session + FIFO, which is inert. It runs a process
+# # solely when you set [sessions].launch_cmd — the Telegram message supplies a
+# # handle and nothing else (^[A-Za-z0-9_-]{1,32}$, passed via the environment,
+# # never interpolated into a shell string).
+# #
+# # [sessions]
+# # dir = "~/.claude/telegram-bridge/.sessions.d"
+# # launch_cmd = "tmux new-session -d -s grok-$RELAY_SESSION_HANDLE \\
+# #   'grok --monitor $RELAY_SESSION_FIFO'"
+# #   $RELAY_SESSION_HANDLE and $RELAY_SESSION_FIFO are exported for it.
+#
 # [commands.help]
 # keyword = "help"
 # slash = "/help"

@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Added
+- **`/session` handler** — manage `@handle` agent sessions from Telegram at
+  zero model tokens: `list` (with whether a real Monitor is attached and how
+  many messages are held for replay), `status`, `start`, `stop`. Registering a
+  session and creating its FIFO are inert; a process runs **only** when the
+  operator sets `[sessions].launch_cmd`, the same opt-in shape as
+  `backends.*.delivery = "cmd"`. The Telegram message supplies a handle and
+  nothing else — it must match `^[A-Za-z0-9_-]{1,32}$` and be the sole
+  argument (`/session start a && rm -rf x` is refused, not truncated to `a`) —
+  and reaches `launch_cmd` through `$RELAY_SESSION_HANDLE` /
+  `$RELAY_SESSION_FIFO` rather than shell interpolation. `ALLOWED_USER_ID`
+  remains the outer boundary. 28 offline assertions in
+  `tests/test_session_handler.py`, most of them adversarial.
 - **Dedicated bots per agent** (`docs/MULTI_BOT.md`). Claude and Grok can now
   run on separate @BotFather bots, each with its own Telegram chat and
   notification stream, instead of multiplexing one bot with `@handle` prefixes.
