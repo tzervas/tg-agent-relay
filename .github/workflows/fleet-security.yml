@@ -14,7 +14,12 @@ on:
 
 concurrency:
   group: fleet-security-${{ github.ref }}
-  cancel-in-progress: true
+  # A scheduled self-hosted run must never be cancel-in-progress. A queued
+  # schedule gets cancelled by the next event on the same ref and reports
+  # "cancelled" — which is neither pass nor fail, so the gate silently never
+  # runs and nothing goes red to say so. Same class of decorative gate as the
+  # `continue-on-error` this PR removes below, arriving by a different route.
+  cancel-in-progress: false
 
 permissions:
   contents: read
