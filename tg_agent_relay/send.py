@@ -25,6 +25,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+from tg_agent_relay.bots import bot_for_backend, bot_token, selected_bot
 from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.format_api import format_message
 from tg_agent_relay.metrics import emit_metric
@@ -809,12 +810,20 @@ class EnvSender:
         self.bridge_dir = _repo_root(bridge_dir)
         env = load_env(self.bridge_dir)
         self._file_env = env
-        self.token = _env_or(env, "BOT_TOKEN")
         self.default_chat = _env_or(env, "ALLOWED_CHAT_ID")
         if config is not None:
             self.config = config
         else:
             self.config = load_config(bridge_dir=self.bridge_dir)
+        # Outbound must leave via the same bot the message belongs to, or a
+        # Grok reply would surface in the Claude channel. RELAY_BOT wins if the
+        # caller set it; otherwise derive from RELAY_BACKEND (hook scripts
+        # already export it). Falls back to BOT_TOKEN, so a single-bot
+        # deployment with no [bots.*] table behaves exactly as before.
+        self.bot = selected_bot(self.config) or bot_for_backend(
+            self.config, os.environ.get("RELAY_BACKEND", "")
+        )
+        self.token = bot_token(self.config, self.bot, env) or _env_or(env, "BOT_TOKEN")
         self._voice_sender: VoiceSender = voice_sender or tts_send_voice
         self._sleep = sleep_fn or time.sleep
 

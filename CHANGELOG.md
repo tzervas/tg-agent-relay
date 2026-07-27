@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+- **Dedicated bots per agent** (`docs/MULTI_BOT.md`). Claude and Grok can now
+  run on separate @BotFather bots, each with its own Telegram chat and
+  notification stream, instead of multiplexing one bot with `@handle` prefixes.
+- `tg_agent_relay/bots.py` — bot identity: per-bot token env resolution,
+  backend↔bot binding (`backends.<id>.bot`, `routing.default_bot`), and state
+  isolation. Bot ids are sanitised so a `relay.toml` value cannot escape the
+  state root.
+- **Per-bot state directories.** Telegram's `getUpdates` cursor is per bot, so
+  two poll loops sharing one `<bridge>/.offset` would each advance past updates
+  the other never saw and eat messages silently; per-chat reassembly buffers
+  collide the same way when both bots are in one group. Each bot now owns
+  `<bridge>/.bots/<id>/`. Isolation is a directory rather than a filename
+  suffix, so existing globs work unchanged.
+- `scripts/ensure-inbound.sh` starts one poll loop per configured bot, each
+  with its own pidfile and log (`tg-poll-<bot>.pid` / `.log`).
+- Outbound token selection follows the same binding: `RELAY_BOT`, else derived
+  from `RELAY_BACKEND`, else `BOT_TOKEN`.
+- Cross-channel delivery is refused — a message arriving on one bot is never
+  delivered into a backend owned by another, recorded as
+  `message_filtered backend=… bot=… want=…`.
+- `tests/test_bots.py` — 49 offline assertions, including that two bots'
+  offsets are genuinely independent and that the whole feature is inert
+  without a `[bots.*]` table.
+
+**Back-compat:** with no `[bots.*]` table nothing changes — one `BOT_TOKEN`,
+one poll loop, the same `.offset` / `.tg-buffer*` paths and the original
+`tg-poll.pid` / `tg-poll.log` names.
+
 ## 0.10.3 — 2026-07-27
 
 ### Fixed

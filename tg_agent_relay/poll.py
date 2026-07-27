@@ -35,6 +35,15 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from tg_agent_relay.agent_handle import build_handle_from_env, parse_leading_handle
+from tg_agent_relay.bots import (
+    bot_for_backend,
+    bot_state_dir,
+    bot_token,
+    bots_configured,
+    is_default_bot,
+    selected_bot,
+    token_env_for_bot,
+)
 from tg_agent_relay.config import cfg_get, load_config
 from tg_agent_relay.media_inbound import buffer_parts_for_update
 from tg_agent_relay.metrics import emit_metric
@@ -434,6 +443,23 @@ def deliver_to_backend(
             bridge_dir=root,
         )
         return []
+
+    # With dedicated bots, each poll loop owns a subset of backends. Delivering
+    # another bot's backend here would cross the channels over — a message sent
+    # to the Grok bot must not surface in the Claude session. Read from env for
+    # the same reason TG_POLL_BACKEND is: this is a per-process identity.
+    # Single-bot configs never bind a backend, so this is inert by default.
+    if bots_configured(cfg):
+        this_bot = selected_bot(cfg)
+        owner = bot_for_backend(cfg, backend)
+        if not (is_default_bot(this_bot) and is_default_bot(owner)) and str(owner) != str(this_bot):
+            emit_metric(
+                "tg-poll",
+                "message_filtered",
+                f"backend={backend} bot={owner or 'default'} want={this_bot or 'default'}",
+                bridge_dir=root,
+            )
+            return []
 
     if delivery == "fifo":
         fifo = str(bcfg.get("fifo") or "")
@@ -873,13 +899,19 @@ def process_update(
     allowed_chat_id: str = "",
     bot_token: str = "",
     now: int | None = None,
+    state_dir: Path | str | None = None,
 ) -> list[str]:
     """Handle one Telegram update. Advances offset. May buffer (not flush).
 
     Returns immediate stdout lines (setup discovery only; normal messages
     wait for reassembly flush).
+
+    *state_dir* is where the getUpdates cursor and reassembly buffers live. It
+    defaults to *bridge_dir* (single-bot layout); a named bot passes its own
+    directory so two poll loops never share a cursor. See tg_agent_relay.bots.
     """
     root = Path(bridge_dir)
+    state = Path(state_dir) if state_dir else root
     update_id = update.get("update_id")
     try:
         uid = int(update_id)  # type: ignore[arg-type]
@@ -889,7 +921,7 @@ def process_update(
     lines: list[str] = []
     cb_from, cb_data, cb_chat, cb_thread, _cb_id = _callback_fields(update)
     if cb_from and cb_data:
-        write_offset(root, uid + 1)
+        write_offset(state, uid + 1)
         if (
             allowed_user_id
             and cb_from == str(allowed_user_id)
@@ -925,22 +957,22 @@ def process_update(
         buffer_parts = [text]
 
     if not from_id or not buffer_parts:
-        write_offset(root, uid + 1)
+        write_offset(state, uid + 1)
         return lines
 
     if not allowed_user_id:
         lines.append(f"[telegram-setup] your user_id is {from_id}")
-        write_offset(root, uid + 1)
+        write_offset(state, uid + 1)
         return lines
 
     if from_id == str(allowed_user_id):
         if not chat_is_accepted(cfg, chat_id, allowed_chat_id=allowed_chat_id):
-            write_offset(root, uid + 1)
+            write_offset(state, uid + 1)
             return lines
         multi = has_routing_config(cfg)
         for part in buffer_parts:
             append_message(
-                root,
+                state,
                 part,
                 chat_id,
                 thread_id,
@@ -949,7 +981,7 @@ def process_update(
             )
     # else: unrecognized sender — silently ignored (allowlist boundary).
 
-    write_offset(root, uid + 1)
+    write_offset(state, uid + 1)
     return lines
 
 
@@ -962,6 +994,7 @@ def process_result(
     allowed_chat_id: str = "",
     bot_token: str = "",
     now: int | None = None,
+    state_dir: Path | str | None = None,
 ) -> list[str]:
     """Process getUpdates result array. Returns immediate stdout lines."""
     lines: list[str] = []
@@ -977,6 +1010,7 @@ def process_result(
                 allowed_chat_id=allowed_chat_id,
                 bot_token=bot_token,
                 now=now,
+                state_dir=state_dir,
             )
         )
     return lines
@@ -1023,10 +1057,14 @@ def poll_once(
     out: TextIO | None = None,
     emit: EmitFn | None = None,
     detach: bool = True,
+    bot_id: str = "",
 ) -> str:
     """One iteration of the poll loop. Returns status token for tests.
 
     status ∈ ok | no_env | no_token | poll_error | empty
+
+    *bot_id* selects which bot this process serves (falls back to ``RELAY_BOT``);
+    empty means the original single-bot identity and legacy state paths.
     """
     root = Path(bridge_dir)
     out_f = out if out is not None else __import__("sys").stdout
@@ -1040,23 +1078,38 @@ def poll_once(
         return "no_env"
 
     env_map = env if env is not None else load_env(root)
-    token = env_map.get("BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
     allowed_user = env_map.get("ALLOWED_USER_ID") or os.environ.get("ALLOWED_USER_ID") or ""
     allowed_chat = env_map.get("ALLOWED_CHAT_ID") or os.environ.get("ALLOWED_CHAT_ID") or ""
 
     if cfg is None:
         cfg = load_config(root / "relay.toml", bridge_dir=root)
 
+    # Which bot this process serves, and where its cursor/buffers live. The
+    # default bot uses the bridge root, so single-bot deployments are
+    # byte-for-byte unchanged. Telegram's getUpdates cursor is per bot, so two
+    # loops sharing one .offset would eat each other's messages.
+    bot = selected_bot(cfg, bot_id)
+    state = bot_state_dir(root, bot)
+    if state != root:
+        state.mkdir(parents=True, exist_ok=True)
+
+    token = bot_token(cfg, bot, env_map)
     if not token:
+        emit_metric(
+            "tg-poll",
+            "no_token",
+            f"bot={bot or 'default'} env={token_env_for_bot(cfg, bot)}",
+            bridge_dir=root,
+        )
         sleep(15)
         return "no_token"
 
     # Quiet-window flush before long poll.
-    flushed = flush_stale_buffers(root, cfg, now=now(), detach=detach)
+    flushed = flush_stale_buffers(state, cfg, now=now(), detach=detach)
     _emit_lines(flushed, out_f, emit)
 
-    offset = read_offset(root)
-    if _any_nonempty_buffer(root):
+    offset = read_offset(state)
+    if _any_nonempty_buffer(state):
         poll_timeout, curl_max = 1, 5.0
     else:
         poll_timeout, curl_max = 50, 60.0
@@ -1084,6 +1137,7 @@ def poll_once(
         allowed_chat_id=allowed_chat,
         bot_token=token,
         now=now(),
+        state_dir=state,
     )
     _emit_lines(immediate, out_f, emit)
     return "ok" if result else "empty"
@@ -1101,6 +1155,7 @@ def poll_loop(
     cfg: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
     detach: bool = True,
+    bot_id: str = "",
 ) -> int:
     """Long-poll loop. max_iterations limits runs (tests). Returns 0."""
     root = Path(bridge_dir) if bridge_dir else _repo_root()
@@ -1116,6 +1171,7 @@ def poll_loop(
             out=out,
             emit=emit,
             detach=detach,
+            bot_id=bot_id,
         )
         n += 1
         if max_iterations is not None and n >= max_iterations:
