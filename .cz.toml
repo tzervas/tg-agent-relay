@@ -1,0 +1,40 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+version = "0.10.3"
+
+# 0.x IS THE POLICY, NOT AN ACCIDENT.
+#
+# `major_version_zero = true` makes commitizen keep the major at 0 whatever the
+# commit history says — a `feat!:` or a `BREAKING CHANGE:` footer bumps MINOR,
+# not MAJOR. Without it the first breaking commit silently ships 1.0.0, and
+# 1.0.0 is a promise about API stability nobody in this fleet has made.
+#
+# Measured, not assumed. Against a scratch repo carrying a real `feat!:` +
+# `BREAKING CHANGE:` commit:
+#     major_version_zero = true   ->  0.2.0 -> 0.3.0
+#     major_version_zero = false  ->  0.2.0 -> 1.0.0
+#
+# Cutting 1.x is a human decision: apply `human-authorized-1x` to the release PR
+# and flip this flag to false in that same diff, so the version jump and the
+# authorization are never separated.
+major_version_zero = true
+
+# The changelog is written, not generated.
+#
+# Left true, `cz bump` writes a `## v0.10.3` heading into the MIDDLE of
+# CHANGELOG.md and orphans `## [Unreleased]` — this file predates commitizen and
+# is curated Keep-a-Changelog prose. `cz changelog` is the source for an entry;
+# a human edits it in. Recorded in docs/RELEASING.md.
+update_changelog_on_bump = false
+
+# Three files state this project's version and nothing kept them in lockstep.
+# They agree today (all 0.10.3) but have drifted before — the standards gate in
+# #120 measured VERSION=0.8.1 against pyproject=0.7.0.dev0. `__version__` is what
+# the package and .deploy-stamp report, so a drift there is what ships.
+version_files = [
+    "VERSION",
+    "pyproject.toml:^version",
+    "tg_agent_relay/__init__.py:__version__",
+]
