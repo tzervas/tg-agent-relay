@@ -73,17 +73,34 @@ jobs:
         with:
           version: "latest"
           enable-cache: true
-      - name: Sync (best-effort)
+      - name: Sync dependencies
         run: |
           set -euo pipefail
           if [ -f uv.lock ] || [ -f pyproject.toml ]; then
-            uv sync --all-groups 2>/dev/null || uv sync 2>/dev/null || true
+            # No `|| true`. A sync that fails leaves the lint and test steps
+            # without their tooling, and swallowing that turned an unusable
+            # environment into a green job. The retry is narrower on purpose and
+            # says so; the steps below fail closed if tooling is still missing.
+            if ! uv sync --all-groups; then
+              echo "::warning title=DEGRADED_ENV::uv sync --all-groups failed; retrying without dev groups. Lint/test tooling may be missing — the steps below fail closed if it is."
+              uv sync
+            fi
           fi
       - name: Ruff (if configured)
         run: |
           set -euo pipefail
           if [ -f pyproject.toml ] && grep -q '\[tool.ruff' pyproject.toml 2>/dev/null; then
-            uv run ruff check . || python -m ruff check .
+            # No `|| python -m ruff check .` fallback. That `||` fired on ANY
+            # non-zero exit, so "ruff found problems" and "ruff is not installed"
+            # took the same branch — and a real lint failure could be laundered
+            # into a pass by a second interpreter resolving different config.
+            # A configured linter that cannot run is an environment failure, not
+            # a clean lint.
+            if ! uv run ruff --version >/dev/null 2>&1; then
+              echo "::error title=FAIL_ENV::[tool.ruff] is configured but ruff is not runnable after sync"
+              exit 1
+            fi
+            uv run ruff check .
           else
             echo "ruff not configured — skip"
           fi
@@ -96,8 +113,14 @@ jobs:
             # first run failed *because tests failed*, and a pass there greens a red suite.
             if command -v uv >/dev/null 2>&1 && { [ -f uv.lock ] || [ -f pyproject.toml ]; }; then
               RUN="uv run pytest"
-            else
+            elif command -v pytest >/dev/null 2>&1; then
               RUN="pytest"
+            else
+              # Reached only when neither runner exists. `set -e` would fail the
+              # step anyway on "pytest: command not found", but that reads as a
+              # broken workflow rather than a missing dependency. Say which.
+              echo "::error title=FAIL_ENV::a tests/ directory exists but neither uv nor pytest is available after env setup"
+              exit 1
             fi
             # No 2>/dev/null: a CI log is where stderr belongs, and discarding it makes
             # "tests failed" indistinguishable from "pytest is absent".
@@ -107,11 +130,12 @@ jobs:
           fi
 
   noop:
-    name: no stack detected
+    name: fleet-ci stub (no stack — not a product gate)
     needs: detect
     if: needs.detect.outputs.rust != 'true' && needs.detect.outputs.python != 'true'
     runs-on: [self-hosted, linux, x64, podman]
     steps:
       - run: |
-          echo "No Cargo.toml / pyproject detected. fleet-ci reports success with no gates."
+          echo "::notice title=SKIP_STUB::No Cargo.toml / pyproject detected; fleet-ci stub is not a product gate"
+          echo "HONEST_CI class=SKIP_STUB detail=no_stack_detected"
           echo "Add stack files or a product-specific CI job for real coverage."
