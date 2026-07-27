@@ -67,7 +67,6 @@ jobs:
   trivy-fs:
     name: trivy filesystem (vuln+secret+license)
     runs-on: [self-hosted, linux, x64, podman]
-    continue-on-error: true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing on runner — advisory skip (continue-on-error; install trivy on image for hard gate)"
+            echo "trivy missing on runner — advisory skip (install trivy on the runner image for a hard gate)"
             exit 0
           fi
           trivy fs --scanners vuln,secret,license \
