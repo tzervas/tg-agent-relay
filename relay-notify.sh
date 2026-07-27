@@ -52,12 +52,16 @@
 set -u
 
 BRIDGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BRIDGE_DIR
 # shellcheck disable=SC1091
 [[ -f "$BRIDGE_DIR/lib/exec-env.sh" ]] && source "$BRIDGE_DIR/lib/exec-env.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-config.sh"
 # shellcheck disable=SC1091
 source "$BRIDGE_DIR/lib/relay-common.sh"
+# shellcheck disable=SC1091
+[[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
 
 load_relay_config "$BRIDGE_DIR/relay.toml"
 
@@ -160,9 +164,97 @@ else
     fi
 fi
 
+# Comms templates + agent stamp (hooks / PR / plan / stop — no model calls).
+if [[ -f "$BRIDGE_DIR/lib/comms_format.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$BRIDGE_DIR/lib/comms_format.sh"
+    if declare -f comms_enrich_message >/dev/null 2>&1; then
+        MSG="$(comms_enrich_message "$MSG")"
+    fi
+fi
+
+# Benign goal-mode tool failures: suppress hook spam (v0.9.0).
+# Fail *open* when the filter cannot run (import/error): never silence all
+# hook traffic because tg_agent_relay is not on PYTHONPATH (temp bridges,
+# partial deploys, bare python -c). Only suppress on the explicit SKIP code.
+#
+# Exit-code protocol (why not "empty stdout means skip"): apply_goal_noise_policy
+# returns str | None, and that str can legitimately be empty. Overloading empty
+# stdout would conflate "policy said drop this" with "policy returned ''" and
+# with "python died before printing anything". Three distinct codes remove the
+# ambiguity:
+#   0     -> stdout is the filtered message
+#   3     -> policy returned None; drop the message (the ONLY silencing path)
+#   other -> filter unavailable or crashed; fail open, send MSG unchanged
+#
+# RELAY_HOOK_EVENT is passed through the ENVIRONMENT, never interpolated into the
+# -c source. It originates in the harness hook payload (adapters/*.sh export it
+# from the event name), so a quote in it used to produce a SyntaxError inside the
+# filter — which under the old fail-closed branch silently ate the message.
+if [[ "${TG_SEND_SOURCE:-}" == "hook" ]] && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _GOAL_RC=0
+    _GOAL_FILTERED="$(printf '%s' "$MSG" | RELAY_HOOK_EVENT="${RELAY_HOOK_EVENT:-}" relay_python -c "
+import os
+import sys
+try:
+    from tg_agent_relay.goal_events import apply_goal_noise_policy
+except Exception:
+    sys.exit(1)
+t = sys.stdin.read()
+r = apply_goal_noise_policy(t, hook_event=os.environ.get('RELAY_HOOK_EVENT', ''), is_hook=True)
+if r is None:
+    sys.exit(3)
+sys.stdout.write(r)
+" 2>/dev/null)" || _GOAL_RC=$?
+    if (( _GOAL_RC == 0 )); then
+        MSG="$_GOAL_FILTERED"
+    elif (( _GOAL_RC == 3 )); then
+        exit 0 # intentional goal-noise skip
+    else
+        # Filter unavailable or crashed — keep MSG unchanged (fail open).
+        if [[ -n "${RELAY_DEBUG:-}" ]]; then
+            printf 'relay-notify: goal-noise filter unavailable (rc=%s); sending unfiltered\n' \
+                "$_GOAL_RC" >&2
+        fi
+    fi
+fi
+
+# PLAN messages: attach approve/reject inline keyboard on first send page.
+unset RELAY_REPLY_MARKUP_JSON
+if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _PLAN_MARKUP="$(printf '%s' "$MSG" | relay_python -c "
+from tg_agent_relay.plan_approve import maybe_reply_markup_for_body
+import os, sys
+body=sys.stdin.read()
+m=maybe_reply_markup_for_body(body, os.environ.get('BRIDGE_DIR', '.'))
+print(m or '')
+" 2>/dev/null)" || _PLAN_MARKUP=""
+    if [[ -n "$_PLAN_MARKUP" ]]; then
+        export RELAY_REPLY_MARKUP_JSON="$_PLAN_MARKUP"
+    fi
+fi
+
 MSG="$(cap_if_huge "$MSG" "$MAX_CHARS" "$PAGE_SIZE")"
 
 [[ -z "$MSG" ]] && exit 0
+
+# Forum thread outbound resolve (RELAY_SESSION / RELAY_PLATFORM / …) — P13.
+if [[ -z "$NOTIFY_CHAT_ID" || -z "$NOTIFY_THREAD_ID" ]] \
+    && [[ -n "${RELAY_SESSION:-}" || -n "${RELAY_PLATFORM:-}" || -n "${RELAY_WORKSTREAM:-}" \
+        || -n "${RELAY_AGENT_HANDLE:-}" ]] \
+    && command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+    _THREAD_RES="$("${RELAY_PYTHON:-python3}" -m tg_agent_relay.threads resolve-outbound \
+        --bridge-dir "$BRIDGE_DIR" 2>/dev/null)" || _THREAD_RES=""
+    if [[ -n "$_THREAD_RES" && "${_THREAD_RES##*|}" != "none" ]]; then
+        IFS='|' read -r _tcid _ttid _ttitle _tkind <<< "$_THREAD_RES"
+        [[ -z "$NOTIFY_CHAT_ID" && -n "$_tcid" ]] && NOTIFY_CHAT_ID="$_tcid"
+        [[ -z "$NOTIFY_THREAD_ID" && -n "$_ttid" ]] && NOTIFY_THREAD_ID="$_ttid"
+        if [[ -n "$_ttitle" && "${RELAY_THREAD_STAMP:-1}" != "0" && "$MSG" != *"🧵"* ]]; then
+            MSG="🧵 ${_ttitle}
+${MSG}"
+        fi
+    fi
+fi
 
 # Multi-backend outbound tag + chat targeting — only when [backends]/[[chats]]
 # routing is configured. Without it, behavior stays byte-identical (no tag).

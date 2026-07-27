@@ -19,7 +19,7 @@ class RouteResult:
     backend: str
     project: str
     text: str
-    match_kind: str  # chat | prefix | default | none | legacy
+    match_kind: str  # chat | prefix | default | orchestrator | none | legacy
 
     def as_pipe(self) -> str:
         return f"{self.backend}|{self.project}|{self.text}|{self.match_kind}"

@@ -20,6 +20,25 @@ from pathlib import Path
 from typing import Any
 
 
+def _sessions_lookup_possible(cfg: dict[str, Any]) -> bool:
+    """True if the sessions dir can be resolved for *cfg*.
+
+    ``_bridge_dir`` is only one of the ways to locate ``.sessions.d`` —
+    ``sessions.dir`` in the config and ``RELAY_SESSIONS_DIR`` both resolve
+    without it (see sessions.sessions_dir_from_cfg). Gating the overlay on
+    ``_bridge_dir`` alone silently dropped every registered @handle for any
+    caller that did not go through load_config/poll, including the documented
+    ``resolve`` join API and ``python -m tg_agent_relay.routing --config``,
+    where a JSON config carries ``sessions.dir`` but no ``_bridge_dir``.
+    """
+    if cfg.get("_bridge_dir"):
+        return True
+    sessions = cfg.get("sessions")
+    if isinstance(sessions, dict) and sessions.get("dir"):
+        return True
+    return bool(os.environ.get("RELAY_SESSIONS_DIR", "").strip())
+
+
 def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
     """Effective backends: static [backends.*] + .sessions.d overlay (sessions win)."""
     if cfg.get("_sessions_merged"):
@@ -27,13 +46,13 @@ def _backends(cfg: dict[str, Any]) -> dict[str, Any]:
         return b if isinstance(b, dict) else {}
     static = cfg.get("backends") or {}
     static = static if isinstance(static, dict) else {}
-    bridge = cfg.get("_bridge_dir")
-    if not bridge:
+    if not _sessions_lookup_possible(cfg):
         return static
     try:
         import sessions as _sessions  # type: ignore
 
-        return _sessions.merged_backends(cfg, bridge_dir=bridge)
+        # bridge_dir may be None: sessions_dir_from_cfg prefers cfg/env anyway.
+        return _sessions.merged_backends(cfg, bridge_dir=cfg.get("_bridge_dir"))
     except Exception:
         return static
 
@@ -71,13 +90,12 @@ def has_routing_config(cfg: dict[str, Any]) -> bool:
         return True
     if _backends(cfg):
         return True
-    bridge = cfg.get("_bridge_dir")
-    if not bridge:
+    if not _sessions_lookup_possible(cfg):
         return False
     try:
         import sessions as _sessions  # type: ignore
 
-        if _sessions.load_session_backends(cfg, bridge_dir=bridge):
+        if _sessions.load_session_backends(cfg, bridge_dir=cfg.get("_bridge_dir")):
             return True
     except Exception:
         pass
@@ -137,12 +155,42 @@ def strip_prefix(cfg: dict[str, Any], text: str) -> tuple[str, str, str] | None:
     return best[1], best[2], best[3]
 
 
+def _try_agent_handle_route(cfg: dict[str, Any], text: str) -> tuple[str, str, str, str] | None:
+    """Route @orchestrator aliases or registered @repo-branch session handles."""
+    try:
+        from tg_agent_relay.agent_handle import (
+            backend_id_from_handle,
+            orchestrator_backend_id,
+            parse_leading_handle,
+            strip_orchestrator_prefix,
+        )
+    except ImportError:
+        return None
+
+    orch = strip_orchestrator_prefix(text)
+    if orch:
+        alias, stripped = orch
+        ob = orchestrator_backend_id(cfg, alias)
+        if ob:
+            project = _backend_cfg_get(cfg, ob, "project", "")
+            return ob, project, stripped, "orchestrator"
+
+    lead = parse_leading_handle(text)
+    if lead:
+        _handle, stripped = lead
+        hid = backend_id_from_handle(_handle)
+        if hid in _backends(cfg):
+            project = _backend_cfg_get(cfg, hid, "project", "")
+            return hid, project, stripped, "prefix"
+    return None
+
+
 def resolve(
     cfg: dict[str, Any], chat_id: str, thread_id: str, text: str
 ) -> tuple[str, str, str, str]:
     """Return (backend, project, stripped_text, match_kind).
 
-    match_kind ∈ chat | prefix | default | none | legacy
+    match_kind ∈ chat | prefix | default | orchestrator | none | legacy
     Pipe format: backend|project|text|match_kind
     """
     if not has_routing_config(cfg):
@@ -175,6 +223,10 @@ def resolve(
             project = _backend_cfg_get(cfg, backend, "project", "")
         return backend, project, stripped, "prefix"
 
+    handle_hit = _try_agent_handle_route(cfg, text)
+    if handle_hit:
+        return handle_hit
+
     default = str(_routing(cfg).get("default_backend") or "")
     if default:
         project = _backend_cfg_get(cfg, default, "project", "")
@@ -182,6 +234,17 @@ def resolve(
 
     require = _routing(cfg).get("require_prefix")
     if require in (True, "true", "1"):
+        ob = str(_routing(cfg).get("orchestrator_backend") or "").strip()
+        if not ob:
+            try:
+                from tg_agent_relay.agent_handle import orchestrator_backend_id
+
+                ob = orchestrator_backend_id(cfg)
+            except ImportError:
+                ob = ""
+        if ob:
+            project = _backend_cfg_get(cfg, ob, "project", "")
+            return ob, project, text, "orchestrator"
         return "", "", text, "none"
     return "", "", text, "legacy"
 

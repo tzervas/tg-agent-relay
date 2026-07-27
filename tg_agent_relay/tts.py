@@ -45,9 +45,12 @@ __all__ = [
     "DEFAULT_LINK_REF",
     "DEFAULT_SPOKEN_MAX_CHARS",
     "SpokenClips",
+    "VoicePlan",
     "chunk_text",
     "collapse_adjacent_refs",
+    "effective_spoken_mode",
     "normalize_spoken_mode",
+    "plan_voice_send",
     "prepare_spoken",
     "prepare_spoken_from_config",
     "strip_emoji",
@@ -319,3 +322,79 @@ def prepare_spoken_from_config(
         collapse_refs=bool(collapse),
         strip=bool(_get("strip", True)),
     )
+
+
+@dataclass(frozen=True)
+class VoicePlan:
+    """Whether to synthesize voice and which spoken_mode/chunk sizing to use."""
+
+    eligible: bool
+    spoken_mode: str
+    chunk_max: int
+
+
+def effective_spoken_mode(
+    text: str,
+    *,
+    configured: str | None,
+    spoken_max_chars: int,
+    hook_event: str | None = None,
+    total_pages: int = 1,
+) -> str:
+    """Auto-upgrade short→full for PLAN, multi-page, or very long bodies."""
+    mode = normalize_spoken_mode(configured)
+    if mode == "full":
+        return "full"
+    try:
+        from tg_agent_relay.comms_format import MessageKind, classify_message
+
+        kind = classify_message(text, hook_event)
+        if kind == MessageKind.PLAN or total_pages > 1:
+            return "full"
+    except Exception:
+        pass
+    try:
+        sm = int(spoken_max_chars)
+    except (TypeError, ValueError) as _exc:
+        sm = DEFAULT_SPOKEN_MAX_CHARS
+    if sm > 0 and len(text or "") > sm * 2:
+        return "full"
+    return "short"
+
+
+def plan_voice_send(
+    msg: str,
+    *,
+    tts_mode: str,
+    is_hook: bool,
+    hook_voice: bool,
+    total_pages: int,
+    tts_max_chars: int,
+    spoken_mode_cfg: str | None,
+    spoken_max_chars: int,
+    clip_max_chars: int,
+    hook_event: str | None = None,
+) -> VoicePlan:
+    """Eligibility helper shared by Python send and unit tests."""
+    mode_s = (tts_mode or "").lower()
+    if mode_s not in ("text+voice", "voice-only"):
+        return VoicePlan(False, "short", 0)
+    mode = effective_spoken_mode(
+        msg,
+        configured=spoken_mode_cfg,
+        spoken_max_chars=spoken_max_chars,
+        hook_event=hook_event,
+        total_pages=total_pages,
+    )
+    try:
+        clip_i = int(clip_max_chars)
+    except (TypeError, ValueError) as _exc:
+        clip_i = DEFAULT_CLIP_MAX_CHARS
+    chunk_max = clip_i if mode == "full" else 0
+    if is_hook and hook_voice and msg:
+        return VoicePlan(True, mode, chunk_max)
+    if mode == "full" and msg:
+        return VoicePlan(True, mode, chunk_max)
+    if total_pages == 1 and len(msg) <= tts_max_chars:
+        return VoicePlan(True, mode, 0)
+    return VoicePlan(False, mode, 0)

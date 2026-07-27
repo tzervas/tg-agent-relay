@@ -216,6 +216,22 @@ Your agent's `Monitor`/hook logic is what actually *acts* on that tag —
 the relay only recognizes and labels the command, it doesn't know what
 "status" means to your agent.
 
+### Plan approval (mobile)
+
+When an outbound hook message classifies as **PLAN** (see
+`tg_agent_relay/comms_format.py`), the relay stores it under
+`.plans/<id>.json` and attaches an inline keyboard: **Approve** /
+**Reject** / **Later**.
+
+- Tap **Approve** or **Reject** → poll emits
+  `[telegram:plan] status=approved id=<id>` (or `rejected`) on stdout for
+  your agent/backend.
+- Text replies **`approve`**, **`lgtm`**, **`ship it`**, **`reject`**, etc.
+  apply to the latest pending plan the same way (allowlisted user only).
+
+No live Telegram is required for unit tests; storage is local JSON under
+the bridge directory.
+
 **Relay-handled** (the relay answers directly — e.g. a custom local
 script that doesn't need the model at all):
 
@@ -245,6 +261,20 @@ Copy the shape of `handlers/dashboard.sh`/`handlers/stats.sh` (real
 handlers) rather than `handlers/example-echo.sh` (a test-only fixture
 used by `tests/run-tests.sh` to prove the dispatch seam works, not
 registered in `relay.toml.example`).
+
+## Inbound media (security)
+
+Photo, voice, video, and allowed audio/image documents from
+**`ALLOWED_USER_ID` only** are downloaded via Telegram `getFile` (bot token
+never logged or emitted on the agent stream). Files land under
+`<bridge>/.media/<chat>/<update_id>/` with directory mode **0700** and file
+mode **0600**. Size caps and MIME allowlists are configurable via
+`relay.toml` `[media]` (`max_image_bytes`, `max_video_bytes`,
+`max_audio_bytes`). The poll loop emits one structured line per attachment:
+
+`[telegram:media] kind=photo path=/abs/... mime=image/jpeg size=N caption=...`
+
+Never commit `.env` (bot token) or `.media/` contents.
 
 ## See also
 

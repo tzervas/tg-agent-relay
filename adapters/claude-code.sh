@@ -160,7 +160,13 @@ if [[ "$_CC_USE_PY" == "1" ]]; then
                     RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
                     [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
                 fi
-                [[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                if [[ -n "$SUMMARY" ]]; then
+                    export RELAY_HOOK_EVENT="$EVENT"
+                    _cc_cwd2="$(printf '%s' "$PAYLOAD" | jq -r '.cwd // empty' 2>/dev/null)"
+                    [[ -z "$_cc_cwd2" || "$_cc_cwd2" == "null" ]] && _cc_cwd2="${CLAUDE_PROJECT_DIR:-}"
+                    [[ -n "$_cc_cwd2" && -d "$_cc_cwd2" ]] && export RELAY_CWD="$_cc_cwd2"
+                    TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+                fi
                 exit 0
                 ;;
         esac
@@ -449,6 +455,38 @@ if [[ -z "${RELAY_PROJECT:-}" ]] && declare -f project_from_cwd >/dev/null 2>&1;
     RELAY_PROJECT="$(project_from_cwd "$_cc_cwd")"
     [[ -n "$RELAY_PROJECT" ]] && export RELAY_PROJECT
 fi
-[[ -n "$SUMMARY" ]] && TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+if [[ -n "$SUMMARY" ]]; then
+    # shellcheck disable=SC1091
+    [[ -f "$BRIDGE_DIR/lib/python.sh" ]] && source "$BRIDGE_DIR/lib/python.sh"
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    _CC_TOOL="$(pf '.tool_name // "tool"')"
+    if command -v "${RELAY_PYTHON:-python3}" >/dev/null 2>&1; then
+        # tool_name and the event name come straight off the hook payload, so they
+        # are passed through the ENVIRONMENT — interpolating them into the -c source
+        # let a crafted tool_name close the string literal and run arbitrary code in
+        # the relay's interpreter. Same reasoning as relay-notify.sh's goal filter.
+        _CC_FILTERED="$(printf '%s' "$SUMMARY" \
+            | RELAY_GOAL_TOOL="$_CC_TOOL" RELAY_GOAL_EVENT="$EVENT" relay_python -c "
+import os
+import sys
+from tg_agent_relay.goal_events import filter_hook_summary
+s = sys.stdin.read()
+r = filter_hook_summary(
+    s,
+    tool_name=os.environ.get('RELAY_GOAL_TOOL', ''),
+    hook_event=os.environ.get('RELAY_GOAL_EVENT', ''),
+)
+sys.stdout.write('' if r is None else r)
+" 2>/dev/null)" || _CC_FILTERED=""
+        [[ -n "$_CC_FILTERED" ]] && SUMMARY="$_CC_FILTERED"
+    fi
+    if [[ -n "$SUMMARY" ]]; then
+        export RELAY_HOOK_EVENT="$EVENT"
+        _cc_cwd="$(pf '.cwd // empty')"
+        [[ -z "$_cc_cwd" || "$_cc_cwd" == "null" ]] && _cc_cwd="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+        [[ -n "$_cc_cwd" && -d "$_cc_cwd" ]] && export RELAY_CWD="$_cc_cwd"
+        TG_SEND_SOURCE=hook "$BRIDGE_DIR/relay-notify.sh" --raw "$SUMMARY" >/dev/null 2>&1
+    fi
+fi
 
 exit 0

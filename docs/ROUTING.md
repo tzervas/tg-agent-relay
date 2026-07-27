@@ -71,6 +71,10 @@ switching Telegram rooms.
 2. Create one topic per repo.
 3. In each topic: `/project bind mycelium` (records chat_id + thread_id).
 
+For **orchestrator sessions** and optional per-platform supergroups, use
+[THREADS.md](THREADS.md): flat topic titles encode `session · repo · workstream`,
+`/thread ensure`, and outbound `RELAY_SESSION` / `RELAY_PLATFORM` routing.
+
 **Pattern B — separate group per project:**
 
 1. Create a group per repo, add the bot.
@@ -172,9 +176,36 @@ When several **Grok Build** sessions run on one machine, give each a unique
 **@handle** and FIFO so Telegram traffic is split automatically (no
 ignore-vs-handle logic in the agent).
 
+### Multi-agent orch (recommended defaults)
+
+| Backend | Role | When traffic hits it |
+|---|---|---|
+| **`fleet`** | General Grok / orchestrator | Untagged messages when `default_backend = "fleet"`, plus `@fleet` |
+| **`cabal`** | L0 coding leaf | Explicit `@cabal …` only |
+
+```toml
+[routing]
+default_backend = "fleet"   # untagged phone messages → fleet.fifo
+require_prefix = false      # true in shared/noisy chats
+```
+
+**Critical:** untagged (and default-routed) messages need an agent **Monitor**
+on the default backend FIFO. `ensure-inbound` keepalives only hold the pipe
+open — they do **not** deliver lines into the agent. Without a Monitor,
+`tg-poll` may log `message_delivered` while the agent never sees the text
+(orphan FIFO). Diagnose:
+
+```bash
+bash scripts/doctor-inbound.sh
+# exit 1 if default_backend FIFO has zero agent readers
+```
+
 **Option A — static `relay.toml` (N backends):**
 
 ```toml
+[routing]
+default_backend = "fleet"
+
 [backends.cabal]
 type = "grok"
 delivery = "fifo"

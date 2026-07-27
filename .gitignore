@@ -37,6 +37,7 @@ actions-runner-linux-*.tar.gz
 .tg-buffer
 .tg-buffer-ts
 .tg-buffer.*
+.media/
 .metrics.log
 .tg-send.lock
 .chats.d/
@@ -75,6 +76,7 @@ voices/*.part
 # The feature is opt-in (default `[usage].enabled = false`) and writes
 # nothing until explicitly turned on.
 .usage/
+.plans/
 *.usage.json
 usage-cache/*
 # ...except committed, SYNTHETIC test fixtures (fabricated project/model

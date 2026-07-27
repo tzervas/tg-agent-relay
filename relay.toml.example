@@ -756,6 +756,28 @@
 # handler = "handlers/uptime.sh"
 # # How long the poll daemon (tg-poll.sh) has been running.
 #
+# [commands.session]
+# keyword = "session"
+# slash = "/session"
+# mode = "relay"
+# handler = "handlers/session.sh"
+# # Manage @handle agent sessions from Telegram, zero model tokens:
+# #   /session                  list sessions + whether a Monitor is attached
+# #   /session status <handle>  reader state + messages held for replay
+# #   /session start <handle>   register the handle (launch if configured below)
+# #   /session stop <handle>    unregister the handle
+# #
+# # `start` only CREATES the session + FIFO, which is inert. It runs a process
+# # solely when you set [sessions].launch_cmd — the Telegram message supplies a
+# # handle and nothing else (^[A-Za-z0-9_-]{1,32}$, passed via the environment,
+# # never interpolated into a shell string).
+# #
+# # [sessions]
+# # dir = "~/.claude/telegram-bridge/.sessions.d"
+# # launch_cmd = "tmux new-session -d -s grok-$RELAY_SESSION_HANDLE \\
+# #   'grok --monitor $RELAY_SESSION_FIFO'"
+# #   $RELAY_SESSION_HANDLE and $RELAY_SESSION_FIFO are exported for it.
+#
 # [commands.help]
 # keyword = "help"
 # slash = "/help"
@@ -783,6 +805,24 @@
 # # Project-room binds: /project list · here · bind <slug> · unbind
 # # Writes gitignored .chats.d/bindings.json (merged over [[chats]]).
 # # See docs/ROUTING.md — forum topics OR one group per repo.
+#
+# [commands.thread]
+# keyword = "thread"
+# slash = "/thread"
+# mode = "relay"
+# handler = "handlers/thread.sh"
+# # Forum session/repo/workstream topics: list · here · bind · ensure
+# # See docs/THREADS.md (requires [threads] enabled).
+#
+# [threads]
+# enabled = false
+# auto_create = true
+# max_creates_per_hour = 30
+# [threads.platform_chats]
+# grok = -1001111111111
+# claude = -1002222222222
+# codex = -1003333333333
+# self_hosted = -1004444444444
 #
 # [commands.config]
 # keyword = "config"
@@ -946,6 +986,19 @@
 # [sessions]
 # dir = "~/.claude/telegram-bridge/.sessions.d"
 #
+# --- Multi-agent orch (fleet general + cabal L0 coding leaf) ---------------
+# Recommended for phone → orchestrator + coding leaf:
+#   - fleet  = general Grok / orchestrator session (default for untagged msgs)
+#   - cabal  = L0 coding leaf (explicit @cabal … only)
+# Untagged messages need an agent Monitor on the default_backend FIFO.
+# Keepalives alone are NOT enough (writes succeed; agent never sees lines).
+# Diagnose: bash scripts/doctor-inbound.sh
+#
+# [routing]
+# default_backend = "fleet"
+# require_prefix = false   # true if shared/noisy chat — then always @handle
+# tag_style = "bracket"
+#
 # [backends.cabal]
 # type = "grok"
 # delivery = "fifo"
@@ -959,6 +1012,68 @@
 # fifo = "~/.grok/telegram-bridge/sessions/fleet.fifo"
 # tag = "fleet"
 # prefixes = ["@fleet", "/fleet", "fleet:"]
+#
+# Monitor per FIFO (in each Grok harness session):
+#   adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/fleet.fifo
+#   adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/cabal.fifo
+#
+# =============================================================================
+# Dedicated bots — separate relay channels per agent  (docs/MULTI_BOT.md)
+# =============================================================================
+#
+# By default the relay runs ONE bot: a single BOT_TOKEN and one poll loop.
+# Give Claude and Grok their own @BotFather bots when you want each agent in
+# its own Telegram chat, with its own notification stream.
+#
+# Telegram's getUpdates cursor is PER BOT, so each bot gets its own poll
+# process and its own state directory (<bridge>/.bots/<id>/.offset). Two loops
+# sharing one cursor would advance past each other's updates and eat messages
+# silently — this is why a bot id, not just a second token, is required.
+#
+# Only the NAME of the env var lives here. Real tokens stay in .env (mode 0600)
+# or the secret store — never in this file.
+#
+# [bots.claude]
+# token_env = "BOT_TOKEN"          # optional; defaults to BOT_TOKEN
+#
+# [bots.grok]
+# token_env = "BOT_TOKEN_GROK"
+#
+# Bind each backend to the bot that serves it. Backends with no `bot =` belong
+# to the default bot, so an existing single-bot config keeps working untouched.
+#
+# [backends.cabal]
+# bot = "grok"
+# [backends.fleet]
+# bot = "grok"
+#
+# Or bind everything at once and override per backend:
+# [routing]
+# default_bot = "grok"
+#
+# Setup (the @BotFather steps need your Telegram account — no agent can do them):
+#   1. @BotFather -> /newbot -> copy the token
+#   2. echo 'BOT_TOKEN_GROK=<token>' >> .env      # 0600, never committed
+#   3. add the bot to its chat/topic and send it one message
+#   4. bash scripts/ensure-inbound.sh --restart-poll
+#      -> starts one poll loop per bot: tg-poll-claude, tg-poll-grok
+#
+# Verify:
+#   ls .run/*.pid            # one pidfile per bot
+#   ls .bots/grok/.offset    # per-bot cursor, isolated
+#
+# --- Remote-controlled Grok session driven from Telegram ---------------------
+#
+# Register a dedicated @handle session, then attach its FIFO as the Grok
+# harness's Monitor. Messages sent while the session is down are spooled and
+# replayed in order when it attaches (docs/INBOUND-DELIVERY.md).
+#
+#   bash scripts/register-session.sh --handle grok --type grok
+#   adapters/backend-fifo-reader.sh ~/.grok/telegram-bridge/sessions/grok.fifo
+#
+# To have a Telegram message LAUNCH work rather than feed an attached session,
+# use delivery = "cmd" — RELAY_TEXT / RELAY_PROJECT / RELAY_CWD / RELAY_MODEL
+# are exported for the command (see the provider examples below).
 #
 # [backends.ollama]
 # type = "ollama"

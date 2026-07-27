@@ -34,7 +34,18 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
+from tg_agent_relay.agent_handle import build_handle_from_env, parse_leading_handle
+from tg_agent_relay.bots import (
+    bot_for_backend,
+    bot_state_dir,
+    bot_token,
+    bots_configured,
+    is_default_bot,
+    selected_bot,
+    token_env_for_bot,
+)
 from tg_agent_relay.config import cfg_get, load_config
+from tg_agent_relay.media_inbound import buffer_parts_for_update
 from tg_agent_relay.metrics import emit_metric
 from tg_agent_relay.routing import (
     has_routing_config,
@@ -44,6 +55,7 @@ from tg_agent_relay.routing import (
     strip_prefix,
 )
 from tg_agent_relay.send import load_env
+from tg_agent_relay.spool import pending_count, spool_message
 
 # Record separator — never appears in normal Telegram text.
 RS = "\x1e"
@@ -58,6 +70,55 @@ GetUpdatesFn = Callable[[str, int, int, float], dict[str, Any] | None]
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _import_fifo_helpers():
+    """Load lib/fifo_agent_readers without requiring package install of lib/."""
+    import importlib.util
+    import sys
+
+    lib_path = _repo_root() / "lib" / "fifo_agent_readers.py"
+    if lib_path.is_file():
+        spec = importlib.util.spec_from_file_location("tg_agent_relay_fifo_agent_readers", lib_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            return mod
+    # Fallback: optional package-adjacent path already on sys.path
+    import fifo_agent_readers as mod  # type: ignore
+
+    return mod
+
+
+_fifo_mod = None
+
+
+def _fifo_helpers():
+    global _fifo_mod
+    if _fifo_mod is None:
+        _fifo_mod = _import_fifo_helpers()
+    return _fifo_mod
+
+
+def is_agent_reader_cmdline(cmdline: bytes | str) -> bool:
+    return _fifo_helpers().is_agent_reader_cmdline(cmdline)
+
+
+def _parse_fdinfo_flags(fdinfo: str) -> int | None:
+    return _fifo_helpers().parse_fdinfo_flags(fdinfo)
+
+
+def _fifo_has_agent_reader(
+    fifo_path: str | Path,
+    *,
+    proc_root: Path | str | None = None,
+) -> bool:
+    """See lib/fifo_agent_readers.fifo_has_agent_reader (agent Monitor vs keepalive)."""
+    return _fifo_helpers().fifo_has_agent_reader(fifo_path, proc_root=proc_root)
+
+
+fifo_has_agent_reader = _fifo_has_agent_reader
 
 
 def _safe_id(value: str) -> str:
@@ -166,6 +227,12 @@ def resolve_command_match(cfg: dict[str, Any], text: str) -> tuple[str, str]:
             name2 = classify_command(cfg, stripped)
             if name2:
                 return name2, stripped
+        lead = parse_leading_handle(text)
+        if lead:
+            _, stripped = lead
+            name3 = classify_command(cfg, stripped)
+            if name3:
+                return name3, stripped
     return "", ""
 
 
@@ -377,6 +444,23 @@ def deliver_to_backend(
         )
         return []
 
+    # With dedicated bots, each poll loop owns a subset of backends. Delivering
+    # another bot's backend here would cross the channels over — a message sent
+    # to the Grok bot must not surface in the Claude session. Read from env for
+    # the same reason TG_POLL_BACKEND is: this is a per-process identity.
+    # Single-bot configs never bind a backend, so this is inert by default.
+    if bots_configured(cfg):
+        this_bot = selected_bot(cfg)
+        owner = bot_for_backend(cfg, backend)
+        if not (is_default_bot(this_bot) and is_default_bot(owner)) and str(owner) != str(this_bot):
+            emit_metric(
+                "tg-poll",
+                "message_filtered",
+                f"backend={backend} bot={owner or 'default'} want={this_bot or 'default'}",
+                bridge_dir=root,
+            )
+            return []
+
     if delivery == "fifo":
         fifo = str(bcfg.get("fifo") or "")
         fifo = os.path.expanduser(fifo)
@@ -396,26 +480,77 @@ def deliver_to_backend(
         except OSError as _exc:
             pass
         line = f"{tag} {text}\n"
+
+        # Check for a real agent reader BEFORE writing. Keepalives
+        # (ensure-inbound RDWR hold) make the write succeed into the 64K kernel
+        # pipe buffer even when no Monitor is attached — the line would sit
+        # there unseen until some later reader dumps it as a burst, or be lost
+        # entirely once the buffer fills. Spool instead: the drain in
+        # adapters/backend-fifo-reader.sh replays it, in order, on attach.
+        if not _fifo_has_agent_reader(fifo):
+            spooled = spool_message(backend, line, root, reason="no_agent_reader")
+            emit_metric(
+                "tg-poll",
+                "message_orphaned",
+                f"backend={backend} reason=no_agent_reader spooled={1 if spooled else 0}",
+                bridge_dir=root,
+            )
+            if spooled:
+                return []
+            # Spool unwritable (full disk, permissions). Fall back to the old
+            # best-effort write: the kernel buffer is a poor destination, but
+            # it is recoverable by a later reader and dropping here is not.
+            with contextlib.suppress(OSError):
+                fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    os.write(fd, line.encode("utf-8"))
+                finally:
+                    os.close(fd)
+            return []
+
+        # A reader is attached, but if a replay is still draining, writing
+        # straight to the FIFO would jump the queue: the direct write is read
+        # immediately while spooled lines wait for the next drain tick, so a
+        # newer message could reach the agent before the backlog it follows.
+        # Appending keeps delivery in arrival order; direct writes resume once
+        # the spool is empty.
+        if pending_count(backend, root):
+            spooled = spool_message(backend, line, root, reason="drain_in_flight")
+            if spooled:
+                emit_metric(
+                    "tg-poll",
+                    "message_spooled_ordered",
+                    f"backend={backend} reason=drain_in_flight",
+                    bridge_dir=root,
+                )
+                return []
+
         try:
-            # Best-effort non-blocking-ish write (may fail without a reader).
             fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
             try:
                 os.write(fd, line.encode("utf-8"))
             finally:
                 os.close(fd)
-            emit_metric(
-                "tg-poll",
-                "message_delivered",
-                f"backend={backend} mode=fifo",
-                bridge_dir=root,
-            )
-        except OSError as _exc:
+        except OSError:
+            # Reader attested but the write still failed (full buffer, reader
+            # died in the race). Spool rather than drop — this path used to
+            # lose the message permanently.
+            spooled = spool_message(backend, line, root, reason="fifo_write_failed")
             emit_metric(
                 "tg-poll",
                 "deliver_skip",
-                f"backend={backend} reason=fifo_timeout",
+                f"backend={backend} reason=fifo_timeout spooled={1 if spooled else 0}",
                 bridge_dir=root,
             )
+            return []
+
+        # Only now is the claim true: a reader was attested and the write landed.
+        emit_metric(
+            "tg-poll",
+            "message_delivered",
+            f"backend={backend} mode=fifo",
+            bridge_dir=root,
+        )
         return []
 
     if delivery == "cmd":
@@ -433,6 +568,11 @@ def deliver_to_backend(
         env["RELAY_TEXT"] = text
         env["RELAY_BACKEND"] = backend
         env["RELAY_PROJECT"] = project
+        agent_handle = build_handle_from_env(env)
+        if not agent_handle and backend:
+            agent_handle = f"@{backend}"
+        if agent_handle:
+            env["RELAY_AGENT_HANDLE"] = agent_handle
         env["RELAY_CHAT_ID"] = chat_id
         env["RELAY_THREAD_ID"] = thread_id
         env["RELAY_CWD"] = cwd
@@ -539,6 +679,16 @@ def flush_buffer(
 
     lines: list[str] = []
     work_cfg = cfg if cfg.get("_bridge_dir") else {**cfg, "_bridge_dir": str(root)}
+    from tg_agent_relay.plan_approve import agent_emit_line, parse_text_reply, set_plan_status
+
+    plan_hit = parse_text_reply(out, bridge_dir=root)
+    if plan_hit:
+        action, plan_id = plan_hit
+        status = "approved" if action == "approve" else "rejected"
+        if set_plan_status(root, plan_id, status):
+            _clear_buffer(buf, ts)
+            return [agent_emit_line(status, plan_id)]
+
     name, cmd_text = resolve_command_match(work_cfg, out)
     if name:
         os.environ["RELAY_CHAT_ID"] = chat_id
@@ -646,15 +796,92 @@ def write_offset(bridge_dir: Path | str, offset: int) -> None:
         path.write_text(f"{offset}\n", encoding="utf-8")
 
 
+def _message_obj(update: dict[str, Any]) -> dict[str, Any]:
+    msg = update.get("message")
+    return msg if isinstance(msg, dict) else {}
+
+
+def _callback_fields(update: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    """from_id, data, chat_id, thread_id, callback_id from callback_query."""
+    cq = update.get("callback_query")
+    if not isinstance(cq, dict):
+        return "", "", "", "", ""
+    from_obj = cq.get("from") if isinstance(cq.get("from"), dict) else {}
+    msg = cq.get("message") if isinstance(cq.get("message"), dict) else {}
+    chat_obj = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
+    from_id = str(from_obj.get("id", "")) if from_obj else ""
+    data = str(cq.get("data") or "")
+    chat_id = str(chat_obj.get("id", "")) if chat_obj else ""
+    thread = msg.get("message_thread_id")
+    thread_id = str(thread) if thread is not None else ""
+    cb_id = str(cq.get("id") or "")
+    return from_id, data, chat_id, thread_id, cb_id
+
+
+def _plan_or_usage_lines(
+    bridge_dir: Path,
+    cfg: dict[str, Any],
+    data: str,
+    *,
+    allowed_user_id: str,
+    from_id: str,
+    chat_id: str = "",
+    thread_id: str = "",
+) -> list[str]:
+    if not data or not allowed_user_id or from_id != str(allowed_user_id):
+        return []
+    from tg_agent_relay.plan_approve import (
+        agent_emit_line,
+        parse_callback_data,
+        set_plan_status,
+        usage_agent_cmd,
+    )
+
+    if data.startswith("usage:window:"):
+        window = data.split(":", 2)[2] if data.count(":") >= 2 else "7d"
+        usage_name = ""
+        commands = cfg.get("commands")
+        if isinstance(commands, dict):
+            for key, entry in commands.items():
+                if not isinstance(entry, dict):
+                    continue
+                slash = str(entry.get("slash") or "")
+                keyword = str(entry.get("keyword") or "")
+                if slash in ("/usage", "usage") or keyword == "usage":
+                    usage_name = str(key)
+                    break
+        if usage_name and command_field(cfg, usage_name, "mode", "forward") == "relay":
+            dispatch_command(
+                cfg,
+                usage_name,
+                f"/usage {window}",
+                bridge_dir=bridge_dir,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
+            return []
+        return [usage_agent_cmd(window)]
+
+    parsed = parse_callback_data(data)
+    if not parsed:
+        return []
+    action, plan_id = parsed
+    if action == "later":
+        return []
+    status = "approved" if action == "approve" else "rejected"
+    if not set_plan_status(bridge_dir, plan_id, status):
+        return []
+    return [agent_emit_line(status, plan_id)]
+
+
 def _message_fields(update: dict[str, Any]) -> tuple[str, str, str, str]:
     """Extract from_id, text, chat_id, thread_id from an update object."""
-    msg = update.get("message")
-    if not isinstance(msg, dict):
+    msg = _message_obj(update)
+    if not msg:
         return "", "", "", ""
     from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
     chat_obj = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
     from_id = str(from_obj.get("id", "")) if from_obj else ""
-    # Text reassembly: plain text (caption not in shell parity).
     text = msg.get("text")
     text_s = str(text) if text is not None else ""
     chat_id = str(chat_obj.get("id", "")) if chat_obj else ""
@@ -670,49 +897,91 @@ def process_update(
     cfg: dict[str, Any],
     allowed_user_id: str,
     allowed_chat_id: str = "",
+    bot_token: str = "",
     now: int | None = None,
+    state_dir: Path | str | None = None,
 ) -> list[str]:
     """Handle one Telegram update. Advances offset. May buffer (not flush).
 
     Returns immediate stdout lines (setup discovery only; normal messages
     wait for reassembly flush).
+
+    *state_dir* is where the getUpdates cursor and reassembly buffers live. It
+    defaults to *bridge_dir* (single-bot layout); a named bot passes its own
+    directory so two poll loops never share a cursor. See tg_agent_relay.bots.
     """
     root = Path(bridge_dir)
+    state = Path(state_dir) if state_dir else root
     update_id = update.get("update_id")
     try:
         uid = int(update_id)  # type: ignore[arg-type]
     except (TypeError, ValueError) as _exc:
         return []
 
-    from_id, text, chat_id, thread_id = _message_fields(update)
     lines: list[str] = []
+    cb_from, cb_data, cb_chat, cb_thread, _cb_id = _callback_fields(update)
+    if cb_from and cb_data:
+        write_offset(state, uid + 1)
+        if (
+            allowed_user_id
+            and cb_from == str(allowed_user_id)
+            and chat_is_accepted(cfg, cb_chat, allowed_chat_id=allowed_chat_id)
+        ):
+            lines.extend(
+                _plan_or_usage_lines(
+                    root,
+                    cfg,
+                    cb_data,
+                    allowed_user_id=allowed_user_id,
+                    from_id=cb_from,
+                    chat_id=cb_chat,
+                    thread_id=cb_thread,
+                )
+            )
+        return lines
 
-    if not from_id or not text:
-        write_offset(root, uid + 1)
+    from_id, text, chat_id, thread_id = _message_fields(update)
+    msg = _message_obj(update)
+
+    buffer_parts: list[str] = []
+    if msg and bot_token:
+        buffer_parts = buffer_parts_for_update(
+            msg,
+            bridge_dir=root,
+            token=bot_token,
+            update_id=uid,
+            chat_id=chat_id,
+            cfg=cfg,
+        )
+    elif text:
+        buffer_parts = [text]
+
+    if not from_id or not buffer_parts:
+        write_offset(state, uid + 1)
         return lines
 
     if not allowed_user_id:
         lines.append(f"[telegram-setup] your user_id is {from_id}")
-        write_offset(root, uid + 1)
+        write_offset(state, uid + 1)
         return lines
 
     if from_id == str(allowed_user_id):
         if not chat_is_accepted(cfg, chat_id, allowed_chat_id=allowed_chat_id):
-            write_offset(root, uid + 1)
+            write_offset(state, uid + 1)
             return lines
         multi = has_routing_config(cfg)
-        # Commit buffer BEFORE advancing offset (shell crash-safety).
-        append_message(
-            root,
-            text,
-            chat_id,
-            thread_id,
-            multi_chat=multi,
-            now=now,
-        )
+        for part in buffer_parts:
+            append_message(
+                state,
+                part,
+                chat_id,
+                thread_id,
+                multi_chat=multi,
+                now=now,
+            )
     # else: unrecognized sender — silently ignored (allowlist boundary).
 
-    write_offset(root, uid + 1)
+    write_offset(state, uid + 1)
     return lines
 
 
@@ -723,7 +992,9 @@ def process_result(
     cfg: dict[str, Any],
     allowed_user_id: str,
     allowed_chat_id: str = "",
+    bot_token: str = "",
     now: int | None = None,
+    state_dir: Path | str | None = None,
 ) -> list[str]:
     """Process getUpdates result array. Returns immediate stdout lines."""
     lines: list[str] = []
@@ -737,7 +1008,9 @@ def process_result(
                 cfg=cfg,
                 allowed_user_id=allowed_user_id,
                 allowed_chat_id=allowed_chat_id,
+                bot_token=bot_token,
                 now=now,
+                state_dir=state_dir,
             )
         )
     return lines
@@ -784,10 +1057,14 @@ def poll_once(
     out: TextIO | None = None,
     emit: EmitFn | None = None,
     detach: bool = True,
+    bot_id: str = "",
 ) -> str:
     """One iteration of the poll loop. Returns status token for tests.
 
     status ∈ ok | no_env | no_token | poll_error | empty
+
+    *bot_id* selects which bot this process serves (falls back to ``RELAY_BOT``);
+    empty means the original single-bot identity and legacy state paths.
     """
     root = Path(bridge_dir)
     out_f = out if out is not None else __import__("sys").stdout
@@ -801,23 +1078,38 @@ def poll_once(
         return "no_env"
 
     env_map = env if env is not None else load_env(root)
-    token = env_map.get("BOT_TOKEN") or os.environ.get("BOT_TOKEN") or ""
     allowed_user = env_map.get("ALLOWED_USER_ID") or os.environ.get("ALLOWED_USER_ID") or ""
     allowed_chat = env_map.get("ALLOWED_CHAT_ID") or os.environ.get("ALLOWED_CHAT_ID") or ""
 
     if cfg is None:
         cfg = load_config(root / "relay.toml", bridge_dir=root)
 
+    # Which bot this process serves, and where its cursor/buffers live. The
+    # default bot uses the bridge root, so single-bot deployments are
+    # byte-for-byte unchanged. Telegram's getUpdates cursor is per bot, so two
+    # loops sharing one .offset would eat each other's messages.
+    bot = selected_bot(cfg, bot_id)
+    state = bot_state_dir(root, bot)
+    if state != root:
+        state.mkdir(parents=True, exist_ok=True)
+
+    token = bot_token(cfg, bot, env_map)
     if not token:
+        emit_metric(
+            "tg-poll",
+            "no_token",
+            f"bot={bot or 'default'} env={token_env_for_bot(cfg, bot)}",
+            bridge_dir=root,
+        )
         sleep(15)
         return "no_token"
 
     # Quiet-window flush before long poll.
-    flushed = flush_stale_buffers(root, cfg, now=now(), detach=detach)
+    flushed = flush_stale_buffers(state, cfg, now=now(), detach=detach)
     _emit_lines(flushed, out_f, emit)
 
-    offset = read_offset(root)
-    if _any_nonempty_buffer(root):
+    offset = read_offset(state)
+    if _any_nonempty_buffer(state):
         poll_timeout, curl_max = 1, 5.0
     else:
         poll_timeout, curl_max = 50, 60.0
@@ -843,7 +1135,9 @@ def poll_once(
         cfg=cfg,
         allowed_user_id=allowed_user,
         allowed_chat_id=allowed_chat,
+        bot_token=token,
         now=now(),
+        state_dir=state,
     )
     _emit_lines(immediate, out_f, emit)
     return "ok" if result else "empty"
@@ -861,6 +1155,7 @@ def poll_loop(
     cfg: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
     detach: bool = True,
+    bot_id: str = "",
 ) -> int:
     """Long-poll loop. max_iterations limits runs (tests). Returns 0."""
     root = Path(bridge_dir) if bridge_dir else _repo_root()
@@ -876,6 +1171,7 @@ def poll_loop(
             out=out,
             emit=emit,
             detach=detach,
+            bot_id=bot_id,
         )
         n += 1
         if max_iterations is not None and n >= max_iterations:

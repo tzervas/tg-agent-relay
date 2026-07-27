@@ -177,6 +177,48 @@ chat_is_accepted() {
 
 # deliver_to_backend <backend> <project> <text> <chat_id> <thread_id>
 # Routes a flushed message to the configured backend delivery mode.
+# True if a real agent Monitor holds $1 open for read (keepalives don't count).
+#
+# Fails OPEN (returns 0 = "assume reader") when the helper or interpreter is
+# unavailable, matching lib/fifo_agent_readers.fifo_has_agent_reader. A false
+# "no reader" would divert every message to the spool and stall live delivery,
+# which is worse than the orphan it would be guarding against.
+fifo_has_agent_reader() {
+    local fifo="$1" helper="$BRIDGE_DIR/lib/fifo_agent_readers.py" out
+    [[ -f "$helper" ]] || return 0
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    out="$(relay_python "$helper" "$fifo" 2>/dev/null)" || return 0
+    case "$out" in
+        *has_agent_reader=1*) return 0 ;;
+        *has_agent_reader=0*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Count lines already held for replay on $1. Prints 0 when unknown.
+spool_count() {
+    local backend="$1" out
+    [[ -f "$BRIDGE_DIR/tg_agent_relay/spool.py" ]] || { printf '0'; return; }
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    out="$(PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$BRIDGE_DIR" \
+        relay_python -m tg_agent_relay.spool count "$backend" \
+        --bridge-dir "$BRIDGE_DIR" 2>/dev/null)" || out=0
+    [[ "$out" =~ ^[0-9]+$ ]] || out=0
+    printf '%s' "$out"
+}
+
+# Persist one inbound line for replay. Shares tg_agent_relay.spool's on-disk
+# format rather than reimplementing it here. Returns non-zero if not stored,
+# so the caller never claims a message is safely queued when it is not.
+spool_line() {
+    local backend="$1" tag="$2" text="$3" reason="${4:-}"
+    [[ -f "$BRIDGE_DIR/tg_agent_relay/spool.py" ]] || return 1
+    declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+    printf '%s %s' "$tag" "$text" | PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$BRIDGE_DIR" \
+        relay_python -m tg_agent_relay.spool put "$backend" \
+        --bridge-dir "$BRIDGE_DIR" --reason "$reason" >/dev/null 2>&1
+}
+
 deliver_to_backend() {
     local backend="$1" project="$2" text="$3" chat_id="${4:-}" thread_id="${5:-}"
     local delivery fifo cmd_json tag filter_backend cwd
@@ -210,15 +252,47 @@ deliver_to_backend() {
                 mkdir -p "$(dirname "$fifo")" 2>/dev/null || true
                 mkfifo "$fifo" 2>/dev/null || true
             fi
-            # Non-blocking-ish write: open fifo may block without a reader;
-            # use timeout + background best-effort.
+            # A keepalive (ensure-inbound RDWR hold) makes the write succeed
+            # into the kernel pipe buffer even with no agent Monitor attached,
+            # so a successful write is NOT evidence of delivery. Check for a
+            # real agent reader first; with none, spool for replay instead of
+            # writing into a buffer nobody drains.
+            if ! fifo_has_agent_reader "$fifo"; then
+                if spool_line "$backend" "$tag" "$text" "no_agent_reader"; then
+                    emit_metric "tg-poll" "message_orphaned" "backend=$backend reason=no_agent_reader spooled=1"
+                    return 0
+                fi
+                emit_metric "tg-poll" "message_orphaned" "backend=$backend reason=no_agent_reader spooled=0"
+                # Spool unwritable — fall back to the old best-effort write.
+                # The kernel buffer is a poor destination but is recoverable by
+                # a later reader; dropping here is not.
+                printf '%s %s\n' "$tag" "$text" > "$fifo" 2>/dev/null &
+                return 0
+            fi
+            # Reader attached, but a replay still draining must not be jumped:
+            # a direct write is read immediately while spooled lines wait for
+            # the next drain tick. Append so arrival order is preserved.
+            if [[ "$(spool_count "$backend")" != "0" ]] \
+                && spool_line "$backend" "$tag" "$text" "drain_in_flight"; then
+                emit_metric "tg-poll" "message_spooled_ordered" "backend=$backend reason=drain_in_flight"
+                return 0
+            fi
             if command -v timeout >/dev/null 2>&1; then
-                timeout 1 bash -c "printf '%s %s\n' $(printf '%q' "$tag") $(printf '%q' "$text") > $(printf '%q' "$fifo")" 2>/dev/null \
-                    || emit_metric "tg-poll" "deliver_skip" "backend=$backend reason=fifo_timeout"
+                if timeout 1 bash -c "printf '%s %s\n' $(printf '%q' "$tag") $(printf '%q' "$text") > $(printf '%q' "$fifo")" 2>/dev/null; then
+                    emit_metric "tg-poll" "message_delivered" "backend=$backend mode=fifo"
+                else
+                    # Reader attested but the write failed (full buffer, reader
+                    # lost in the race) — spool rather than drop.
+                    if spool_line "$backend" "$tag" "$text" "fifo_write_failed"; then
+                        emit_metric "tg-poll" "deliver_skip" "backend=$backend reason=fifo_timeout spooled=1"
+                    else
+                        emit_metric "tg-poll" "deliver_skip" "backend=$backend reason=fifo_timeout spooled=0"
+                    fi
+                fi
             else
                 printf '%s %s\n' "$tag" "$text" > "$fifo" 2>/dev/null &
+                emit_metric "tg-poll" "message_delivered" "backend=$backend mode=fifo"
             fi
-            emit_metric "tg-poll" "message_delivered" "backend=$backend mode=fifo"
             ;;
         cmd)
             cwd="$(project_worktree "$project" "$backend")"
@@ -527,9 +601,34 @@ while true; do
         CHAT_ID=$(printf '%s' "$UPDATE" | jq -r '.message.chat.id // empty' 2>/dev/null)
         THREAD_ID=$(printf '%s' "$UPDATE" | jq -r '.message.message_thread_id // empty' 2>/dev/null)
 
-        if [[ -z "$FROM_ID" || -z "$TEXT" ]]; then
-            # Nothing to buffer/emit (e.g. a non-text message) - still
-            # advance the offset so it's never redelivered.
+        # Inbound media + text parts (Python helper when available).
+        _INBOUND_PARTS=""
+        if [[ -f "$BRIDGE_DIR/lib/python.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$BRIDGE_DIR/lib/python.sh"
+            declare -f relay_python >/dev/null 2>&1 || relay_python() { command python3 "$@"; }
+            if relay_python -c "import tg_agent_relay.media_inbound" >/dev/null 2>&1; then
+                export BRIDGE_DIR
+                _INBOUND_PARTS="$(printf '%s' "$UPDATE" | relay_python -c "
+import json,sys,os
+from pathlib import Path
+from tg_agent_relay.media_inbound import buffer_parts_for_update
+u=json.load(sys.stdin)
+msg=u.get('message') or {}
+uid=int(u.get('update_id') or 0)
+chat=str((msg.get('chat') or {}).get('id') or '')
+bridge=Path(os.environ.get('BRIDGE_DIR','.'))
+token=os.environ.get('BOT_TOKEN','')
+parts=buffer_parts_for_update(msg, bridge_dir=bridge, token=token, update_id=uid, chat_id=chat, cfg={})
+print('\x1e'.join(parts), end='')
+" 2>/dev/null)" || _INBOUND_PARTS=""
+            fi
+        fi
+        if [[ -z "$_INBOUND_PARTS" && -n "$TEXT" ]]; then
+            _INBOUND_PARTS="$TEXT"
+        fi
+
+        if [[ -z "$FROM_ID" || -z "$_INBOUND_PARTS" ]]; then
             printf '%s\n' "$((UPDATE_ID + 1))" > "$OFFSET_FILE"
             continue
         fi
@@ -548,7 +647,9 @@ while true; do
             fi
             # Commit to the durable per-chat buffer BEFORE advancing offset.
             buffer_paths "$CHAT_ID" "$THREAD_ID"
-            printf '%s\x1e' "$TEXT" >> "$BUFFER_FILE"
+            while IFS= read -r -d $'\x1e' _part; do
+                [[ -n "$_part" ]] && printf '%s\x1e' "$_part" >> "$BUFFER_FILE"
+            done <<< "${_INBOUND_PARTS}"$'\x1e'
             date +%s > "$BUFFER_TS_FILE"
             printf '%s|%s\n' "$CHAT_ID" "$THREAD_ID" > "${BUFFER_FILE}.meta"
         fi

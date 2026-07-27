@@ -579,6 +579,77 @@ clear_recorded "$BRIDGE4"
 rm -rf "$BRIDGE4"
 
 # ============================================================================
+echo "== relay-notify.sh: goal-noise filter fails OPEN =="
+# Regression guard for the "silent relay" class of bug: when the goal-noise
+# filter cannot be imported (a deployed bridge without tg_agent_relay on the
+# path, a partial deploy, a bare `python -c`), hook traffic must STILL be sent.
+# Before the fix, any non-zero exit from the filter was read as "policy said
+# drop" and every hook ping vanished with nothing logged.
+#
+# The fault is injected the same way it happens in the field: run from a cwd
+# that is not the repo root, with a PYTHONPATH entry whose tg_agent_relay
+# raises on import. That shadows a real install without touching it.
+BRIDGE_GOAL="$(setup_temp_bridge)"
+GOAL_POISON="$(mktemp -d)"
+mkdir -p "$GOAL_POISON/tg_agent_relay"
+printf '%s\n' 'raise ImportError("fault injection: goal filter unavailable")' \
+    > "$GOAL_POISON/tg_agent_relay/__init__.py"
+
+# The probe body IS real goal noise and the event IS one the policy silences, so
+# a working filter drops it. Delivery here can only mean the fail-open path ran.
+(
+    cd "$BRIDGE_GOAL" || exit 1
+    PYTHONPATH="$GOAL_POISON" TG_SEND_SOURCE=hook RELAY_HOOK_EVENT=Stop \
+        "$BRIDGE_GOAL/relay-notify.sh" --raw "update_goal failed: Goal is not Active" \
+        >/dev/null 2>&1
+)
+assert_eq "unimportable goal filter still delivers the hook message" \
+    "update_goal failed: Goal is not Active" \
+    "$(recorded "$BRIDGE_GOAL")"
+clear_recorded "$BRIDGE_GOAL"
+
+# Same body, same event, filter importable (cwd = repo root) -> still suppressed.
+# Fail-open must not have degraded into never-filter.
+(
+    cd "$REPO_ROOT" || exit 1
+    TG_SEND_SOURCE=hook RELAY_HOOK_EVENT=Stop \
+        "$BRIDGE_GOAL/relay-notify.sh" --raw "update_goal failed: Goal is not Active" \
+        >/dev/null 2>&1
+)
+assert_empty "working goal filter still suppresses goal noise" "$(recorded "$BRIDGE_GOAL")"
+clear_recorded "$BRIDGE_GOAL"
+
+# RELAY_HOOK_EVENT is harness-supplied (adapters/*.sh export it from the hook
+# payload's event name). It must travel through the ENVIRONMENT, never through
+# the text of the `python -c` program:
+#   - a bare quote in it used to produce a SyntaxError, which the fail-closed
+#     branch read as "policy said drop" and the message vanished;
+#   - a well-formed payload used to *execute* — `hook_event='<PAYLOAD>'` closes
+#     the string literal and everything after it is code inside relay-notify's
+#     own interpreter.
+# Assert both: the message still goes out, and the payload did NOT run.
+GOAL_PWNED="$GOAL_POISON/pwned"
+(
+    cd "$REPO_ROOT" || exit 1
+    TG_SEND_SOURCE=hook \
+        RELAY_HOOK_EVENT="Stop' if __import__('pathlib').Path('$GOAL_PWNED').write_text('x') else 'Stop" \
+        "$BRIDGE_GOAL/relay-notify.sh" --raw "quote in hook event is inert" \
+        >/dev/null 2>&1
+)
+assert_eq "quote in RELAY_HOOK_EVENT neither crashes nor silences the filter" \
+    "quote in hook event is inert" \
+    "$(recorded "$BRIDGE_GOAL")"
+if [[ -e "$GOAL_PWNED" ]]; then
+    fail "RELAY_HOOK_EVENT cannot inject code into the goal filter" \
+        "payload executed: $GOAL_PWNED was created"
+else
+    ok "RELAY_HOOK_EVENT cannot inject code into the goal filter"
+fi
+clear_recorded "$BRIDGE_GOAL"
+
+rm -rf "$BRIDGE_GOAL" "$GOAL_POISON"
+
+# ============================================================================
 echo "== tg-poll.sh: classify_command() (in-chat commands) =="
 # Source tg-poll.sh to get its functions WITHOUT starting the infinite poll
 # loop (see the file's own BASH_SOURCE-vs-\$0 guard at the bottom).
@@ -1103,12 +1174,12 @@ else
 fi
 rm -rf "$TTS6" "$STUB6" "$LOG6"
 
-# -- 7: pagination interaction - a multi-page message always skips TTS
-# -- entirely, even in voice-only mode (falls back to the paginated text).
+# -- 7: pagination interaction - multi-page direct sends upgrade to full
+# -- spoken mode and still get voice (v0.9.0), with all text pages.
 TTS7="$(setup_tts_bridge)"
 cat > "$TTS7/relay.toml" <<'TOML'
 [tts]
-mode = "voice-only"
+mode = "text+voice"
 engine = "auto"
 max_chars = 600
 TOML
@@ -1117,11 +1188,11 @@ LOG7="$(mktemp -u)"; write_stub_curl "$STUB7" "$LOG7"
 write_stub_espeak "$STUB7"; write_stub_ffmpeg "$STUB7"
 LONG_MSG="$(python3 -c "print('x' * 120)")"
 PATH="$STUB7" TG_PAGE_SIZE=50 "$TTS7/tg-send.sh" "$LONG_MSG" >/dev/null 2>&1
-SEND_COUNT="$(grep -c "sendMessage" "$LOG7" 2>/dev/null || echo 0)"
-if [[ "$SEND_COUNT" -ge 2 ]] && ! grep -q "sendVoice\|sendAudio" "$LOG7"; then
-    ok "tts: a paginated (multi-page) message always skips TTS - text-only"
+SEND_COUNT="$(grep -c "sendMessage" "$LOG7" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+if [[ "${SEND_COUNT:-0}" -ge 2 ]] && grep -qE "sendVoice|sendAudio" "$LOG7"; then
+    ok "tts: a paginated (multi-page) direct send gets long-form voice + all text pages"
 else
-    fail "tts: a paginated (multi-page) message always skips TTS" "pages=$SEND_COUNT log=$(cat "$LOG7" 2>/dev/null)"
+    fail "tts: a paginated (multi-page) direct send gets long-form voice + all text pages" "pages=${SEND_COUNT:-0} log=$(cat "$LOG7" 2>/dev/null)"
 fi
 rm -rf "$TTS7" "$STUB7" "$LOG7"
 
@@ -1912,7 +1983,35 @@ echo '{"hook_event_name":"SubagentStop","agent_type":"build","last_assistant_mes
     | "$SRC_DIR/hook-notify.sh" >/dev/null 2>&1
 assert_eq "TG_SEND_SOURCE=hook reaches tg-send.sh from a Claude Code hook event" \
     "hook" "$(cat "$SRC_DIR/.recorded-source" 2>/dev/null)"
+
 rm -rf "$SRC_DIR"
+
+# tool_name is fully attacker-influenced — it is whatever tool the model asked
+# for, including a name supplied by an MCP server. The adapter's SHELL-fallback
+# goal-noise filter must not interpolate it into a `python -c` program:
+# `tool_name='<PAYLOAD>'` lets the payload close the string literal and execute
+# inside the relay's own interpreter.
+#
+# The fallback is only reached when the Python provider path is unavailable, so
+# the fixture removes lib/provider_hook.py — i.e. a partial deploy, which is the
+# exact configuration in which this path runs in the field.
+CC_INJ="$(setup_temp_bridge)"
+rm -f "$CC_INJ/lib/provider_hook.py"
+CC_PWNED="$(mktemp -u)"
+CC_PAYLOAD="x' if __import__('pathlib').Path('$CC_PWNED').write_text('x') else 'x"
+printf '{"hook_event_name":"SubagentStop","agent_type":"build","tool_name":%s,"last_assistant_message":"done"}\n' \
+    "$(printf '%s' "$CC_PAYLOAD" | jq -Rs .)" \
+    | "$CC_INJ/hook-notify.sh" >/dev/null 2>&1
+assert_eq "adapter still delivers its summary with a hostile tool_name" \
+    "✅ build finished — done" "$(recorded "$CC_INJ")"
+if [[ -e "$CC_PWNED" ]]; then
+    fail "hook tool_name cannot inject code into the adapter goal filter" \
+        "payload executed: $CC_PWNED was created"
+else
+    ok "hook tool_name cannot inject code into the adapter goal filter"
+fi
+rm -f "$CC_PWNED"
+rm -rf "$CC_INJ"
 
 # ============================================================================
 echo "== lib/format.sh: structured-formatting layer (unit tests, sourced directly) =="
@@ -2598,6 +2697,13 @@ if command -v python3 >/dev/null 2>&1; then
         ok "relay_python tests/test_package_interfaces.py"
     else
         fail "relay_python tests/test_package_interfaces.py" "$PY_OUT"
+    fi
+    PY_OUT="$(relay_python "$REPO_ROOT/tests/test_agent_handle.py" 2>&1)"
+    PY_RC=$?
+    if [[ $PY_RC -eq 0 ]]; then
+        ok "relay_python tests/test_agent_handle.py"
+    else
+        fail "relay_python tests/test_agent_handle.py" "$PY_OUT"
     fi
     PY_OUT="$(relay_python "$REPO_ROOT/tests/test_routing_tables.py" 2>&1)"
     PY_RC=$?

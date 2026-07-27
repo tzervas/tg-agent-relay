@@ -1,4 +1,129 @@
+## v0.10.3 (2026-07-27)
+
 ### Highlights
+
+- **Inbound messages now actually reach the running session.** `ensure-inbound`
+  keeps every backend FIFO open `RDWR` so writers never `ENXIO`; combined with
+  treating a successful write as delivery, that meant lines went into the 64K
+  kernel pipe buffer with nothing reading them — invisible until a Monitor
+  attached and dumped the backlog, or dropped for good once the buffer filled.
+  Delivery is now gated on an attested agent reader, and anything undeliverable
+  is spooled to disk and replayed, in order, when a session attaches.
+- `message_delivered` is trustworthy again: it is emitted only when a reader was
+  attested **and** the write landed. Orphans report `message_orphaned … spooled=1`.
+- **Registered `@handle` sessions were invisible to the routing API** when the
+  config carried `sessions.dir` but no `_bridge_dir` — `resolve` silently fell
+  through to `default_backend`. Live inbound routing was unaffected.
+
+### Upgrade notes
+
+Attach a Monitor per backend FIFO — the spool makes missed messages
+recoverable, it does not attach a reader for you:
+
+```bash
+bash scripts/doctor-inbound.sh          # agent_readers=0 means nothing is listening
+adapters/backend-fifo-reader.sh ~/.claude/telegram-bridge/sessions/fleet.fifo
+```
+
+Inspect or drain a backlog by hand:
+
+```bash
+python -m tg_agent_relay.spool count fleet
+python -m tg_agent_relay.spool drain fleet
+```
+
+See `docs/INBOUND-DELIVERY.md`. No config changes are required; keepalives are
+unchanged and still needed.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.3
+bash scripts/deploy-local.sh --ref v0.10.3
+```
+
+---
+
+## v0.10.2 (2026-07-21)
+
+### Highlights
+
+- **Docs polish** — `RELEASE_NOTES.md` had skipped straight from v0.9.0 to
+  the CHANGELOG's v0.10.0/v0.10.1; backfilled below so operators upgrading
+  off v0.9.0 have full deploy notes for each step.
+- No functional/code changes vs v0.10.1.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.2
+bash scripts/deploy-local.sh --ref v0.10.2
+```
+
+---
+
+## v0.10.1 (2026-07-20)
+
+### Highlights
+
+- **Inbound FIFO fix** — `ensure-inbound` no longer starts log-draining FIFO
+  readers that steal messages from Grok/Claude Monitors; it only runs
+  `tg-poll` and RDWR keepalives (no read). Dual readers on the same FIFO
+  path are deduped; agent Monitors own the read path.
+- `/status` ships as a zero-token relay-mode alias of `/stats`.
+- README architecture diagram: relay vs agent split, keepalives,
+  multi-backend FIFOs (sanitized).
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.1
+bash scripts/deploy-local.sh --ref v0.10.1
+```
+
+---
+
+## v0.10.0 (2026-07-16)
+
+### Highlights
+
+- **Forum threads (P13)** — topic title builders, outbound resolve order,
+  mockable `createForumTopic`, overlay bind helpers (`tg_agent_relay/threads.py`).
+- **`/thread` commands** — `handlers/thread.sh` + `[commands.thread]`
+  example: `list`, `here`, `bind`, `ensure`.
+- **Outbound thread routing** — `relay-notify.sh` sets `RELAY_CHAT_ID` /
+  `RELAY_THREAD_ID` from session/platform/workstream/handle, with optional
+  `🧵` title stamp.
+- **Docs** — `docs/THREADS.md`, cross-linked from `docs/ROUTING.md`.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.10.0
+bash scripts/deploy-local.sh --ref v0.10.0
+```
+
+---
+
+## v0.9.0 (2026-07-16)
+
+### Highlights
+
+- **Goal hook noise** — inactive-goal `update_goal` failures no longer spam Telegram.
+- **Plan approve** — PLAN messages ship inline Approve / Reject; replies route as `[telegram:plan]`.
+- **Voice** — PLAN / long / multi-page messages auto-use full spoken mode + multi-clip TTS.
+- **Usage UX** — usage chart PNGs include 24h / 7d / 30d / Refresh buttons.
+
+### Deploy
+
+```bash
+git fetch --tags && git checkout v0.9.0
+bash scripts/deploy-local.sh --ref v0.9.0
+```
+
+---
+
+### Highlights (v0.6.1)
 
 - **Python send/poll is the default** — `tg-send.sh` / `tg-poll.sh` exec the package when import works; shell remains recovery and opt-out (`RELAY_PYTHON_SEND=0` / `RELAY_PYTHON_POLL=0`). See `docs/DECISIONS.md` (D1).
 - **Shell recovery** — clear first-failure notes, sticky re-probe window, secret redaction, validated `RELAY_PYTHON`, bounded import probe (`lib/python_fallback.sh`).

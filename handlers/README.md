@@ -2,7 +2,7 @@
 
 **Status: shipped.** `tg-poll.sh`'s `dispatch_command()` routes a matched
 `[commands.<name>]` to a local handler instead of forwarding it to the
-agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`). Five
+agent (`mode = "relay"` in `relay.toml` — see `relay.toml.example`). Seven
 real handlers ship in this directory:
 
 - **`dashboard.sh`** — a multi-panel metrics dashboard: header stat row,
@@ -22,6 +22,16 @@ real handlers ship in this directory:
   actually enabled.
 - **`config.sh`** — allowlisted read/write of `relay.toml` from `/config`
   (zero model tokens; never touches `.env` secrets). See `lib/remote_config.py`.
+- **`session.sh`** — `/session` manages `@handle` agent sessions from
+  Telegram: `list` (with whether a real Monitor is attached and how many
+  messages are held for replay), `status <handle>`, `start <handle>`,
+  `stop <handle>`. `start` registers the session and creates its FIFO —
+  both inert — and runs a process **only** when the operator sets
+  `[sessions].launch_cmd`, the same opt-in shape as
+  `backends.*.delivery = "cmd"`. The Telegram message contributes only a
+  handle (`^[A-Za-z0-9_-]{1,32}$`, and it must be the sole argument),
+  passed to `launch_cmd` through the environment rather than interpolated
+  into a shell string. See `docs/MULTI_BOT.md`.
 - **`usage.sh`** — an OPT-IN (`[usage].enabled = true`, default off) token
   USAGE dashboard: tokens by provider/model/project, over `lib/usage_ingest.py`'s
   aggregation of a harness's local session-transcript logs (one adapter
@@ -35,7 +45,7 @@ real handlers ship in this directory:
 (and `dashboard.sh`'s optional usage panels) read a harness's local
 transcript logs via `lib/usage_ingest.py` (a separate, opt-in aggregation
 module — see its module docstring for the source-adapter contract). All
-five are registered in `relay.toml.example`. This file documents the
+seven are registered in `relay.toml.example`. This file documents the
 contract a new handler follows.
 
 ## Why this exists
