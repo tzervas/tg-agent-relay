@@ -140,3 +140,46 @@ def test_register_session_creates_fifo_and_json(bridge_tmp: Path) -> None:
     assert data["handle"] == "alpha"
     assert data["fifo"] == str(fifo)
     assert "@alpha" in data["prefixes"]
+
+
+def test_env_sessions_dir_is_honored(bridge_tmp: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """$RELAY_SESSIONS_DIR is the second documented source — it must work alone.
+
+    No cfg["sessions"]["dir"], no _bridge_dir: only the environment.
+    """
+    sys.path.insert(0, str(REPO))
+    from tg_agent_relay import routing
+
+    sessions_d = bridge_tmp / "env-sessions.d"
+    _write_session(sessions_d, "envhandle", bridge_tmp / "envhandle.fifo")
+    monkeypatch.setenv("RELAY_SESSIONS_DIR", str(sessions_d))
+
+    assert routing.strip_prefix({}, "@envhandle go") == ("envhandle", "", "go")
+
+
+def test_no_sessions_source_does_not_read_home_registry(
+    bridge_tmp: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cfg that says nothing about sessions must not inherit $HOME's registry.
+
+    sessions_dir_from_cfg() falls all the way through to
+    ~/.claude/telegram-bridge/.sessions.d when nothing else is set. That default
+    is right for the relay process itself, which IS that bridge — but routing
+    resolves configs that are not the live bridge (a CI checkout, another
+    relay.toml, `python lib/routing.py resolve` in a scratch dir). Those must see
+    static [backends.*] only, never whatever handles happen to be registered on
+    the host.
+    """
+    sys.path.insert(0, str(REPO))
+    from tg_agent_relay import routing
+
+    fake_home = bridge_tmp / "home"
+    home_sessions = fake_home / ".claude" / "telegram-bridge" / ".sessions.d"
+    _write_session(home_sessions, "hostonly", fake_home / "hostonly.fifo")
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.delenv("RELAY_SESSIONS_DIR", raising=False)
+
+    cfg = {"backends": {"claude": {"tag": "claude", "prefixes": ["@claude"]}}}
+    assert routing.strip_prefix(cfg, "@hostonly go") is None
+    assert routing.strip_prefix(cfg, "@claude go") == ("claude", "", "go")
