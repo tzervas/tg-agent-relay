@@ -4,7 +4,7 @@
 # docs/STANDARDS_GATE.md. Read that before changing anything here.
 #
 # This file is deliberately thin. All policy lives in
-# tzervas/mycelium-workflows/.github/workflows/reusable-standards.yml; the only things that
+# tzervas/ap-workflows/.github/workflows/reusable-policy-contract.yml; the only things that
 # belong here are this repo's own overrides.
 #
 # WHAT IT REPORTS: one status context, `standards / standards`.
@@ -41,7 +41,7 @@ permissions:
 jobs:
   # Job id `standards` -> context `standards / standards`. Renaming this renames the context.
   standards:
-    uses: tzervas/mycelium-workflows/.github/workflows/reusable-standards.yml@main
+    uses: tzervas/ap-workflows/.github/workflows/reusable-policy-contract.yml@v0.1
     # All inputs are optional. Uncomment only what this repo genuinely differs on — an
     # override that restates the default is a second source of truth that will drift.
     #

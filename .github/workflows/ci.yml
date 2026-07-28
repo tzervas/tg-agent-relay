@@ -1,7 +1,8 @@
-# Centralized CI — calls tzervas/mycelium-workflows.
+# Centralized CI — calls tzervas/ap-workflows.
 #
-# PIN: @v1 is a moving major tag. Minor/patch policy changes arrive automatically;
-# a breaking change lands on v2 and this file must opt in.
+# PIN: @v0.1 is the fleet moving minor tag (see ap-workflows tag discipline).
+# Patch/policy fixes on v0.1.* arrive automatically; a breaking change lands on
+# v0.2 and this file must opt in.
 #
 # ON THE PREVIOUS HEADER ("DISABLED for automatic runs — remote Actions off"):
 # that posture is already not in effect. fleet-ci.yml and fleet-security.yml in
@@ -48,7 +49,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: tzervas/mycelium-workflows/.github/workflows/reusable-python-ci.yml@v1
+    uses: tzervas/ap-workflows/.github/workflows/reusable-ci-python.yml@v0.1
     with:
       # Unchanged from the previous gate.
       python-version: '3.14'
