@@ -70,6 +70,10 @@ jobs:
           fi
 
   trivy-fs:
+    # Required security gate: real vuln+secret+license scan. Prefer trivy from
+    # runner-base (GHA_IMAGE); until hosts seed that image, install a pinned
+    # checksum-verified release tarball into $RUNNER_TEMP (no sudo — rootless
+    # podman sets no_new_privs). Hard-fail only if still missing after ensure.
     name: trivy filesystem (vuln+secret+license)
     runs-on: [self-hosted, linux, x64, podman]
     timeout-minutes: 30
@@ -77,13 +81,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Ensure trivy (pinned + checksum)
+        run: |
+          set -euo pipefail
+          # Pin aligns with ap-workflows runner-base / security-validate.yml.
+          TRIVY_VERSION="0.72.0"
+          TRIVY_SHA256="bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+          if command -v trivy >/dev/null 2>&1; then
+            echo "using preinstalled $(command -v trivy) ($(trivy --version 2>/dev/null | head -1 || true))"
+            exit 0
+          fi
+          # NO sudo. Rootless podman + no_new_privs cannot apt-install.
+          # PREFERRED: bake trivy into runner-base; this block short-circuits then.
+          install_dir="${RUNNER_TEMP:-/tmp}/trivy-bin"
+          mkdir -p "$install_dir"
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+          tmp="${RUNNER_TEMP:-/tmp}/${archive}"
+          curl -fsSL "$url" -o "$tmp"
+          echo "${TRIVY_SHA256}  ${tmp}" | sha256sum -c -
+          tar -xzf "$tmp" -C "$install_dir" trivy
+          chmod 0755 "$install_dir/trivy"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/trivy" --version
+
       - name: Trivy fs
         run: |
           set -euo pipefail
-          if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing on runner — advisory skip (install trivy on the runner image for a hard gate)"
-            exit 0
-          fi
+          command -v trivy >/dev/null 2>&1 || {
+            echo "trivy missing from runner image" >&2
+            exit 1
+          }
           trivy fs --scanners vuln,secret,license \
             --severity HIGH,CRITICAL \
             --skip-dirs .git --skip-dirs target --skip-dirs node_modules --skip-dirs .venv \
