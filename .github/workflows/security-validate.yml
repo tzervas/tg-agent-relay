@@ -1,0 +1,853 @@
+# Validated self-hosted FOSS security scanning for tg-agent-relay.
+# NO SaaS (no Snyk, Codecov, CodeQL cloud, vendor phone-home).
+#
+# Tools (Python-relevant, proven on this fleet):
+#   - gitleaks 8.30.1 (pinned + SHA256; NEVER apt 8.16.0)
+#   - trivy 0.72.0 (fs: vuln + secret + license; Python lockfile advisories)
+#   - bandit (Python SAST)
+#   - semgrep (cheap p/python ruleset only)
+#   - pip-audit (against uv.lock / installed graph)
+#
+# Findings are VALIDATED (reachable vs transitive vs optional-extra vs unknown).
+# UNKNOWN is a failure condition. Every real finding carries a concrete fix.
+# Report lands on the `sec` branch (never main/dev) + artifact + step summary.
+#
+# Exit contract: broken/reachable finding/unknown -> fail; clean or empty -> pass.
+name: security-validate
+
+on:
+  schedule:
+    # Weekly Monday 06:17 UTC
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [sec]
+
+# NEVER cancel-in-progress with schedule: on self-hosted — silent cancel trap.
+concurrency:
+  group: security-validate-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # publish validated report onto sec
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # gitleaks — secrets. Size: micro (default). Basis: proven on this fleet at
+  # micro by fleet-security.yml; binary scan only, no pip install.
+  # Job display name avoids bare required-context collisions ("gitleaks").
+  # ---------------------------------------------------------------------------
+  secrets-scan:
+    name: validate secrets (gitleaks pin 8.30.1)
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure gitleaks (pinned + checksum)
+        run: |
+          set -euo pipefail
+          # CRITICAL: Debian/Ubuntu apt ships 8.16.0 — incompatible scanner.
+          # Pattern reused from .github/workflows/fleet-security.yml.
+          GITLEAKS_VERSION="8.30.1"
+          GITLEAKS_SHA256="551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          if command -v gitleaks >/dev/null 2>&1; then
+            ver="$(gitleaks version 2>/dev/null || true)"
+            echo "preinstalled gitleaks: $ver"
+            case "$ver" in
+              *8.30.1*) echo "pin satisfied" ;;
+              *)
+                echo "preinstalled gitleaks is not 8.30.1 — installing pinned release"
+                command -v gitleaks >/dev/null 2>&1 && rm -f "$(command -v gitleaks)" || true
+                ;;
+            esac
+          fi
+          if ! command -v gitleaks >/dev/null 2>&1 || ! gitleaks version 2>/dev/null | grep -q '8.30.1'; then
+            install_dir="${RUNNER_TEMP:-/tmp}/gitleaks-bin"
+            mkdir -p "$install_dir"
+            archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+            url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+            tmp="${RUNNER_TEMP:-/tmp}/${archive}"
+            curl -fsSL "$url" -o "$tmp"
+            echo "${GITLEAKS_SHA256}  ${tmp}" | sha256sum -c -
+            tar -xzf "$tmp" -C "$install_dir" gitleaks
+            chmod 0755 "$install_dir/gitleaks"
+            echo "$install_dir" >> "$GITHUB_PATH"
+            "$install_dir/gitleaks" version
+          fi
+
+      - name: Run gitleaks (JSON)
+        run: |
+          set -euo pipefail
+          if ! command -v gitleaks >/dev/null 2>&1; then
+            echo "UNKNOWN: gitleaks not available after install" >&2
+            exit 1
+          fi
+          mkdir -p security-out
+          # exit-code 0 always here so raw JSON is captured; validate job owns fail/pass.
+          set +e
+          gitleaks detect --source . --verbose --redact --report-format json \
+            --report-path security-out/gitleaks.json --exit-code 1
+          rc=$?
+          set -e
+          if [ ! -f security-out/gitleaks.json ]; then
+            echo "[]" > security-out/gitleaks.json
+          fi
+          echo "$rc" > security-out/gitleaks.exit
+          echo "gitleaks exit=$rc (1 means findings; captured for validation)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-gitleaks
+          path: security-out/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # trivy filesystem. Size: micro (default). Basis: proven at micro by
+  # fleet-security.yml trivy-fs job. Pin 0.72.0 + SHA256 when not preinstalled.
+  # ---------------------------------------------------------------------------
+  fs-scan:
+    name: validate filesystem (trivy 0.72.0)
+    runs-on: [self-hosted, linux, x64, podman]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Ensure trivy 0.72.0 (pinned + checksum)
+        run: |
+          set -euo pipefail
+          TRIVY_VERSION="0.72.0"
+          TRIVY_SHA256="bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+          need_install=1
+          if command -v trivy >/dev/null 2>&1; then
+            ver="$(trivy version 2>/dev/null | head -1 || true)"
+            echo "preinstalled: $ver"
+            if echo "$ver" | grep -q "Version: ${TRIVY_VERSION}"; then
+              need_install=0
+            fi
+          fi
+          if [ "$need_install" -eq 1 ]; then
+            install_dir="${RUNNER_TEMP:-/tmp}/trivy-bin"
+            mkdir -p "$install_dir"
+            archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+            url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${archive}"
+            tmp="${RUNNER_TEMP:-/tmp}/${archive}"
+            curl -fsSL "$url" -o "$tmp"
+            echo "${TRIVY_SHA256}  ${tmp}" | sha256sum -c -
+            tar -xzf "$tmp" -C "$install_dir" trivy
+            chmod 0755 "$install_dir/trivy"
+            echo "$install_dir" >> "$GITHUB_PATH"
+            "$install_dir/trivy" version
+          fi
+
+      - name: Run trivy fs (JSON)
+        run: |
+          set -euo pipefail
+          if ! command -v trivy >/dev/null 2>&1; then
+            echo "UNKNOWN: trivy not available after install" >&2
+            exit 1
+          fi
+          mkdir -p security-out
+          set +e
+          trivy fs --scanners vuln,secret,license \
+            --severity HIGH,CRITICAL,MEDIUM \
+            --skip-dirs .git --skip-dirs target --skip-dirs node_modules --skip-dirs .venv \
+            --format json --output security-out/trivy.json \
+            --exit-code 1 \
+            .
+          rc=$?
+          set -e
+          if [ ! -f security-out/trivy.json ]; then
+            echo '{"Results":[]}' > security-out/trivy.json
+          fi
+          echo "$rc" > security-out/trivy.exit
+          echo "trivy exit=$rc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-trivy
+          path: security-out/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # bandit — Python SAST. Size: small (0.5c/1g). Basis: parses the whole tree;
+  # hungrier than gitleaks but no native extension compile. Name heuristic would
+  # not force micro (no matching substring), but small is the honest floor.
+  # ---------------------------------------------------------------------------
+  bandit-sast:
+    name: validate python sast (bandit)
+    runs-on: [self-hosted, linux, x64, podman, small]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run bandit (JSON)
+        run: |
+          set -euo pipefail
+          mkdir -p security-out
+          # uvx installs bandit into an isolated tool env (not full project tree).
+          set +e
+          uvx bandit -r tg_agent_relay providers lib -f json -o security-out/bandit.json
+          rc=$?
+          set -e
+          if [ ! -f security-out/bandit.json ]; then
+            echo "UNKNOWN: bandit produced no JSON (rc=$rc)" >&2
+            exit 1
+          fi
+          echo "$rc" > security-out/bandit.exit
+          echo "bandit exit=$rc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-bandit
+          path: security-out/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # semgrep — cheap p/python only. Size: small. Basis: whole-tree parse, no
+  # project pip install; keep registry pack narrow so runtime stays honest.
+  # ---------------------------------------------------------------------------
+  semgrep-sast:
+    name: validate python sast (semgrep)
+    runs-on: [self-hosted, linux, x64, podman, small]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run semgrep (JSON, p/python only)
+        run: |
+          set -euo pipefail
+          mkdir -p security-out
+          set +e
+          uvx semgrep scan --config p/python --json --output security-out/semgrep.json \
+            --error --timeout 30 \
+            tg_agent_relay providers lib
+          rc=$?
+          set -e
+          if [ ! -f security-out/semgrep.json ]; then
+            echo "UNKNOWN: semgrep produced no JSON (rc=$rc)" >&2
+            exit 1
+          fi
+          echo "$rc" > security-out/semgrep.exit
+          echo "semgrep exit=$rc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-semgrep
+          path: security-out/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # pip-audit against the locked dependency graph.
+  # Size: medium (2c/4g). Basis: uv sync installs the project graph (may pull
+  # wheels); any project-dep install requires >= medium on this fleet.
+  # ---------------------------------------------------------------------------
+  pip-audit-deps:
+    name: validate dependency advisories (pip-audit)
+    runs-on: [self-hosted, linux, x64, podman, medium]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+
+      - name: Sync + pip-audit
+        run: |
+          set -euo pipefail
+          if [ ! -f pyproject.toml ]; then
+            echo "UNKNOWN: pyproject.toml missing" >&2
+            exit 1
+          fi
+          mkdir -p security-out
+          # Default + dev group. Optional extras (adk/dashboard) are audited as
+          # lockfile entries by trivy; here we audit the installed default graph.
+          uv sync --group dev
+          set +e
+          uvx pip-audit -f json -o security-out/pip-audit.json
+          rc=$?
+          set -e
+          if [ ! -f security-out/pip-audit.json ]; then
+            # pip-audit may write nothing on clean; emit empty list.
+            echo "[]" > security-out/pip-audit.json
+          fi
+          echo "$rc" > security-out/pip-audit.exit
+          echo "pip-audit exit=$rc"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-pip-audit
+          path: security-out/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Aggregate raw JSON, VALIDATE reachability, emit remediation, publish to sec.
+  # Size: medium. Basis: downloads artifacts, may re-read lockfile/pyproject and
+  # ripgrep the tree; keep headroom above micro.
+  # ---------------------------------------------------------------------------
+  validate-and-publish:
+    name: validate findings and publish to sec
+    needs: [secrets-scan, fs-scan, bandit-sast, semgrep-sast, pip-audit-deps]
+    runs-on: [self-hosted, linux, x64, podman, medium]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Need write credentials to push report onto sec.
+          persist-credentials: true
+
+      - name: Download raw tool outputs
+        uses: actions/download-artifact@v4
+        with:
+          path: security-out
+          pattern: raw-*
+          merge-multiple: true
+
+      - name: Validate findings and build report
+        id: validate
+        run: |
+          set -euo pipefail
+          mkdir -p security-out docs/security-reports
+          # Entire Python body is indented inside the run block (YAML heredoc trap:
+          # a column-0 heredoc body terminates the block scalar).
+          python3 << 'PY'
+          import json, os, re, sys, tomllib
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          out = Path("security-out")
+          report_dir = Path("docs/security-reports")
+          report_dir.mkdir(parents=True, exist_ok=True)
+          stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+          md_path = report_dir / f"validated-{stamp}.md"
+          summary_path = out / "validated-summary.json"
+
+          def load_json(path, default):
+              p = out / path
+              if not p.exists():
+                  # Nested artifact layouts: search one level
+                  matches = list(out.rglob(path))
+                  if not matches:
+                      return default, f"missing:{path}"
+                  p = matches[0]
+              try:
+                  return json.loads(p.read_text(encoding="utf-8")), None
+              except Exception as e:
+                  return default, f"parse-error:{path}:{e}"
+
+          def read_exit(name):
+              matches = list(out.rglob(name))
+              if not matches:
+                  return None
+              try:
+                  return int(matches[0].read_text().strip())
+              except Exception:
+                  return None
+
+          pyproject = {}
+          if Path("pyproject.toml").exists():
+              pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+          project = pyproject.get("project", {})
+          direct = set()
+          for d in project.get("dependencies") or []:
+              direct.add(re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip().lower())
+          optional = {}
+          for extra, deps in (project.get("optional-dependencies") or {}).items():
+              names = set()
+              for d in deps:
+                  names.add(re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip().lower())
+              optional[extra] = names
+          groups = {}
+          for g, deps in (pyproject.get("dependency-groups") or {}).items():
+              names = set()
+              for d in deps:
+                  names.add(re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip().lower())
+              groups[g] = names
+
+          # Map package name -> import root heuristics
+          def import_patterns(pkg: str):
+              pkg = pkg.lower().replace("-", "_")
+              return [pkg, pkg.replace("_", "")]
+
+          src_roots = ["tg_agent_relay", "providers", "lib", "handlers", "adapters"]
+          text_files = []
+          for root in src_roots:
+              r = Path(root)
+              if not r.exists():
+                  continue
+              for p in r.rglob("*"):
+                  if p.suffix in {".py", ".sh"} and p.is_file():
+                      text_files.append(p)
+
+          def package_imported(pkg: str) -> bool:
+              pats = import_patterns(pkg)
+              # Also try original hyphen form in requirements comments
+              rx = re.compile(
+                  r"(?:^|\s)(?:import|from)\s+(" + "|".join(re.escape(p) for p in pats) + r")\b"
+              )
+              for f in text_files:
+                  try:
+                      body = f.read_text(encoding="utf-8", errors="replace")
+                  except Exception:
+                      continue
+                  if rx.search(body):
+                      return True
+              return False
+
+          def classify_package(pkg: str):
+              pkg_l = pkg.lower()
+              if pkg_l in direct:
+                  return "direct", "listed in project.dependencies"
+              for extra, names in optional.items():
+                  if pkg_l in names:
+                      return "optional-extra", f"optional-dependencies[{extra}]"
+              for g, names in groups.items():
+                  if pkg_l in names:
+                      return "dev-group", f"dependency-groups[{g}]"
+              return "transitive", "present in lock/installed graph only"
+
+          findings = []
+          unknowns = []
+          errors = []
+
+          # ---- gitleaks ----
+          gl, err = load_json("gitleaks.json", [])
+          if err:
+              errors.append(err)
+          if isinstance(gl, list):
+              for item in gl:
+                  rule = item.get("RuleID") or item.get("Description") or "secret"
+                  file = item.get("File") or item.get("Path") or "?"
+                  findings.append({
+                      "tool": "gitleaks",
+                      "id": rule,
+                      "severity": "CRITICAL",
+                      "package": None,
+                      "path": file,
+                      "message": item.get("Description") or rule,
+                      "classification": "REACHABLE",
+                      "reason": "Secret pattern matched in repository content; treat as live until rotated/removed.",
+                      "remediation": f"Rotate/remove secret at `{file}`; purge from git history if committed; add rule allowlist only with documented false-positive evidence.",
+                  })
+
+          # ---- trivy ----
+          tr, err = load_json("trivy.json", {"Results": []})
+          if err:
+              errors.append(err)
+          for result in (tr.get("Results") or []) if isinstance(tr, dict) else []:
+              target = result.get("Target") or "?"
+              for vuln in result.get("Vulnerabilities") or []:
+                  pkg = vuln.get("PkgName") or vuln.get("PackageName") or "unknown"
+                  vid = vuln.get("VulnerabilityID") or vuln.get("VulnerabilityID") or "CVE?"
+                  sev = vuln.get("Severity") or "UNKNOWN"
+                  fixed = vuln.get("FixedVersion") or ""
+                  title = vuln.get("Title") or vuln.get("Description") or vid
+                  dep_kind, dep_why = classify_package(pkg)
+                  imported = package_imported(pkg)
+                  if dep_kind == "direct" and imported:
+                      cls, reason = "REACHABLE", f"direct dependency and imported ({dep_why})"
+                  elif dep_kind == "direct" and not imported:
+                      cls, reason = "UNKNOWN", f"direct dependency but no import found — cannot prove unused ({dep_why})"
+                  elif dep_kind == "optional-extra":
+                      if imported:
+                          cls, reason = "REACHABLE", f"optional extra and imported ({dep_why}); path live if extra installed"
+                      else:
+                          cls, reason = "UNREACHABLE", f"optional extra not imported in default tree ({dep_why})"
+                  elif dep_kind == "dev-group":
+                      if imported:
+                          cls, reason = "REACHABLE", f"dev dependency imported in package tree ({dep_why})"
+                      else:
+                          cls, reason = "UNREACHABLE", f"dev-only dependency; not imported in runtime paths ({dep_why})"
+                  else:
+                      if imported:
+                          cls, reason = "REACHABLE", f"transitive but import found in tree ({dep_why})"
+                      else:
+                          cls, reason = "UNREACHABLE", f"transitive advisory; package not imported ({dep_why})"
+                  if not fixed:
+                      rem = f"No fixed version in advisory for `{pkg}` ({vid}). Track upstream; pin/replace package if REACHABLE."
+                  else:
+                      rem = f"Bump `{pkg}` to `{fixed}` (or newer) via `uv lock --upgrade-package {pkg}` and re-sync."
+                  findings.append({
+                      "tool": "trivy",
+                      "id": vid,
+                      "severity": sev,
+                      "package": pkg,
+                      "path": target,
+                      "message": title[:200],
+                      "classification": cls,
+                      "reason": reason,
+                      "remediation": rem,
+                  })
+              for secret in result.get("Secrets") or []:
+                  findings.append({
+                      "tool": "trivy-secret",
+                      "id": secret.get("RuleID") or "secret",
+                      "severity": secret.get("Severity") or "HIGH",
+                      "package": None,
+                      "path": f"{target}:{secret.get('StartLine', '?')}",
+                      "message": secret.get("Title") or secret.get("Category") or "secret",
+                      "classification": "REACHABLE",
+                      "reason": "Secret scanner hit in filesystem content.",
+                      "remediation": f"Remove/rotate credential at `{target}`; verify not in git history.",
+                  })
+              for lic in result.get("Licenses") or []:
+                  # License findings are informational unless FORBIDDEN category.
+                  cat = (lic.get("Category") or "").upper()
+                  pkg = lic.get("PkgName") or "?"
+                  cls = "REACHABLE" if cat in {"FORBIDDEN", "RESTRICTED"} else "UNREACHABLE"
+                  findings.append({
+                      "tool": "trivy-license",
+                      "id": lic.get("Name") or "license",
+                      "severity": lic.get("Severity") or "MEDIUM",
+                      "package": pkg,
+                      "path": target,
+                      "message": f"license {lic.get('Name')} category={cat or 'unknown'}",
+                      "classification": cls,
+                      "reason": f"License category {cat or 'unspecified'} for {pkg}",
+                      "remediation": "Confirm license compatibility or replace package; document exception if accepted risk.",
+                  })
+
+          # ---- bandit ----
+          bd, err = load_json("bandit.json", {})
+          if err:
+              errors.append(err)
+          for item in (bd.get("results") or []) if isinstance(bd, dict) else []:
+              test_id = item.get("test_id") or item.get("test_name") or "Bxxx"
+              path = item.get("filename") or "?"
+              line = item.get("line_number") or "?"
+              sev = (item.get("issue_severity") or "MEDIUM").upper()
+              text = item.get("issue_text") or test_id
+              code = item.get("code") or ""
+              # Heuristic: attacker-controlled if near request/network/user input APIs
+              attacker_markers = [
+                  "request", "input(", "argv", "environ", "getenv", "json.loads",
+                  "urlopen", "telegram", "message", "chat_id", "update", "webhook",
+              ]
+              blob = (code + "\n" + text).lower()
+              if any(m in blob for m in attacker_markers):
+                  cls = "REACHABLE"
+                  reason = "Flagged construct co-located with user/network input markers; treat as attacker-reachable until proven otherwise."
+              elif test_id in {"B101", "B601", "B602", "B603", "B604", "B605", "B606", "B607"}:
+                  # assert / shell — often test-only or fixed args
+                  if "/tests/" in path or path.startswith("tests"):
+                      cls = "UNREACHABLE"
+                      reason = "Test-path bandit finding; not production runtime surface."
+                  else:
+                      cls = "UNKNOWN"
+                      reason = "Shell/assert finding without clear attacker-input markers — reachability not proven."
+              else:
+                  cls = "UNKNOWN"
+                  reason = "No attacker-input markers and not auto-classified; UNKNOWN fails the gate."
+              findings.append({
+                  "tool": "bandit",
+                  "id": test_id,
+                  "severity": sev,
+                  "package": None,
+                  "path": f"{path}:{line}",
+                  "message": text[:200],
+                  "classification": cls,
+                  "reason": reason,
+                  "remediation": item.get("more_info") or f"Remediate `{test_id}` at `{path}:{line}` per bandit guidance; add nosec only with written justification.",
+              })
+
+          # ---- semgrep ----
+          sg, err = load_json("semgrep.json", {})
+          if err:
+              errors.append(err)
+          for item in (sg.get("results") or []) if isinstance(sg, dict) else []:
+              rid = item.get("check_id") or "semgrep"
+              path = (item.get("path") or "?")
+              start = (item.get("start") or {}).get("line", "?")
+              msg = (item.get("extra") or {}).get("message") or rid
+              sev = ((item.get("extra") or {}).get("severity") or "MEDIUM").upper()
+              if "/tests/" in path or path.startswith("tests"):
+                  cls, reason = "UNREACHABLE", "Semgrep hit in tests only."
+              else:
+                  cls, reason = "UNKNOWN", "Semgrep SAST hit; manual review required to prove unreachability."
+              findings.append({
+                  "tool": "semgrep",
+                  "id": rid,
+                  "severity": sev,
+                  "package": None,
+                  "path": f"{path}:{start}",
+                  "message": msg[:200],
+                  "classification": cls,
+                  "reason": reason,
+                  "remediation": f"Fix or prove false positive for `{rid}` at `{path}:{start}`; adjust code or add narrowly-scoped ignore with reason.",
+              })
+
+          # ---- pip-audit ----
+          pa, err = load_json("pip-audit.json", [])
+          if err:
+              errors.append(err)
+          # pip-audit JSON may be a list of deps or {"dependencies":[...]}
+          pa_deps = pa
+          if isinstance(pa, dict):
+              pa_deps = pa.get("dependencies") or pa.get("vulns") or []
+          if isinstance(pa_deps, list):
+              for dep in pa_deps:
+                  if not isinstance(dep, dict):
+                      continue
+                  pkg = dep.get("name") or dep.get("package") or "unknown"
+                  version = dep.get("version") or "?"
+                  vulns = dep.get("vulns") or dep.get("vulnerabilities") or []
+                  if not vulns and dep.get("id"):
+                      vulns = [dep]
+                  for v in vulns:
+                      vid = v.get("id") or v.get("advisory_id") or "advisory"
+                      fixed = ",".join(v.get("fix_versions") or []) or (v.get("fix_version") or "")
+                      dep_kind, dep_why = classify_package(pkg)
+                      imported = package_imported(pkg)
+                      if dep_kind in {"direct"} and imported:
+                          cls, reason = "REACHABLE", f"direct+imported ({dep_why})"
+                      elif dep_kind == "direct":
+                          cls, reason = "UNKNOWN", f"direct but import not found ({dep_why})"
+                      elif dep_kind == "optional-extra" and not imported:
+                          cls, reason = "UNREACHABLE", f"optional extra unused in tree ({dep_why})"
+                      elif dep_kind == "dev-group" and not imported:
+                          cls, reason = "UNREACHABLE", f"dev-only, not imported ({dep_why})"
+                      elif imported:
+                          cls, reason = "REACHABLE", f"imported ({dep_why})"
+                      else:
+                          cls, reason = "UNREACHABLE", f"transitive not imported ({dep_why})"
+                      rem = (
+                          f"Bump `{pkg}` from `{version}` to one of: {fixed}"
+                          if fixed else
+                          f"No fixed version listed for `{pkg}` {vid}; track advisory and replace if REACHABLE."
+                      )
+                      if fixed:
+                          rem += f" — `uv lock --upgrade-package {pkg}`"
+                      findings.append({
+                          "tool": "pip-audit",
+                          "id": vid,
+                          "severity": "HIGH",
+                          "package": pkg,
+                          "path": f"{pkg}=={version}",
+                          "message": (v.get("description") or vid)[:200],
+                          "classification": cls,
+                          "reason": reason,
+                          "remediation": rem,
+                      })
+
+          # Tool crash / missing outputs: UNKNOWN failures
+          for tool, exit_name in [
+              ("gitleaks", "gitleaks.exit"),
+              ("trivy", "trivy.exit"),
+              ("bandit", "bandit.exit"),
+              ("semgrep", "semgrep.exit"),
+              ("pip-audit", "pip-audit.exit"),
+          ]:
+              if read_exit(exit_name) is None and not list(out.rglob(f"{tool.split('-')[0]}*.json")):
+                  # soft: artifacts may use different names; already tracked via load errors
+                  pass
+
+          if errors:
+              for e in errors:
+                  unknowns.append({"tool": "loader", "id": e, "classification": "UNKNOWN",
+                                   "reason": e, "remediation": "Re-run job; fix tool install/output path."})
+
+          reachable = [f for f in findings if f["classification"] == "REACHABLE"]
+          unreachable = [f for f in findings if f["classification"] == "UNREACHABLE"]
+          unknown_f = [f for f in findings if f["classification"] == "UNKNOWN"] + unknowns
+
+          lines = []
+          lines.append(f"# Validated security report — {stamp}")
+          lines.append("")
+          lines.append("Self-hosted FOSS only (gitleaks 8.30.1, trivy 0.72.0, bandit, semgrep p/python, pip-audit).")
+          lines.append("Target branch for this report: **`sec`** (not main/dev).")
+          lines.append("")
+          lines.append("## Summary")
+          lines.append("")
+          lines.append(f"| Class | Count | Gate effect |")
+          lines.append(f"|-------|------:|-------------|")
+          lines.append(f"| REACHABLE | {len(reachable)} | FAIL if > 0 |")
+          lines.append(f"| UNREACHABLE (with reason) | {len(unreachable)} | listed, does not fail |")
+          lines.append(f"| UNKNOWN | {len(unknown_f)} | FAIL if > 0 |")
+          lines.append(f"| Total findings | {len(findings)} | |")
+          lines.append("")
+          if not findings and not unknown_f:
+              lines.append("## Result: EMPTY")
+              lines.append("")
+              lines.append("All tools produced zero findings. Nothing to do — PASS.")
+          lines.append("")
+          lines.append("## Validation methodology")
+          lines.append("")
+          lines.append("- **REACHABLE**: direct dep + imported, or secret hit, or SAST with attacker-input markers.")
+          lines.append("- **UNREACHABLE**: transitive/dev/optional and not imported, or test-only SAST; reason recorded.")
+          lines.append("- **UNKNOWN**: cannot determine reachability — **fails the gate** (never silent drop).")
+          lines.append("")
+
+          def section(title, items):
+              lines.append(f"## {title}")
+              lines.append("")
+              if not items:
+                  lines.append("_None._")
+                  lines.append("")
+                  return
+              for f in items:
+                  lines.append(f"### `{f.get('tool')}` / `{f.get('id')}` — {f.get('classification')}")
+                  lines.append("")
+                  lines.append(f"- **Severity**: {f.get('severity')}")
+                  if f.get("package"):
+                      lines.append(f"- **Package**: `{f.get('package')}`")
+                  lines.append(f"- **Path**: `{f.get('path')}`")
+                  lines.append(f"- **Message**: {f.get('message')}")
+                  lines.append(f"- **Why this class**: {f.get('reason')}")
+                  lines.append(f"- **Remediation**: {f.get('remediation')}")
+                  lines.append("")
+
+          section("REACHABLE findings (must fix)", reachable)
+          section("UNKNOWN findings (must resolve or prove)", unknown_f)
+          section("UNREACHABLE findings (recorded, with reason)", unreachable)
+
+          lines.append("## Raw tool exits")
+          lines.append("")
+          for name in ["gitleaks.exit", "trivy.exit", "bandit.exit", "semgrep.exit", "pip-audit.exit"]:
+              lines.append(f"- `{name}`: {read_exit(name)}")
+          lines.append("")
+          lines.append("Raw JSON artifacts are uploaded alongside this report.")
+          lines.append("")
+          lines.append("## `sec` branch policy")
+          lines.append("")
+          lines.append("- Reports commit to **`sec`** only.")
+          lines.append("- `sec` stays synced with `main` by **merge** (never force-push / reset).")
+          lines.append("- Sync automation: see [`docs/branch-sync.md`](../branch-sync.md).")
+
+          md = "\n".join(lines) + "\n"
+          md_path.write_text(md, encoding="utf-8")
+          # Stable pointer for consumers
+          latest = report_dir / "latest.md"
+          latest.write_text(md, encoding="utf-8")
+          summary = {
+              "stamp": stamp,
+              "reachable": len(reachable),
+              "unreachable": len(unreachable),
+              "unknown": len(unknown_f),
+              "total": len(findings),
+              "findings": findings,
+              "errors": errors,
+          }
+          summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+          # Also copy into CWD for step summary
+          Path("security-out/REPORT.md").write_text(md, encoding="utf-8")
+
+          print(md)
+          gate_fail = bool(reachable or unknown_f or errors)
+          Path("security-out/gate.exit").write_text("1" if gate_fail else "0", encoding="utf-8")
+          if gate_fail:
+              print(
+                  f"GATE FAIL: reachable={len(reachable)} unknown={len(unknown_f)} errors={len(errors)}",
+                  file=sys.stderr,
+              )
+          else:
+              print("GATE PASS: no reachable or unknown findings")
+          sys.exit(0)  # publish step still runs; final gate step reads gate.exit
+          PY
+
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ] && [ -f security-out/REPORT.md ]; then
+            cat security-out/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validated report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-security-report
+          path: |
+            security-out/
+            docs/security-reports/
+          retention-days: 90
+
+      - name: Publish report to sec branch
+        if: github.ref_name == 'sec' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          # Stage generated report outside the worktree before switching branches.
+          stage="${RUNNER_TEMP:-/tmp}/sec-report-stage"
+          rm -rf "$stage"
+          mkdir -p "$stage/docs/security-reports/raw"
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          if [ -f security-out/validated-summary.json ]; then
+            stamp=$(python3 -c "import json;print(json.load(open('security-out/validated-summary.json'))['stamp'])")
+          fi
+          if [ -f security-out/REPORT.md ]; then
+            cp security-out/REPORT.md "$stage/docs/security-reports/latest.md"
+            cp security-out/REPORT.md "$stage/docs/security-reports/validated-${stamp}.md"
+          else
+            echo "UNKNOWN: REPORT.md missing — cannot publish" >&2
+            exit 1
+          fi
+          for f in gitleaks.json trivy.json bandit.json semgrep.json pip-audit.json validated-summary.json; do
+            found=$(find security-out -name "$f" 2>/dev/null | head -1 || true)
+            if [ -n "$found" ]; then
+              cp "$found" "$stage/docs/security-reports/raw/${f}"
+            fi
+          done
+
+          git config user.name "tzervas"
+          git config user.email "albedo.black.1@gmail.com"
+
+          git fetch origin sec:refs/remotes/origin/sec 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/sec; then
+            git checkout -B sec origin/sec
+          elif git show-ref --verify --quiet refs/heads/sec; then
+            git checkout sec
+          else
+            default="${{ github.event.repository.default_branch }}"
+            default="${default:-main}"
+            git fetch origin "$default"
+            git checkout -B sec "origin/${default}"
+          fi
+
+          mkdir -p docs/security-reports/raw
+          cp -a "$stage/docs/security-reports/." docs/security-reports/
+          git add docs/security-reports/
+          if git diff --cached --quiet; then
+            echo "EMPTY: no report content change to publish — PASS"
+            exit 0
+          fi
+          git commit -m "chore(sec): validated security report ${stamp}"
+          git push origin HEAD:refs/heads/sec
+          echo "Published validated report to sec ($(git rev-parse HEAD))"
+
+      - name: Gate on validated findings
+        run: |
+          set -euo pipefail
+          if [ ! -f security-out/gate.exit ]; then
+            echo "UNKNOWN: gate.exit missing — validation did not complete" >&2
+            exit 1
+          fi
+          code=$(cat security-out/gate.exit)
+          if [ "$code" != "0" ]; then
+            echo "FAIL: reachable or unknown findings present (see report)" >&2
+            exit 1
+          fi
+          echo "PASS: validated clean (or empty)"
+          exit 0

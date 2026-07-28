@@ -165,6 +165,12 @@ adapter): see [`SETUP.md`](SETUP.md).
 `scripts/deploy-local.sh [--ref vX.Y.Z]` updates `~/.claude/telegram-bridge`
 without touching `.env` / `relay.toml` / runtime state.
 
+**Branch sync (`main` → `dev`/`sec`):** [`docs/branch-sync.md`](docs/branch-sync.md) —
+non-destructive automation that keeps the lower branches from drifting behind
+`main`. It opens a sync PR; it never force-pushes, resets or rebases a protected
+branch.  
+**Maintenance & security workflows:** [`docs/maintenance-and-security.md`](docs/maintenance-and-security.md).
+
 ## In use
 
 ### (a) Wiring to Claude Code
