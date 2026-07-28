@@ -146,7 +146,9 @@ declare -A BACKEND_FIFO=()
 declare -A BACKEND_DELIVERY=()
 
 if [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
-    while IFS=$'\t' read -r bid fifo delivery; do
+    # ASCII US (\x1f), not tab: bash IFS-whitespace collapses empty TSV fields
+    # so `bid\t\tcmd` becomes fifo=cmd delivery="" (false-positive fifo path).
+    while IFS=$'\x1f' read -r bid fifo delivery; do
         [[ -n "$bid" ]] || continue
         delivery="${delivery:-fifo}"
         BACKEND_IDS+=("$bid")
@@ -155,7 +157,7 @@ if [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
     done < <(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '
         (.backends // {}) | to_entries[]
         | [.key, (.value.fifo // ""), (.value.delivery // "fifo")]
-        | @tsv')
+        | join("\u001f")')
 fi
 
 # Ensure fleet + cabal appear even if not in config (Monitor command section).
