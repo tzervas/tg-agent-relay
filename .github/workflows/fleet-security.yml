@@ -14,7 +14,12 @@ on:
 
 concurrency:
   group: fleet-security-${{ github.ref }}
-  cancel-in-progress: true
+  # A scheduled self-hosted run must never be cancel-in-progress. A queued
+  # schedule gets cancelled by the next event on the same ref and reports
+  # "cancelled" — which is neither pass nor fail, so the gate silently never
+  # runs and nothing goes red to say so. Same class of decorative gate as the
+  # `continue-on-error` this PR removes below, arriving by a different route.
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -67,7 +72,6 @@ jobs:
   trivy-fs:
     name: trivy filesystem (vuln+secret+license)
     runs-on: [self-hosted, linux, x64, podman]
-    continue-on-error: true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v trivy >/dev/null 2>&1; then
-            echo "trivy missing on runner — advisory skip (continue-on-error; install trivy on image for hard gate)"
+            echo "trivy missing on runner — advisory skip (install trivy on the runner image for a hard gate)"
             exit 0
           fi
           trivy fs --scanners vuln,secret,license \
