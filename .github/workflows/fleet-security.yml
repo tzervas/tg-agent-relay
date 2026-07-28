@@ -14,10 +14,7 @@ on:
 
 concurrency:
   group: fleet-security-${{ github.ref }}
-  # Scheduled self-hosted runs must never use cancel-in-progress: a queued
-  # schedule is cancelled by the next cron tick and reports "cancelled" (not
-  # failed), so the gate silently never runs. Default false; leave explicit.
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
