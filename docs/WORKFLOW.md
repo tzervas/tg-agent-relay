@@ -27,6 +27,16 @@ Related: [EPICS.md](EPICS.md) · [DECISIONS.md](DECISIONS.md) · [GROK_HOOKS.md]
 2. Feature PR base is **`dev`**. Do not open new long-lived `fix/tts-…` integration branches.
 3. **`main` only changes through a GitHub PR** (typically `dev` → `main`). No “merge locally and push main” as the normal path.
 4. After `main` moves, open a small PR or merge-back so **`dev` includes `main`** (keep `dev` ahead or equal, never behind forever).
+5. **Merge mode is not a preference.** `feat/*` → `dev` is a **squash** (one change-scoped
+   commit, readable `dev`, changelog from intent). `dev` → `main` is a **merge commit, never a
+   squash** — squashing the promote rewrites it into a new commit with no ancestry link, leaving
+   `main` and `dev` with identical trees and disjoint histories, no merge base, and every later
+   branch conflicting with every other. `main` → `dev` back-merges are merges too: never a reset,
+   never a force-push.
+
+Rules 1–5 are checked mechanically by `.github/workflows/standards.yml`, which reports the
+`standards / standards` status context. See **[STANDARDS_GATE.md](./STANDARDS_GATE.md)** for what
+it enforces, what it found on this repo, and why it is not in a ruleset yet.
 
 ```bash
 git fetch origin
