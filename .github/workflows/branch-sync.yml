@@ -1,0 +1,222 @@
+# Branch reconciliation: non-destructive back-merge of main into dev/sec.
+# Why: promote PRs that squash-merge into main orphan ancestry on lowers; the
+# repo contract requires a merge-back so unique commits on lowers are never lost.
+# See docs/branch-sync.md.
+name: branch-sync
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # Safety net if a push-triggered run was missed (runner unavailable, etc.).
+  schedule:
+    - cron: "17 6 * * *"
+
+# Scheduled + self-hosted: do NOT set cancel-in-progress. A queued schedule run
+# cancelled by the next tick reports `cancelled` (not failed) and never alerts.
+concurrency:
+  group: branch-sync-${{ github.workflow }}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-downstream:
+    name: sync main into downstream
+    # Git plumbing + gh API only — no compile, no package install.
+    # Explicit tier label `small` (0.5 cpu / 1 GiB) wins over job-name sizing in
+    # gha-runner-ctl; without it a name containing "sync" is fine, but we pin
+    # small so full-history checkout + git + gh stay under a known cap.
+    # Basis: no cargo/uv; measured fleet micro is 512 MiB and is reserved for
+    # tiny scanners — small is the lightest tier with headroom for fetch-depth 0.
+    runs-on: [self-hosted, linux, x64, podman, small]
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [dev, sec]
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          # Real merges need the full graph; a shallow clone cannot merge reliably.
+          fetch-depth: 0
+          # Keep the checkout-provided token on origin so `git push` of sync
+          # branches works without rewriting the remote URL. Required with
+          # permissions.contents: write for push + branch create.
+          persist-credentials: true
+
+      - name: Reconcile main into ${{ matrix.branch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOWNSTREAM: ${{ matrix.branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          die() {
+            echo "::error::$*" >&2
+            exit 1
+          }
+
+          echo "=== branch-sync: bring '${DOWNSTREAM}' up to date with main (merge only) ==="
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin --prune
+
+          if ! git rev-parse --verify "origin/main" >/dev/null 2>&1; then
+            die "cannot tell: origin/main missing after fetch (auth or ref error)"
+          fi
+
+          MAIN_SHA="$(git rev-parse origin/main)"
+          MAIN_SHORT="$(git rev-parse --short origin/main)"
+          echo "origin/main = ${MAIN_SHA}"
+
+          # --- Branch missing: create from main (work done -> PASS) ---
+          if ! git rev-parse --verify "origin/${DOWNSTREAM}" >/dev/null 2>&1; then
+            echo "Branch '${DOWNSTREAM}' does not exist on origin — creating from origin/main."
+            if ! git push origin "refs/remotes/origin/main:refs/heads/${DOWNSTREAM}"; then
+              die "cannot tell: failed to create branch '${DOWNSTREAM}' from main (git push failed)"
+            fi
+            echo "PASS: created '${DOWNSTREAM}' at ${MAIN_SHORT} (identical to main)."
+            exit 0
+          fi
+
+          BASE_SHA="$(git rev-parse "origin/${DOWNSTREAM}")"
+          echo "origin/${DOWNSTREAM} = ${BASE_SHA}"
+
+          # --- Already contains main: nothing to do -> PASS ---
+          if git merge-base --is-ancestor origin/main "origin/${DOWNSTREAM}"; then
+            echo "PASS: '${DOWNSTREAM}' already contains origin/main (${MAIN_SHORT}). Nothing to merge."
+            echo "No PR opened (empty / nothing-to-do is success, not failure)."
+            exit 0
+          fi
+
+          # Work on a local branch from the downstream tip.
+          WORK_BRANCH="branch-sync-work-${DOWNSTREAM}-${MAIN_SHORT}"
+          git checkout -B "${WORK_BRANCH}" "origin/${DOWNSTREAM}"
+
+          echo "Merging origin/main into '${DOWNSTREAM}' with --no-ff (never reset/rebase/force)."
+          set +e
+          git merge --no-ff origin/main -m "chore(sync): merge main into ${DOWNSTREAM}"
+          merge_rc=$?
+          set -e
+
+          if [ "${merge_rc}" -ne 0 ]; then
+            echo "::error::CONFLICT: merge of origin/main into '${DOWNSTREAM}' failed."
+            echo "Conflicting paths:"
+            git diff --name-only --diff-filter=U || true
+            conflicted="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
+            git merge --abort 2>/dev/null || true
+            echo "============================================================"
+            echo "HUMAN RESOLUTION REQUIRED for branch: ${DOWNSTREAM}"
+            echo "------------------------------------------------------------"
+            echo "Conflicting paths:"
+            if [ -n "${conflicted}" ]; then
+              echo "${conflicted}"
+            else
+              echo "(git did not list paths — inspect locally)"
+            fi
+            echo ""
+            echo "Run locally:"
+            echo "  git fetch origin"
+            echo "  git checkout ${DOWNSTREAM}"
+            echo "  git pull origin ${DOWNSTREAM}"
+            echo "  git merge --no-ff origin/main"
+            echo "  # resolve conflicts, then:"
+            echo "  git add -A && git commit  # if needed"
+            echo "  git push origin ${DOWNSTREAM}"
+            echo "  # or open a PR from a work branch instead of pushing protected branches"
+            echo ""
+            echo "Do NOT force-push. Do NOT reset ${DOWNSTREAM} onto main — that would"
+            echo "drop commits unique to ${DOWNSTREAM}."
+            echo "============================================================"
+            die "broken: unresolvable merge conflict bringing main into ${DOWNSTREAM}"
+          fi
+
+          # Sync branch named with main short-sha for traceability.
+          SYNC_BRANCH="chore/sync-main-into-${DOWNSTREAM}-${MAIN_SHORT}"
+          git branch -M "${SYNC_BRANCH}"
+
+          if ! git push -u origin "HEAD:refs/heads/${SYNC_BRANCH}"; then
+            die "cannot tell: git push of '${SYNC_BRANCH}' failed (auth/network/ruleset)"
+          fi
+          echo "Pushed sync branch: ${SYNC_BRANCH}"
+
+          sleep 1
+
+          # Find an equivalent open sync PR (title prefix match; never gh search).
+          # Ignore unrelated PRs such as #115 (head=main re-baseline).
+          TITLE_PREFIX="chore(sync): merge main into ${DOWNSTREAM}"
+          EXISTING_JSON="$(gh pr list --repo "${REPO}" --base "${DOWNSTREAM}" --state open --json number,title,headRefName,url)" || \
+            die "cannot tell: gh pr list failed for base=${DOWNSTREAM}"
+
+          EXISTING_NUM="$(printf '%s\n' "${EXISTING_JSON}" | python3 -c 'import json,sys; p=sys.argv[1]; rows=json.load(sys.stdin); print(next((str(r["number"]) for r in rows if (t:=(r.get("title") or ""))==p or t.startswith(p+" ") or t.startswith(p+" (")), ""), end="")' "${TITLE_PREFIX}")"
+
+          PR_BODY="$(printf '%s\n' \
+            '## Automated branch sync' \
+            '' \
+            "Merges \`origin/main\` (\`${MAIN_SHORT}\`) into \`${DOWNSTREAM}\` with" \
+            '`git merge --no-ff` — **no force-push, no reset, no rebase**.' \
+            '' \
+            '### Why' \
+            'Squash-merging promote PRs into `main` rewrites ancestry; lowers' \
+            '(`dev`, `sec`) must be back-merged so unique commits are never lost.' \
+            'See docs/branch-sync.md.' \
+            '' \
+            '### Exit contract' \
+            '| situation | outcome |' \
+            '|---|---|' \
+            '| merge conflict / tool failure | this job fails loudly |' \
+            '| merge done + PR opened/updated | pass |' \
+            '| already up to date | pass (no PR) |' \
+            '' \
+            '### Do not merge via squash' \
+            'Merge this PR with a **merge commit**. Squash would reintroduce the divergence this job fixes.' \
+            '' \
+            "Opened/updated by workflow \`branch-sync\` on \`${REPO}\`.")"
+          if [ -n "${EXISTING_NUM}" ]; then
+            echo "Found existing open sync PR #${EXISTING_NUM} — updating head branch and body."
+            OLD_HEAD="$(printf '%s\n' "${EXISTING_JSON}" | python3 -c 'import json,sys; want=int(sys.argv[1]); rows=json.load(sys.stdin); print(next((r.get("headRefName") or "" for r in rows if r.get("number")==want), ""), end="")' "${EXISTING_NUM}")"
+            if [ -z "${OLD_HEAD}" ]; then
+              die "cannot tell: could not read headRefName for PR #${EXISTING_NUM}"
+            fi
+            # Push new merge result onto the existing PR head (new commits only;
+            # never --force). If non-FF, fail loudly with the new branch name.
+            set +e
+            git push origin "HEAD:refs/heads/${OLD_HEAD}"
+            push_rc=$?
+            set -e
+            if [ "${push_rc}" -ne 0 ]; then
+              echo "Non-FF push to existing head '${OLD_HEAD}' failed; new branch remains ${SYNC_BRANCH}."
+              sleep 1
+              gh pr edit "${EXISTING_NUM}" --repo "${REPO}" --body "${PR_BODY}" \
+                --title "${TITLE_PREFIX} (${MAIN_SHORT})" || true
+              die "cannot tell: could not update head of PR #${EXISTING_NUM} to new merge (non-FF). New branch: ${SYNC_BRANCH}"
+            fi
+            sleep 1
+            if ! gh pr edit "${EXISTING_NUM}" --repo "${REPO}" --body "${PR_BODY}" \
+              --title "${TITLE_PREFIX} (${MAIN_SHORT})"; then
+              die "cannot tell: gh pr edit failed for #${EXISTING_NUM}"
+            fi
+            PR_URL="$(gh pr view "${EXISTING_NUM}" --repo "${REPO}" --json url -q .url 2>/dev/null || echo "PR #${EXISTING_NUM}")"
+            echo "PASS: updated existing sync PR #${EXISTING_NUM} (${PR_URL}); head=${OLD_HEAD}"
+            # Disposable work branch only (chore/sync-main-into-*), never trunk.
+            if [ "${OLD_HEAD}" != "${SYNC_BRANCH}" ] && [[ "${SYNC_BRANCH}" == chore/sync-main-into-* ]]; then
+              git push origin --delete "refs/heads/${SYNC_BRANCH}" 2>/dev/null || true  # standards-allow: protected-refs — cleanup of disposable chore/sync-main-into-* head after PR head retarget; never deletes main/dev/sec
+            fi
+            exit 0
+          fi
+
+          sleep 1
+          if ! gh pr create --repo "${REPO}" \
+            --base "${DOWNSTREAM}" \
+            --head "${SYNC_BRANCH}" \
+            --title "${TITLE_PREFIX} (${MAIN_SHORT})" \
+            --body "${PR_BODY}"; then
+            die "cannot tell: gh pr create failed for base=${DOWNSTREAM} head=${SYNC_BRANCH}"
+          fi
+          echo "PASS: opened new sync PR into '${DOWNSTREAM}' from ${SYNC_BRANCH}"
+          exit 0

@@ -36,17 +36,53 @@ jobs:
         github.event.pull_request.base.ref == 'master'))
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure gh
+      - name: Ensure GitHub CLI (gh)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          command -v gh >/dev/null 2>&1 || {
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-              | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-            sudo apt-get update -qq && sudo apt-get install -y -qq gh
-          }
-          gh --version
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          # NO sudo. The podman runner is rootless and sets no_new_privs, so
+          # sudo cannot escalate there at all:
+          #   "sudo: The \"no new privileges\" flag is set, which prevents sudo
+          #    from running as root."
+          # An apt install can therefore never succeed on that runner, whatever
+          # the packaging. Install the release tarball into a writable directory
+          # on PATH instead — no root required, works on hosted and self-hosted.
+          #
+          # PREFERRED FIX: bake gh into the runner base image. Then the check
+          # above short-circuits and none of the following runs. This block is
+          # the fallback that keeps CI green until the image ships it.
+          case "$(uname -m)" in
+            x86_64|amd64)  ARCH=amd64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
+          esac
+          # Resolved at job time rather than pinned: a stale pin here silently
+          # rots, and the runner has working network to the API.
+          VER="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                   https://api.github.com/repos/cli/cli/releases/latest \
+                 | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)"
+          if [ -z "$VER" ]; then
+            echo "::error::could not resolve a gh release version — bake gh into the runner image"
+            exit 1
+          fi
+          TB="gh_${VER}_linux_${ARCH}.tar.gz"
+          BASE="https://github.com/cli/cli/releases/download/v${VER}"
+          TMP="$(mktemp -d)"
+          curl -fsSL -o "$TMP/$TB" "$BASE/$TB"
+          curl -fsSL -o "$TMP/sums" "$BASE/gh_${VER}_checksums.txt"
+          ( cd "$TMP" && grep " $TB$" sums | sha256sum -c - )
+          tar -xzf "$TMP/$TB" -C "$TMP"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$TMP/gh_${VER}_linux_${ARCH}/bin/gh" "$RUNNER_TEMP/bin/gh"
+          rm -rf "$TMP"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/gh" --version
+
       - name: Close linked issues (main only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
