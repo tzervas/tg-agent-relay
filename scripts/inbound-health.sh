@@ -159,7 +159,9 @@ printf 'inbound-health: bridge=%s default_backend=%s require_agent_reader=%s\n' 
 
 # Static + session-merged backends from config
 if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
-    while IFS=$'\t' read -r bid fifo delivery; do
+    # ASCII US (\x1f), not tab: bash IFS-whitespace collapses empty TSV fields
+    # so `bid\t\tcmd` becomes fifo=cmd delivery="" (false-positive fifo path).
+    while IFS=$'\x1f' read -r bid fifo delivery; do
         [[ -n "$bid" ]] || continue
         report_fifo "backend" "$bid" "$fifo" "$delivery"
     done < <(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '
@@ -167,7 +169,7 @@ if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
         | select((.value.delivery // "fifo") == "fifo")
         | select((.value.fifo // "") != "" and (.value.fifo // "") != "stdout")
         | [.key, (.value.fifo // ""), (.value.delivery // "fifo")]
-        | @tsv')
+        | join("\u001f")')
 fi
 
 # Registered sessions (may duplicate backends with same handle — report anyway)

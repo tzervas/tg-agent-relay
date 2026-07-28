@@ -95,11 +95,28 @@ sys.exit(0 if any(a.endswith(suf) for a in args if a) else 1)
 }
 
 # Hold FIFO open RDWR forever without consuming bytes (agent Monitor is the reader).
+#
+# Safety rails (hang / brick defense):
+#   - Only operate on paths ending in `.fifo` — a TSV empty-field collapse used to
+#     treat delivery="cmd" as the fifo path and mkfifo a relative `cmd`, replacing
+#     an executable with a named pipe (open O_RDONLY then hangs forever).
+#   - Open is RDWR (non-blocking on Linux) but still wrapped so a stuck open
+#     cannot freeze the parent ensure-inbound process (open runs in the
+#     background child; parent only waits briefly for the pidfile).
 start_fifo_keepalive() {
     local fifo="$1" label="$2"
     fifo="${fifo/#\~/$HOME}"
     [[ -n "$fifo" ]] || return 0
     [[ "$fifo" == "stdout" ]] && return 0
+
+    # Refuse bare tokens / non-fifo paths (residual TSV false positives).
+    case "$fifo" in
+        *.fifo) ;;
+        *)
+            printf 'ensure-inbound: WARN skip non-*.fifo path %s (%s)\n' "$fifo" "$label" >&2
+            return 0
+            ;;
+    esac
 
     mkdir -p "$(dirname "$fifo")" 2>/dev/null || true
     if [[ ! -p "$fifo" ]]; then
@@ -141,26 +158,42 @@ start_fifo_keepalive() {
         return 0
     fi
 
+    # Background child owns the open. Pidfile is written first so the parent
+    # can bound its wait and never block on the child's open.
+    # Linux RDWR open on a FIFO does not block for a peer; O_RDONLY/O_WRONLY do.
+    #
+    # Critical: redirect flock's own stdio to the log (not only the inner bash).
+    # `flock file cmd` keeps the parent's stdout/stderr open for cmd's lifetime;
+    # if ensure-inbound was started under a pipe (pytest, timeout, CI capture),
+    # those held FDs prevent EOF and the caller hangs 30–90s until timeout even
+    # though this script already printed "done" and exited.
     if command -v flock >/dev/null 2>&1; then
         flock -n "$lock" bash -c '
             pidf=$1; log=$2; fifo=$3; label=$4
             echo $$ >"$pidf"
-            exec >>"$log" 2>&1
             echo "fifo-keepalive: label=$label fifo=$fifo at $(date -Iseconds)"
-            exec 3<>"$fifo" || exit 1
+            exec 3<>"$fifo" || { rm -f "$pidf"; exit 1; }
             while true; do sleep 3600; done
-        ' _ "$pidfile" "$logfile" "$fifo" "$label" &
+        ' _ "$pidfile" "$logfile" "$fifo" "$label" \
+            </dev/null >>"$logfile" 2>&1 &
         disown "$!" 2>/dev/null || true
     else
         (
             echo $$ >"$pidfile"
-            exec >>"$logfile" 2>&1
-            exec 3<>"$fifo"
+            exec </dev/null >>"$logfile" 2>&1
+            exec 3<>"$fifo" || { rm -f "$pidfile"; exit 1; }
             while true; do sleep 3600; done
         ) &
         disown "$!" 2>/dev/null || true
     fi
-    sleep 0.15
+    # Bounded wait for pidfile (≤ ~2s) — never hang the parent on a stuck child.
+    local _i
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        if pid_alive "$(cat "$pidfile" 2>/dev/null || true)"; then
+            break
+        fi
+        sleep 0.2
+    done
     if pid_alive "$(cat "$pidfile" 2>/dev/null || true)"; then
         printf 'ensure-inbound: keepalive %s (pid %s) fifo=%s\n' \
             "$label" "$(cat "$pidfile")" "$fifo"
@@ -220,13 +253,15 @@ start_poll_for_bot() {
     fi
 
     if command -v flock >/dev/null 2>&1; then
+        # Redirect flock's stdio (see start_fifo_keepalive): otherwise pipe
+        # capture of ensure-inbound never sees EOF while tg-poll lives.
         RELAY_BOT="$bot" flock -n "$lock" bash -c '
             pidf=$1; log=$2; poll=$3
             echo $$ >"$pidf"
-            exec >>"$log" 2>&1
             echo "tg-poll: starting at $(date -Iseconds) bot=${RELAY_BOT:-default}"
             exec "$poll"
-        ' _ "$pidf" "$log" "$BRIDGE_DIR/tg-poll.sh" &
+        ' _ "$pidf" "$log" "$BRIDGE_DIR/tg-poll.sh" \
+            </dev/null >>"$log" 2>&1 &
         disown "$!" 2>/dev/null || true
         sleep 0.5
         if pid_alive "$(cat "$pidf" 2>/dev/null || true)"; then
@@ -235,7 +270,7 @@ start_poll_for_bot() {
             printf 'ensure-inbound: %s launch requested (see %s)\n' "$label" "$log"
         fi
     else
-        RELAY_BOT="$bot" nohup "$BRIDGE_DIR/tg-poll.sh" >>"$log" 2>&1 &
+        RELAY_BOT="$bot" nohup "$BRIDGE_DIR/tg-poll.sh" </dev/null >>"$log" 2>&1 &
         echo $! >"$pidf"
         printf 'ensure-inbound: %s started without flock (pid %s)\n' "$label" "$(cat "$pidf")"
     fi
@@ -273,11 +308,18 @@ if [[ -d "$SESSIONS_DIR" ]]; then
 fi
 
 # --- Keepalives: static [backends.*] with delivery=fifo ---
+#
+# Field separator is ASCII US (\x1f), NOT tab. Bash treats tab as IFS-whitespace
+# even with `IFS=$'\t'`, so empty fields collapse:
+#   claude\t\tcmd  →  bid=claude fifo=cmd delivery=""  (delivery defaults to fifo!)
+# That false-positive started keepalives on a relative path named "cmd" and
+# replaced repo/cwd entrypoints with named pipes (open hangs, ensure appears stuck).
 if declare -f load_relay_config >/dev/null 2>&1; then
     load_relay_config "$BRIDGE_DIR/relay.toml"
 fi
 if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
-    while IFS=$'\t' read -r bid fifo delivery; do
+    while IFS=$'\x1f' read -r bid fifo delivery; do
+        [[ -n "$bid" ]] || continue
         [[ -n "$fifo" ]] || continue
         delivery="${delivery:-fifo}"
         [[ "$delivery" == "fifo" ]] || continue
@@ -286,7 +328,7 @@ if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
     done < <(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '
         (.backends // {}) | to_entries[]
         | [.key, (.value.fifo // ""), (.value.delivery // "fifo")]
-        | @tsv')
+        | join("\u001f")')
 fi
 
 printf 'ensure-inbound: done — keepalives only (agent Monitors must READ FIFOs)\n'
@@ -324,7 +366,7 @@ if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
     DEFAULT_BACKEND="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r '.routing.default_backend // empty' 2>/dev/null || true)"
 fi
 
-# default_backend fifo (if any)
+# default_backend fifo (if any) — skip non-fifo delivery entirely
 if [[ -n "$DEFAULT_BACKEND" ]] && command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
     _db_fifo="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$DEFAULT_BACKEND" '
         .backends[$b].fifo // empty' 2>/dev/null || true)"
@@ -335,30 +377,28 @@ if [[ -n "$DEFAULT_BACKEND" ]] && command -v jq >/dev/null 2>&1 && [[ -n "${RELA
     fi
 fi
 
-# cabal / fleet (common multi-session handles — static backends or sessions)
+# cabal / fleet — only when delivery=fifo (config) or the session registry has
+# them. Residual fifo= under delivery=cmd is ignored. Do NOT probe conventional
+# ~/.grok/... paths for unconfigured handles: that false-positive-orphans
+# cmd/stdout deploys and can stall on live-system FIFOs unrelated to this bridge.
 for _handle in cabal fleet; do
     _h_fifo=""
+    _h_del=""
     if command -v jq >/dev/null 2>&1 && [[ -n "${RELAY_CONFIG_JSON:-}" ]]; then
         _h_fifo="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$_handle" '
             .backends[$b].fifo // empty' 2>/dev/null || true)"
+        _h_del="$(printf '%s' "$RELAY_CONFIG_JSON" | jq -r --arg b "$_handle" '
+            .backends[$b].delivery // empty' 2>/dev/null || true)"
+    fi
+    # Configured non-fifo backend: never honesty-check residual fifo= paths.
+    if [[ -n "$_h_del" && "$_h_del" != "fifo" ]]; then
+        continue
     fi
     if [[ -z "$_h_fifo" && -f "$SESSIONS_DIR/${_handle}.json" ]]; then
         _h_fifo="$(jq -r '.fifo // empty' "$SESSIONS_DIR/${_handle}.json" 2>/dev/null || true)"
+        _h_del="fifo"
     fi
-    # Also try conventional paths used by register-session / Grok deploy
-    if [[ -z "$_h_fifo" ]]; then
-        for _cand in \
-            "$BRIDGE_DIR/sessions/${_handle}.fifo" \
-            "${HOME}/.grok/telegram-bridge/sessions/${_handle}.fifo" \
-            "${HOME}/.claude/telegram-bridge/sessions/${_handle}.fifo"
-        do
-            if [[ -p "$_cand" || -e "$_cand" ]]; then
-                _h_fifo="$_cand"
-                break
-            fi
-        done
-    fi
-    if [[ -n "$_h_fifo" ]]; then
+    if [[ -n "$_h_fifo" && "${_h_del:-fifo}" == "fifo" ]]; then
         # Skip duplicate of default_backend already checked
         if [[ -n "${DEFAULT_BACKEND:-}" && "$_handle" == "$DEFAULT_BACKEND" ]]; then
             continue

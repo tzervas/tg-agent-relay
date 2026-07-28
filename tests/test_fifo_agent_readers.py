@@ -233,3 +233,249 @@ prefixes = ["@cabal"]
     assert "default_backend=fleet" in combined
     assert "ORPHAN" in combined or "no agent reader" in combined
     assert "backend-fifo-reader.sh" in combined
+
+
+def _copy_inbound_scripts(bridge: Path) -> None:
+    """Minimal bridge tree for ensure/doctor script tests."""
+    import shutil
+
+    (bridge / "adapters").mkdir(parents=True, exist_ok=True)
+    (bridge / "adapters" / "backend-fifo-reader.sh").write_text("#!/bin/bash\n")
+    (bridge / "scripts").mkdir(parents=True, exist_ok=True)
+    (bridge / "lib").mkdir(parents=True, exist_ok=True)
+    for name in (
+        "ensure-inbound.sh",
+        "doctor-inbound.sh",
+        "inbound-health.sh",
+    ):
+        src = REPO / "scripts" / name
+        if src.is_file():
+            shutil.copy(src, bridge / "scripts" / name)
+            (bridge / "scripts" / name).chmod(0o755)
+    for name in (
+        "relay-config.sh",
+        "python.sh",
+        "toml_to_json.py",
+        "sessions.py",
+        "fifo_agent_readers.py",
+        "exec-env.sh",
+    ):
+        src = REPO / "lib" / name
+        if src.is_file():
+            shutil.copy(src, bridge / "lib" / name)
+    # Stub tg-poll so ensure can launch without Telegram credentials.
+    poll = bridge / "tg-poll.sh"
+    poll.write_text("#!/bin/bash\nexec sleep 3600\n")
+    poll.chmod(0o755)
+
+
+def _kill_bridge_keepalives(bridge: Path) -> None:
+    """Best-effort cleanup of keepalives / stub poll started under *bridge*."""
+    import contextlib
+    import signal
+
+    run = bridge / ".run"
+    if not run.is_dir():
+        return
+    for pidf in run.glob("**/*.pid"):
+        # Avoid multi-type except: ruff py314 rewrites to PEP 758 form which
+        # CPython 3.12 (local-ci host) rejects.
+        try:
+            raw = pidf.read_text().strip()
+        except OSError:
+            continue
+        if not raw.isdigit():
+            continue
+        with contextlib.suppress(OSError):
+            os.kill(int(raw), signal.SIGTERM)
+
+
+def test_bash_tab_tsv_collapses_empty_fifo_field() -> None:
+    """Document the bash footgun that caused the ensure-inbound hang.
+
+    With `IFS=$'\\t'`, tab is IFS-whitespace so consecutive tabs collapse and
+    `claude\\t\\tcmd` becomes fifo=cmd (delivery lost → defaults to fifo).
+    """
+    import subprocess
+
+    script = r"""
+printf 'claude\t\tcmd\n' | while IFS=$'\t' read -r bid fifo delivery; do
+  printf 'tab:%s|%s|%s\n' "$bid" "$fifo" "${delivery:-EMPTY}"
+done
+printf 'claude\x1f\x1fcmd\n' | while IFS=$'\x1f' read -r bid fifo delivery; do
+  printf 'us:%s|%s|%s\n' "$bid" "$fifo" "${delivery:-EMPTY}"
+done
+"""
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = [ln for ln in proc.stdout.splitlines() if ln]
+    assert "tab:claude|cmd|EMPTY" in lines, proc.stdout
+    assert "us:claude||cmd" in lines, proc.stdout
+
+
+def test_ensure_inbound_cmd_delivery_empty_fifo_no_cmd_brick(
+    tmp_path: Path,
+) -> None:
+    """delivery=cmd with empty fifo must NOT mkfifo relative 'cmd' or hang.
+
+    Regression for workstation hang: TSV empty-field collapse treated
+    delivery='cmd' as the fifo path, created ./cmd as a named pipe, and any
+    later open(O_RDONLY) on that path blocked forever.
+    """
+    import subprocess
+
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    _copy_inbound_scripts(bridge)
+    (bridge / "relay.toml").write_text(
+        """
+[routing]
+default_backend = "claude"
+
+[backends.claude]
+type = "claude-code"
+delivery = "cmd"
+cmd = "/bin/true"
+tag = "claude"
+prefixes = ["@claude"]
+
+[backends.fleet]
+type = "grok"
+delivery = "cmd"
+cmd = "/bin/true"
+tag = "fleet"
+prefixes = ["@fleet"]
+"""
+    )
+
+    cmd_path = bridge / "cmd"
+    assert not cmd_path.exists()
+
+    try:
+        proc = subprocess.run(
+            [
+                "bash",
+                str(bridge / "scripts" / "ensure-inbound.sh"),
+                "--bridge-dir",
+                str(bridge),
+            ],
+            cwd=str(bridge),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONPATH": str(REPO)},
+        )
+    finally:
+        _kill_bridge_keepalives(bridge)
+
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    # Must not brick cwd/repo with a named pipe named "cmd".
+    assert not cmd_path.exists(), f"bricked cmd path: {cmd_path}"
+    assert not cmd_path.is_fifo() if cmd_path.exists() else True
+    # No keepalive pidfiles for a false-positive "cmd" fifo.
+    run = bridge / ".run"
+    if run.is_dir():
+        bad = list(run.glob("fifo-ka-*cmd*"))
+        assert not bad, f"unexpected cmd keepalive artifacts: {bad}"
+    # Honesty check must not flag residual non-fifo backends as orphans.
+    assert "ERROR no agent reader for fleet" not in combined
+    assert "ERROR no agent reader for cabal" not in combined
+    assert "ensure-inbound: done" in combined
+
+
+def test_ensure_inbound_fifo_delivery_starts_keepalive(tmp_path: Path) -> None:
+    """delivery=fifo with a real *.fifo path still gets a keepalive."""
+    import subprocess
+
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    _copy_inbound_scripts(bridge)
+    sessions = bridge / "sessions"
+    sessions.mkdir()
+    fifo = sessions / "fleet.fifo"
+    # ensure-inbound creates the fifo if missing; leave it absent.
+
+    (bridge / "relay.toml").write_text(
+        f"""
+[routing]
+default_backend = "fleet"
+
+[backends.fleet]
+type = "grok"
+delivery = "fifo"
+fifo = "{fifo}"
+tag = "fleet"
+prefixes = ["@fleet"]
+"""
+    )
+
+    try:
+        proc = subprocess.run(
+            [
+                "bash",
+                str(bridge / "scripts" / "ensure-inbound.sh"),
+                "--bridge-dir",
+                str(bridge),
+            ],
+            cwd=str(bridge),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "PYTHONPATH": str(REPO)},
+        )
+    finally:
+        _kill_bridge_keepalives(bridge)
+
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert fifo.is_fifo() or "keepalive" in combined
+    assert "backend-fleet" in combined or "keepalive" in combined
+    assert not (bridge / "cmd").exists()
+
+
+def test_doctor_inbound_cmd_empty_fifo_ok(tmp_path: Path) -> None:
+    """delivery=cmd with no fifo field → doctor OK (non-fifo), no false path."""
+    import subprocess
+
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    _copy_inbound_scripts(bridge)
+    (bridge / "relay.toml").write_text(
+        """
+[routing]
+default_backend = "claude"
+
+[backends.claude]
+type = "claude-code"
+delivery = "cmd"
+cmd = "/bin/true"
+tag = "claude"
+prefixes = ["@claude"]
+"""
+    )
+
+    proc = subprocess.run(
+        [
+            "bash",
+            str(bridge / "scripts" / "doctor-inbound.sh"),
+            "--bridge-dir",
+            str(bridge),
+        ],
+        cwd=str(bridge),
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env={**os.environ, "PYTHONPATH": str(REPO)},
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert "non-fifo" in combined or "delivery=cmd" in combined
+    # Must not invent fifo=cmd from collapsed TSV.
+    assert "fifo=cmd" not in combined
+    assert "backend=claude" in combined
