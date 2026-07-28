@@ -15,9 +15,11 @@ permissions:
 
 jobs:
   # Always-green gate so skipped evaluations never mark the run red with zero jobs.
+  # ubuntu-latest: pure API bookkeeping; must not depend on self-hosted fleet capacity
+  # (and the podman runner image may not ship `gh`).
   gate:
     name: gate
-    runs-on: [self-hosted, linux, x64, podman]
+    runs-on: ubuntu-latest
     steps:
       - name: noop
         run: echo "reopen workflow loaded"
@@ -25,7 +27,9 @@ jobs:
   reopen:
     name: Reopen issues closed off-main
     needs: [gate]
-    runs-on: [self-hosted, linux, x64, podman]
+    # Meta workflow: GitHub-hosted is correct (no product build). Avoids self-hosted
+    # queue when runners are busy/down; only needs gh + GITHUB_TOKEN.
+    runs-on: ubuntu-latest
     if: >
       github.event_name == 'pull_request' &&
       github.event.pull_request.merged == true &&
