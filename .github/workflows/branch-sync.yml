@@ -203,8 +203,9 @@ jobs:
             fi
             PR_URL="$(gh pr view "${EXISTING_NUM}" --repo "${REPO}" --json url -q .url 2>/dev/null || echo "PR #${EXISTING_NUM}")"
             echo "PASS: updated existing sync PR #${EXISTING_NUM} (${PR_URL}); head=${OLD_HEAD}"
-            if [ "${OLD_HEAD}" != "${SYNC_BRANCH}" ]; then
-              git push origin --delete "${SYNC_BRANCH}" 2>/dev/null || true
+            # Disposable work branch only (chore/sync-main-into-*), never trunk.
+            if [ "${OLD_HEAD}" != "${SYNC_BRANCH}" ] && [[ "${SYNC_BRANCH}" == chore/sync-main-into-* ]]; then
+              git push origin --delete "refs/heads/${SYNC_BRANCH}" 2>/dev/null || true  # standards-allow: protected-refs — cleanup of disposable chore/sync-main-into-* head after PR head retarget; never deletes main/dev/sec
             fi
             exit 0
           fi
